@@ -1,0 +1,15 @@
+# Editor configs
+.vscode
+
+# Python configs
+.python-version
+venv
+
+# Build artifacts
+buildenv*
+bin
+*.dSYM
+__pycache__
+
+# Local python builds
+Python-3.12*
