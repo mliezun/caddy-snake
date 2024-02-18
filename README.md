@@ -30,7 +30,7 @@ Build this module with `caddy` at Caddy's official [download](https://caddyserve
 CGO_ENABLED=1 xcaddy build --with github.com/mliezun/caddy-snake
 ```
 
-### Use Docker to build
+### Use Docker to build (or Podman)
 
 Dockerfile:
 
@@ -43,16 +43,18 @@ RUN apt-get update -y &&\
     wget https://go.dev/dl/go1.21.6.linux-amd64.tar.gz &&\
     tar -xvf go1.21.6.linux-amd64.tar.gz &&\
     rm -rf go1.21.6.linux-amd64.tar.gz &&\
-    mv go /usr/local &&\
-    export GOROOT=/usr/local/go &&\
-    export GOPATH=$HOME/go &&\
-    export PATH=$GOPATH/bin:$GOROOT/bin:$PATH &&\
-    go install github.com/caddyserver/xcaddy/cmd/xcaddy@latest
-
+    mv go /usr/local
+ENV GOROOT=/usr/local/go
+ENV GOPATH=$HOME/go
+ENV PATH=$GOPATH/bin:$GOROOT/bin:$PATH
+RUN go install github.com/caddyserver/xcaddy/cmd/xcaddy@latest
 RUN CGO_ENABLED=1 xcaddy build --with github.com/mliezun/caddy-snake
 
 # Use caddy binary located in: /root/caddy
 ```
+
+* `docker build -f Dockerfile -t caddy-snake`
+* `docker cp caddy-snake:/root/caddy ./caddy`
 
 ## Example Caddyfile
 
