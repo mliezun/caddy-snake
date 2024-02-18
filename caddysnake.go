@@ -208,7 +208,6 @@ func (m *Wsgi) HandleRequest(w http.ResponseWriter, r *http.Request) error {
 	runtime.UnlockOSThread()
 
 	h := <-ch
-	w.WriteHeader(int(h.status_code))
 
 	if h.headers != nil {
 		defer C.free(unsafe.Pointer(h.headers))
@@ -225,6 +224,8 @@ func (m *Wsgi) HandleRequest(w http.ResponseWriter, r *http.Request) error {
 			w.Header().Add(C.GoString(header_name), C.GoString(header_value))
 		}
 	}
+
+	w.WriteHeader(int(h.status_code))
 
 	if h.body != nil {
 		defer C.free(unsafe.Pointer(h.body))
