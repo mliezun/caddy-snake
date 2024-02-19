@@ -48,7 +48,7 @@ ENV GOROOT=/usr/local/go
 ENV GOPATH=$HOME/go
 ENV PATH=$GOPATH/bin:$GOROOT/bin:$PATH
 RUN go install github.com/caddyserver/xcaddy/cmd/xcaddy@latest
-RUN CGO_ENABLED=1 xcaddy build --with github.com/mliezun/caddy-snake@main
+RUN CGO_ENABLED=1 xcaddy build --with github.com/mliezun/caddy-snake@v0.0.2
 
 # Use caddy binary located in: /root/caddy
 ```
