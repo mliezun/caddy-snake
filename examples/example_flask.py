@@ -7,4 +7,4 @@ app = Flask(__name__)
 @app.route('/', defaults={'path': ''})
 @app.route('/<path:path>')
 def root(path):
-    return f"Hello World {str(uuid.uuid4())}"
+    return f"Flask: {str(uuid.uuid4())}"

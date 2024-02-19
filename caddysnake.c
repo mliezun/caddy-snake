@@ -3,8 +3,10 @@
 #include <stdio.h>
 #include <string.h>
 
+struct WsgiApp {
+    PyObject* handler;
+};
 
-static PyObject* wsgi_app;
 static PyObject* wsgi_version;
 static PyObject* sys_stderr;
 static PyObject* BytesIO;
@@ -45,6 +47,7 @@ HTTPHeaders* HTTPHeaders_new(size_t count) {
 
 typedef struct {
     PyObject_HEAD
+    WsgiApp* app;
     int64_t request_id;
     PyObject* request_environ;
     PyObject* response_headers;
@@ -130,7 +133,7 @@ static PyObject* Response_call_wsgi(RequestResponse* self, PyObject* args) {
     PyObject* new_args = PyTuple_New(2);
     PyTuple_SetItem(new_args, 0, self->request_environ);
     PyTuple_SetItem(new_args, 1, start_response_fn);
-    self->response_body = PyObject_Call(wsgi_app, new_args, NULL);
+    self->response_body = PyObject_Call(self->app->handler, new_args, NULL);
     Py_INCREF(self->request_environ);
     Py_DECREF(new_args);
     return (PyObject*) self;
@@ -154,30 +157,40 @@ static PyTypeObject ResponseType = {
     .tp_methods = Response_methods,
 };
 
-int App_import(const char* module_name, const char* app_name) {
+
+WsgiApp* App_import(const char* module_name, const char* app_name) {
+    WsgiApp* app = malloc(sizeof(WsgiApp));
+    if (app == NULL) {
+        return NULL;
+    }
     PyGILState_STATE gstate = PyGILState_Ensure();
 
-    PyObject* name = PyUnicode_FromString(module_name);
-    PyObject* module = PyImport_Import(name);
+    PyObject* module = PyImport_ImportModule(module_name);
     if (module == NULL) {
         PyErr_Print();
         PyGILState_Release(gstate);
-        return -1;
+        return NULL;
     }
-    Py_DECREF(name);
 
-    wsgi_app = PyObject_GetAttrString(module, app_name);
-    if (!wsgi_app || !PyCallable_Check(wsgi_app)) {
+    app->handler = PyObject_GetAttrString(module, app_name);
+    if (!app->handler || !PyCallable_Check(app->handler)) {
         PyGILState_Release(gstate);
-        return -1;
+        return NULL;
     }
 
     PyGILState_Release(gstate);
-    return 0;
+    return app;
+}
+
+void App_cleanup(WsgiApp* app) {
+    PyGILState_STATE gstate = PyGILState_Ensure();
+    Py_XDECREF(app->handler);
+    PyGILState_Release(gstate);
+    free(app);
 }
 
 
-void App_handle_request(int64_t request_id, HTTPHeaders* headers, const char* body) {
+void App_handle_request(WsgiApp* app, int64_t request_id, HTTPHeaders* headers, const char* body) {
     PyGILState_STATE gstate = PyGILState_Ensure();
 
     PyObject* environ = PyDict_New();
@@ -204,6 +217,7 @@ void App_handle_request(int64_t request_id, HTTPHeaders* headers, const char* bo
         Py_DECREF(key);
     }
     RequestResponse* r = (RequestResponse*)PyObject_CallObject((PyObject*) &ResponseType, NULL);
+    r->app = app;
     r->request_id = request_id;
     r->request_environ = environ;
     PyObject_CallOneArg(task_queue_put, (PyObject*) r);
@@ -357,7 +371,24 @@ static struct PyModuleDef CaddysnakeModule = {
 };
 
 void Py_init_and_release_gil() {
-    Py_Initialize();
+    PyStatus status;
+    PyConfig config;
+    PyConfig_InitPythonConfig(&config);
+    if (PyStatus_Exception(status)) {
+        goto exception;
+    }
+    /* Set the program name. Implicitly preinitialize Python. */
+    status = PyConfig_SetString(&config, &config.program_name, L"caddysnake");
+    if (PyStatus_Exception(status)) {
+        goto exception;
+    }
+    config.write_bytecode = 0;
+    status = Py_InitializeFromConfig(&config);
+    if (PyStatus_Exception(status)) {
+        goto exception;
+    }
+    PyConfig_Clear(&config);
+
 
     PyObject *sysPath = PySys_GetObject("path");
     PyList_Insert(sysPath, 0, PyUnicode_FromString(""));
@@ -416,5 +447,10 @@ void Py_init_and_release_gil() {
     Py_DECREF(cb);
 
     PyEval_ReleaseThread(PyGILState_GetThisThreadState());
+    return;
+
+    exception:
+    PyConfig_Clear(&config);
+    Py_ExitStatusException(status);
 }
 

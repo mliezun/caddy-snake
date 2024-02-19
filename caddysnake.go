@@ -46,10 +46,15 @@ func (CaddySnake) CaddyModule() caddy.ModuleInfo {
 }
 
 // Provision sets up the module.
-func (f *CaddySnake) Provision(ctx caddy.Context) (err error) {
+func (f *CaddySnake) Provision(ctx caddy.Context) error {
 	f.logger = ctx.Logger(f)
-	f.wsgi, err = NewWsgi(f.ModuleName)
-	return
+	w, err := NewWsgi(f.ModuleName)
+	if err != nil {
+		return err
+	}
+	f.logger.Info("imported wsgi app", zap.String("module_name", f.ModuleName))
+	f.wsgi = w
+	return nil
 }
 
 // Validate implements caddy.Validator.
@@ -58,7 +63,8 @@ func (m *CaddySnake) Validate() error {
 }
 
 func (m *CaddySnake) Cleanup() error {
-	m.logger.Info("Cleaning up caddy-snake")
+	m.logger.Info("cleaning up caddy-snake wsgi module", zap.String("module_name", m.ModuleName))
+	m.wsgi.Cleanup()
 	return nil
 }
 
@@ -102,7 +108,9 @@ func init() {
 	httpcaddyfile.RegisterHandlerDirective("python", parsePythonDirective)
 }
 
-type Wsgi struct{}
+type Wsgi struct {
+	app *C.WsgiApp
+}
 
 func NewWsgi(wsgi_pattern string) (*Wsgi, error) {
 	module_app := strings.Split(wsgi_pattern, ":")
@@ -114,13 +122,19 @@ func NewWsgi(wsgi_pattern string) (*Wsgi, error) {
 	app_name := C.CString(module_app[1])
 	defer C.free(unsafe.Pointer(app_name))
 
-	result := C.App_import(module_name, app_name)
-	if int(result) < 0 {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+	app := C.App_import(module_name, app_name)
+	if app == nil {
 		return nil, errors.New("failed to import module")
 	}
+	return &Wsgi{app}, nil
+}
 
-	app := &Wsgi{}
-	return app, nil
+func (m *Wsgi) Cleanup() {
+	if m.app != nil {
+		C.App_cleanup(m.app)
+	}
 }
 
 // from golang cgi
@@ -204,7 +218,7 @@ func (m *Wsgi) HandleRequest(w http.ResponseWriter, r *http.Request) error {
 	lock.Unlock()
 
 	runtime.LockOSThread()
-	C.App_handle_request(C.int64_t(request_id), rh, body_str)
+	C.App_handle_request(m.app, C.int64_t(request_id), rh, body_str)
 	runtime.UnlockOSThread()
 
 	h := <-ch
