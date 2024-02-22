@@ -6,25 +6,24 @@ It embeds the Python interpreter inside Caddy and serves requests directly witho
 
 ## Install
 
-Go 1.21 and Python 3.12 or later is required, with development files to embed the interpreter.
+Go 1.21 and Python 3.9 or later is required, with development files to embed the interpreter.
 
-To install Python3.12 in Ubuntu do:
+To install in Ubuntu do:
 
 ```bash
-apt-get install -y software-properties-common
-add-apt-repository ppa:deadsnakes/ppa
-apt-get install -y python3.12-dev
+sudo apt-get update
+sudo apt-get install -y python3-dev
 ```
 
 To install in MacOS do:
 
 ```bash
-brew install python@3.12
+brew install python@3
 ```
 
 ### Bundling with Caddy
 
-Build this module with `caddy` at Caddy's official [download](https://caddyserver.com/download) site. Or:
+Build this module using [xcaddy](https://github.com/caddyserver/xcaddy):
 
 ```bash
 CGO_ENABLED=1 xcaddy build --with github.com/mliezun/caddy-snake
@@ -43,12 +42,13 @@ RUN apt-get update -y &&\
     wget https://go.dev/dl/go1.21.6.linux-amd64.tar.gz &&\
     tar -xvf go1.21.6.linux-amd64.tar.gz &&\
     rm -rf go1.21.6.linux-amd64.tar.gz &&\
-    mv go /usr/local
+    mv go /usr/local &&\
+    cp /usr/lib/x86_64-linux-gnu/pkgconfig/python-3.12-embed.pc /usr/lib/x86_64-linux-gnu/pkgconfig/python3-embed.pc
 ENV GOROOT=/usr/local/go
 ENV GOPATH=$HOME/go
 ENV PATH=$GOPATH/bin:$GOROOT/bin:$PATH
 RUN go install github.com/caddyserver/xcaddy/cmd/xcaddy@latest
-RUN CGO_ENABLED=1 xcaddy build --with github.com/mliezun/caddy-snake@v0.0.2
+RUN CGO_ENABLED=1 xcaddy build --with github.com/mliezun/caddy-snake
 
 # Use caddy binary located in: /root/caddy
 ```

@@ -1,7 +1,7 @@
 // Caddy plugin that gives native support for Python WSGI apps.
 package caddysnake
 
-// #cgo pkg-config: python-3.12-embed
+// #cgo pkg-config: python3-embed
 // #include "caddysnake.h"
 import "C"
 import (

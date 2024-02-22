@@ -3,6 +3,11 @@
 #include <stdio.h>
 #include <string.h>
 
+#if PY_MAJOR_VERSION != 3 || PY_MINOR_VERSION < 9 || PY_MINOR_VERSION > 12
+#error "This code requires Python 3.9, 3.10, 3.11 or 3.12"
+#endif
+
+
 struct WsgiApp {
     PyObject* handler;
 };
@@ -240,7 +245,7 @@ static PyObject* response_callback(PyObject *self, PyObject *args) {
     RequestResponse* response = (RequestResponse*)PyTuple_GetItem(args, 0);
     PyObject* exc_info = PyTuple_GetItem(args, 1);
     if (exc_info != Py_None) {
-        PyErr_DisplayException(exc_info);
+        PyErr_Display(NULL, exc_info, NULL);
         goto finalize_error;
     }
     
@@ -374,10 +379,7 @@ void Py_init_and_release_gil() {
     PyStatus status;
     PyConfig config;
     PyConfig_InitPythonConfig(&config);
-    if (PyStatus_Exception(status)) {
-        goto exception;
-    }
-    /* Set the program name. Implicitly preinitialize Python. */
+    // Set the program name. Implicitly preinitialize Python
     status = PyConfig_SetString(&config, &config.program_name, L"caddysnake");
     if (PyStatus_Exception(status)) {
         goto exception;
@@ -389,25 +391,21 @@ void Py_init_and_release_gil() {
     }
     PyConfig_Clear(&config);
 
-
+    // Configure python path to recognize modules in the current directory
     PyObject *sysPath = PySys_GetObject("path");
     PyList_Insert(sysPath, 0, PyUnicode_FromString(""));
 
-
     // Used for turning bytes-like object into a file-like object
-    PyObject* io_str = PyUnicode_FromString("io");
-    PyObject* io_module = PyImport_Import(io_str);
+    PyObject* io_module = PyImport_ImportModule("io");
     BytesIO = PyObject_GetAttrString(io_module, "BytesIO");
-    Py_DECREF(io_str);
-    Py_DECREF(io_module);
 
-    PyObject* m = PyModule_Create(&CaddysnakeModule);
-    PyObject* cb = PyObject_GetAttrString(m, "response_callback");
-    Py_DECREF(m);
+    PyObject* caddysnake_module = PyModule_Create(&CaddysnakeModule);
+    PyObject* response_callback_fn = PyObject_GetAttrString(caddysnake_module, "response_callback");
 
     // Initialize types
     PyType_Ready(&ResponseType);
 
+    // Setup task queue and consumer threads
     PyRun_SimpleString(
         "def _setup_caddysnake(callback):\n"
         "\tfrom queue import SimpleQueue\n"
@@ -428,8 +426,9 @@ void Py_init_and_release_gil() {
     );
     PyObject* main_module = PyImport_AddModule("__main__");
     PyObject* setup_fn = PyObject_GetAttrString(main_module, "_setup_caddysnake");
-    PyObject* task_queue = PyObject_CallOneArg(setup_fn, cb);
+    PyObject* task_queue = PyObject_CallOneArg(setup_fn, response_callback_fn);
     task_queue_put = PyObject_GetAttrString(task_queue, "put");
+    PyRun_SimpleString("del _setup_caddysnake");
 
     // Setup WSGI version
     wsgi_version = PyTuple_New(2);
@@ -439,12 +438,14 @@ void Py_init_and_release_gil() {
     // Setup stderr for logging
     sys_stderr = PySys_GetObject("stderr");
 
-    // Cleanup
-    PyRun_SimpleString("del _setup_caddysnake");
-    Py_DECREF(task_queue);
-    Py_DECREF(setup_fn);
-    Py_DECREF(main_module);
-    Py_DECREF(cb);
+    // This are global objects expected to exist during the entire program lifetime.
+    // Refcounts can be safely decreased, but there's no need to do it because we
+    // expect the objects to stick around forever.
+    // Py_DECREF(task_queue);
+    // Py_DECREF(setup_fn);
+    // Py_DECREF(response_callback_fn);
+    // Py_DECREF(io_module);
+    // Py_DECREF(caddysnake_module);
 
     PyEval_ReleaseThread(PyGILState_GetThisThreadState());
     return;
