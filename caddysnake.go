@@ -63,8 +63,10 @@ func (m *CaddySnake) Validate() error {
 }
 
 func (m *CaddySnake) Cleanup() error {
-	m.logger.Info("cleaning up caddy-snake wsgi module", zap.String("module_name", m.ModuleName))
-	m.wsgi.Cleanup()
+	if m.wsgi != nil {
+		m.logger.Info("cleaning up caddy-snake wsgi module", zap.String("module_name", m.ModuleName))
+		m.wsgi.Cleanup()
+	}
 	return nil
 }
 
