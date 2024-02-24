@@ -153,14 +153,21 @@ func upperCaseAndUnderscore(r rune) rune {
 }
 
 func (m *Wsgi) HandleRequest(w http.ResponseWriter, r *http.Request) error {
-	host, port, _ := net.SplitHostPort(r.Host)
+	ctx := r.Context()
+	srvAddr := ctx.Value(http.LocalAddrContextKey).(net.Addr)
+	_, port, _ := net.SplitHostPort(srvAddr.String())
+	host, _, _ := net.SplitHostPort(r.Host)
+	if host == "" {
+		// net.SplitHostPort returns error and an empty host when port is missing
+		host = r.Host
+	}
 	extra_headers := map[string]string{
 		"SERVER_NAME":     host,
 		"SERVER_PORT":     port,
 		"SERVER_PROTOCOL": r.Proto,
 		"X_FROM":          "caddy-snake",
 		"REQUEST_METHOD":  r.Method,
-		"SCRIPT_NAME":     r.URL.Path,
+		"SCRIPT_NAME":     "",
 		"PATH_INFO":       r.URL.Path,
 		"QUERY_STRING":    r.URL.RawQuery,
 		"CONTENT_TYPE":    r.Header.Get("Content-type"),
