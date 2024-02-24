@@ -1,0 +1,32 @@
+---
+name: Lint
+on:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+jobs:
+  build:
+    name: Lint
+    runs-on: ubuntu-latest
+    env:
+      GOEXPERIMENT: cgocheck2
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.21'
+          cache: false
+      - name: Install deps
+        run: |
+          sudo apt-get update -yyqq
+          sudo apt-get install -yyqq python3-dev clang-format
+      - name: Go vet
+        run: |
+          go vet -unsafeptr=false ./...
+      - name: Clang format
+        run: |
+          clang-format --dry-run --Werror caddysnake.c caddysnake.h

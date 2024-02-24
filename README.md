@@ -15,7 +15,7 @@ sudo apt-get update
 sudo apt-get install -y python3-dev
 ```
 
-To install in MacOS do:
+To install in macOS do:
 
 ```bash
 brew install python@3
@@ -60,11 +60,11 @@ RUN CGO_ENABLED=1 xcaddy build --with github.com/mliezun/caddy-snake@v0.0.4
 
 ```Caddyfile
 {
-	http_port 9080
-	https_port 9443
-	log {
-		level error
-	}
+    http_port 9080
+    https_port 9443
+    log {
+        level error
+    }
 }
 localhost:9080 {
     route {

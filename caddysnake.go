@@ -1,4 +1,4 @@
-// Caddy plugin that gives native support for Python WSGI apps.
+// Caddy plugin that provides native support for Python WSGI apps.
 package caddysnake
 
 // #cgo pkg-config: python3-embed
@@ -21,6 +21,7 @@ import (
 	"go.uber.org/zap"
 )
 
+// CaddySnake module that communicates with a Wsgi app to handle requests
 type CaddySnake struct {
 	ModuleName string `json:"module_name,omitempty"`
 	logger     *zap.Logger
@@ -62,6 +63,7 @@ func (m *CaddySnake) Validate() error {
 	return nil
 }
 
+// Cleanup frees resources uses by module
 func (m *CaddySnake) Cleanup() error {
 	if m.wsgi != nil {
 		m.logger.Info("cleaning up caddy-snake wsgi module", zap.String("module_name", m.ModuleName))
@@ -94,6 +96,7 @@ func parsePythonDirective(h httpcaddyfile.Helper) (caddyhttp.MiddlewareHandler, 
 	return app, nil
 }
 
+// RequestHandler stores the result of a request handled by a Wsgi app
 type RequestHandler struct {
 	status_code C.int
 	headers     *C.HTTPHeaders
@@ -110,6 +113,7 @@ func init() {
 	httpcaddyfile.RegisterHandlerDirective("python", parsePythonDirective)
 }
 
+// Wsgi stores a reference to a Python Wsgi application
 type Wsgi struct {
 	app *C.WsgiApp
 }
@@ -133,6 +137,7 @@ func NewWsgi(wsgi_pattern string) (*Wsgi, error) {
 	return &Wsgi{app}, nil
 }
 
+// Cleanup deallocates CGO resources used by Wsgi app
 func (m *Wsgi) Cleanup() {
 	if m.app != nil {
 		C.App_cleanup(m.app)
@@ -152,6 +157,7 @@ func upperCaseAndUnderscore(r rune) rune {
 	return r
 }
 
+// HandleRequest passes request down to Python Wsgi app and writes responses and headers.
 func (m *Wsgi) HandleRequest(w http.ResponseWriter, r *http.Request) error {
 	ctx := r.Context()
 	srvAddr := ctx.Value(http.LocalAddrContextKey).(net.Addr)
