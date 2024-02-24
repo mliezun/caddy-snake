@@ -26,7 +26,7 @@ brew install python@3
 Build this module using [xcaddy](https://github.com/caddyserver/xcaddy):
 
 ```bash
-CGO_ENABLED=1 xcaddy build --with github.com/mliezun/caddy-snake
+CGO_ENABLED=1 xcaddy build --with github.com/mliezun/caddy-snake@v0.0.4
 ```
 
 ### Use Docker to build (or Podman)
@@ -48,7 +48,7 @@ ENV GOROOT=/usr/local/go
 ENV GOPATH=$HOME/go
 ENV PATH=$GOPATH/bin:$GOROOT/bin:$PATH
 RUN go install github.com/caddyserver/xcaddy/cmd/xcaddy@latest
-RUN CGO_ENABLED=1 xcaddy build --with github.com/mliezun/caddy-snake
+RUN CGO_ENABLED=1 xcaddy build --with github.com/mliezun/caddy-snake@v0.0.4
 
 # Use caddy binary located in: /root/caddy
 ```
