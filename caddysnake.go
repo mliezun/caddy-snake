@@ -140,6 +140,8 @@ func NewWsgi(wsgi_pattern string) (*Wsgi, error) {
 // Cleanup deallocates CGO resources used by Wsgi app
 func (m *Wsgi) Cleanup() {
 	if m.app != nil {
+		runtime.LockOSThread()
+		defer runtime.UnlockOSThread()
 		C.App_cleanup(m.app)
 	}
 }
