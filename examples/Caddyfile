@@ -12,4 +12,7 @@ localhost:9080 {
 	route /app2 {
 		python "example_flask:app"
 	}
+	route /app3 {
+		python "simple_exception:main"
+	}
 }

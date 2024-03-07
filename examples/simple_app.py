@@ -5,4 +5,4 @@ def main(environ, start_response):
     status = '200 OK'
     response_headers = [('Content-type', 'text/plain'), ('X-Custom-Header', 'Custom-Value')]
     start_response(status, response_headers)
-    return [f"Simple app: {str(uuid.uuid4())}".encode()]
+    yield f"Simple app: {str(uuid.uuid4())}".encode()
