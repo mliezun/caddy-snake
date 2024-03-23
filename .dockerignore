@@ -1,0 +1,36 @@
+# Git
+.git
+.gitignore
+.gitattributes
+
+# CI
+.github
+
+# Docker
+docker-compose.yml
+Dockerfile
+.docker
+.dockerignore
+
+# Editor configs
+.vscode
+
+# Python configs
+.python-version
+venv
+
+# Build artifacts
+buildenv*
+bin
+*.dSYM
+
+# Byte-compiled / optimized / DLL files
+**/__pycache__/
+**/*.py[cod]
+
+# Local python builds
+Python-3.12*
+
+# Text files
+LICENSE
+README.md
