@@ -15,4 +15,7 @@ localhost:9080 {
 	route /app3 {
 		python "simple_exception:main"
 	}
+	route /app4 {
+		python "example_fastapi:app"
+	}
 }
