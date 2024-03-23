@@ -10,6 +10,6 @@ def do_requests(app: str, expected_status: int = 200, n: int = 1_000):
 
 with ThreadPoolExecutor(max_workers=8) as t:
     start = time.time()
-    request_count = sum(t.map(do_requests, ["app1", "app2", "app3"]*3, [200, 200, 500]*3))
+    request_count = sum(t.map(do_requests, ["app1", "app2", "app3", "app4"]*3, [200, 200, 500, 200]*3))
     print(f"Done {request_count=}")
     print(f"Elapsed: {time.time()-start}s")

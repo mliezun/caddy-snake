@@ -34,7 +34,7 @@ jobs:
           sudo mv /usr/lib/x86_64-linux-gnu/pkgconfig/python-${{ matrix.python-version }}-embed.pc /usr/lib/x86_64-linux-gnu/pkgconfig/python3-embed.pc
           python${{ matrix.python-version }} -m venv venv
           source venv/bin/activate
-          pip install Flask
+          pip install Flask fastapi a2wsgi
       - name: Install global python dependencies
         run: sudo pip install requests
       - name: Run module tests
