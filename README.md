@@ -42,12 +42,12 @@ brew install python@3
 Build this module using [xcaddy](https://github.com/caddyserver/xcaddy):
 
 ```bash
-CGO_ENABLED=1 xcaddy build --with github.com/mliezun/caddy-snake@v0.0.4
+CGO_ENABLED=1 xcaddy build --with github.com/mliezun/caddy-snake@v0.0.5
 ```
 
 ### Build with Docker (or Podman)
 
-There's a template file in the project: [builder.Dockerfile](/builder.Dockerfile).
+There's a template file in the project: [builder.Dockerfile](/builder.Dockerfile). It supports build arguments to configure which Python or Go version is desired for the build.
 
 ```Dockerfile
 FROM ubuntu:latest
@@ -77,11 +77,13 @@ RUN go install github.com/caddyserver/xcaddy/cmd/xcaddy@latest &&\
 CMD ["cp", "/usr/local/bin/caddy", "/output/caddy"]
 ```
 
-You can pass build arguments to select your desired python and go versions.
+You can copy the contents of the builder Dockerfile and execute the following commands to get your Caddy binary: 
 
 ```bash
-docker build -f Dockerfile --build-arg PY_VERSION=3.9 -t caddy-snake .
-# Copies `caddy` binary to your current dir
+docker build -f builder.Dockerfile --build-arg PY_VERSION=3.9 -t caddy-snake .
+```
+
+```bash
 docker run --rm -v $(pwd):/output caddy-snake
 ```
 
