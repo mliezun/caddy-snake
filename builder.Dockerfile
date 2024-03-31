@@ -22,4 +22,4 @@ RUN go install github.com/caddyserver/xcaddy/cmd/xcaddy@latest &&\
     CGO_ENABLED=1 /root/go/bin/xcaddy build --with github.com/mliezun/caddy-snake &&\
     rm -rf /build
 
-CMD ["cp", "/root/caddy", "/output/caddy"]
+CMD ["cp", "/usr/local/bin/caddy", "/output/caddy"]
