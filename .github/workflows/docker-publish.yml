@@ -17,6 +17,9 @@ env:
 
 jobs:
   build:
+    strategy:
+      matrix:
+        python-version: ['3.9', '3.10', '3.11', '3.12']
 
     runs-on: ubuntu-latest
     permissions:
@@ -70,7 +73,8 @@ jobs:
         with:
           context: .
           push: ${{ github.event_name != 'pull_request' }}
-          tags: ${{ steps.meta.outputs.tags }}
+          build-args: PY_VERSION=${{ matrix.python-version }}
+          tags: ${{ steps.meta.outputs.tags }}-py${{ matrix.python-version }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
