@@ -16,7 +16,7 @@ typedef struct {
 } HTTPHeaders;
 HTTPHeaders *HTTPHeaders_new(size_t);
 
-WsgiApp *App_import(const char *, const char *);
+WsgiApp *App_import(const char *, const char *, const char *);
 void App_handle_request(WsgiApp *, int64_t, HTTPHeaders *, const char *);
 void App_cleanup(WsgiApp *);
 

@@ -10,7 +10,10 @@ localhost:9080 {
 		python "simple_app:main"
 	}
 	route /app2 {
-		python "example_flask:app"
+		python {
+			module_wsgi "example_flask:app"
+			venv "./venv"
+		}
 	}
 	route /app3 {
 		python "simple_exception:main"

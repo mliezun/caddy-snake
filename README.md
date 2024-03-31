@@ -4,7 +4,23 @@ Caddy plugin that gives native support for Python WSGI apps.
 
 It embeds the Python interpreter inside Caddy and serves requests directly without going through a reverse proxy or creating a new process.
 
-## Install
+## Docker image
+
+There's a docker image available, it ships Python 3.12 and can be used as follows:
+
+```Dockerfile
+FROM ghcr.io/mliezun/caddy-snake:main
+
+WORKDIR /app
+
+# Copy your project into app
+COPY . /app
+
+# Caddy snake is already installed and has support for Python 3.12
+CMD ["caddy", "run", "--config", "/app/Caddyfile"]
+```
+
+## Build from source
 
 Go 1.21 and Python 3.9 or later is required, with development files to embed the interpreter.
 
@@ -29,32 +45,45 @@ Build this module using [xcaddy](https://github.com/caddyserver/xcaddy):
 CGO_ENABLED=1 xcaddy build --with github.com/mliezun/caddy-snake@v0.0.4
 ```
 
-### Use Docker to build (or Podman)
+### Build with Docker (or Podman)
 
-Dockerfile:
+There's a template file in the project: [builder.Dockerfile](/builder.Dockerfile).
 
 ```Dockerfile
-FROM python:3.12
+FROM ubuntu:latest
 
-WORKDIR /root
+ARG GO_VERSION=1.22.1
+ARG PY_VERSION=3.12
 
-RUN apt-get update -y &&\
-    wget https://go.dev/dl/go1.21.6.linux-amd64.tar.gz &&\
-    tar -xvf go1.21.6.linux-amd64.tar.gz &&\
-    rm -rf go1.21.6.linux-amd64.tar.gz &&\
-    mv go /usr/local &&\
-    cp /usr/lib/x86_64-linux-gnu/pkgconfig/python-3.12-embed.pc /usr/lib/x86_64-linux-gnu/pkgconfig/python3-embed.pc
-ENV GOROOT=/usr/local/go
-ENV GOPATH=$HOME/go
-ENV PATH=$GOPATH/bin:$GOROOT/bin:$PATH
-RUN go install github.com/caddyserver/xcaddy/cmd/xcaddy@latest
-RUN CGO_ENABLED=1 xcaddy build --with github.com/mliezun/caddy-snake@v0.0.4
+RUN export DEBIAN_FRONTEND=noninteractive &&\
+    apt-get update -yyqq &&\
+    apt-get install -yyqq wget tar software-properties-common gcc pkgconf &&\
+    add-apt-repository -y ppa:deadsnakes/ppa &&\
+    apt-get update -yyqq &&\
+    apt-get install -yyqq python${PY_VERSION}-dev &&\
+    mv /usr/lib/x86_64-linux-gnu/pkgconfig/python-${PY_VERSION}-embed.pc /usr/lib/x86_64-linux-gnu/pkgconfig/python3-embed.pc &&\
+    rm -rf /var/lib/apt/lists/* &&\
+    wget https://dl.google.com/go/go${GO_VERSION}.linux-amd64.tar.gz && \
+    tar -C /usr/local -xzf go*.linux-amd64.tar.gz && \
+    rm go*.linux-amd64.tar.gz
 
-# Use caddy binary located in: /root/caddy
+ENV PATH=$PATH:/usr/local/go/bin
+
+RUN go install github.com/caddyserver/xcaddy/cmd/xcaddy@latest &&\
+    cd /usr/local/bin &&\
+    CGO_ENABLED=1 /root/go/bin/xcaddy build --with github.com/mliezun/caddy-snake &&\
+    rm -rf /build
+
+CMD ["cp", "/usr/local/bin/caddy", "/output/caddy"]
 ```
 
-* `docker build -f Dockerfile -t caddy-snake`
-* `docker cp caddy-snake:/root/caddy ./caddy`
+You can pass build arguments to select your desired python and go versions.
+
+```bash
+docker build -f Dockerfile --build-arg PY_VERSION=3.9 -t caddy-snake .
+# Copies `caddy` binary to your current dir
+docker run --rm -v $(pwd):/output caddy-snake
+```
 
 ## Example Caddyfile
 
@@ -78,17 +107,26 @@ The `python` rule is an HTTP handler that expects a wsgi app as an argument.
 ## Examples
 
 - [simple_app](/examples/simple_app.py). WSGI App that returns the standard hello world message and a UUID.
-- [example_flask](/examples/example_flask.py). Flask application that also returns hello workd message and a UUID.
+- [simple_exception](/examples/simple_exception.py). WSGI App that always raises an exception.
+- [example_flask](/examples/example_flask.py). Flask application that also returns hello world message and a UUID.
+- [example_fastapi](/examples/example_fastapi.py). FastAPI application that also returns hello world message and a UUID.
+- [Caddyfile](/examples/Caddyfile). Caddy config that uses all of the example apps.
 
 **NOTE**
 
-At the moment there's no support for virtual environments. To use one is necessary to set the `PYTHONPATH` env variable when starting caddy. As follows:
+It's also possible to provide virtual environments with the following syntax:
 
-```bash
-PYTHONPATH="venv/lib/python3.12/site-packages/" caddy run --config Caddyfile
+```Caddyfile
+python {
+    module_wsgi "simple_app:main"
+    venv_path "./venv"
+}
 ```
 
-Make sure to use the right python version depending on your case ^.
+What it does behind the scenes is to append `venv/lib/python3.x/site-packages` to python `sys.path`.
+
+> Disclaimer: Currently, when you provide a venv it gets added to the global `sys.path`, which in consequence
+> means all apps have access to those packages.
 
 ## Dev resources
 

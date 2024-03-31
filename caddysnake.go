@@ -6,9 +6,13 @@ package caddysnake
 import "C"
 import (
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
+	"os"
+	"path/filepath"
+	"regexp"
 	"runtime"
 	"strings"
 	"sync"
@@ -24,6 +28,7 @@ import (
 // CaddySnake module that communicates with a Wsgi app to handle requests
 type CaddySnake struct {
 	ModuleName string `json:"module_name,omitempty"`
+	VenvPath   string `json:"venv_path,omitempty"`
 	logger     *zap.Logger
 	wsgi       *Wsgi
 }
@@ -31,7 +36,25 @@ type CaddySnake struct {
 // UnmarshalCaddyfile implements caddyfile.Unmarshaler.
 func (f *CaddySnake) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 	for d.Next() {
-		if !d.Args(&f.ModuleName) {
+		args := d.RemainingArgs()
+		if len(args) == 1 {
+			f.ModuleName = args[0]
+		} else if len(args) == 0 {
+			for nesting := d.Nesting(); d.NextBlock(nesting); {
+				switch d.Val() {
+				case "module_wsgi":
+					if !d.Args(&f.ModuleName) {
+						return d.Errf("expected exactly one argument for module_wsgi")
+					}
+				case "venv":
+					if !d.Args(&f.VenvPath) {
+						return d.Errf("expected exactly one argument for venv")
+					}
+				default:
+					return d.Errf("unknown subdirective: %s", d.Val())
+				}
+			}
+		} else {
 			return d.ArgErr()
 		}
 	}
@@ -49,11 +72,11 @@ func (CaddySnake) CaddyModule() caddy.ModuleInfo {
 // Provision sets up the module.
 func (f *CaddySnake) Provision(ctx caddy.Context) error {
 	f.logger = ctx.Logger(f)
-	w, err := NewWsgi(f.ModuleName)
+	w, err := NewWsgi(f.ModuleName, f.VenvPath)
 	if err != nil {
 		return err
 	}
-	f.logger.Info("imported wsgi app", zap.String("module_name", f.ModuleName))
+	f.logger.Info("imported wsgi app", zap.String("module_name", f.ModuleName), zap.String("venv_path", f.VenvPath))
 	f.wsgi = w
 	return nil
 }
@@ -83,6 +106,7 @@ func (f CaddySnake) ServeHTTP(w http.ResponseWriter, r *http.Request, next caddy
 // Interface guards
 var (
 	_ caddy.Provisioner           = (*CaddySnake)(nil)
+	_ caddy.Validator             = (*CaddySnake)(nil)
 	_ caddy.CleanerUpper          = (*CaddySnake)(nil)
 	_ caddyhttp.MiddlewareHandler = (*CaddySnake)(nil)
 	_ caddyfile.Unmarshaler       = (*CaddySnake)(nil)
@@ -113,12 +137,60 @@ func init() {
 	httpcaddyfile.RegisterHandlerDirective("python", parsePythonDirective)
 }
 
+// findSitePackagesInVenv searches for the site-packages directory in a given venv.
+// It returns the absolute path to the site-packages directory if found, or an error otherwise.
+func findSitePackagesInVenv(venvPath string) (string, error) {
+	libPath := filepath.Join(venvPath, "lib")
+	pythonDir, err := findPythonDirectory(libPath)
+	if err != nil {
+		return "", err
+	}
+	sitePackagesPath := filepath.Join(libPath, pythonDir, "site-packages")
+	fileInfo, err := os.Stat(sitePackagesPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", fmt.Errorf("site-packages directory does not exist in: %s", sitePackagesPath)
+		}
+		return "", err
+	}
+	if !fileInfo.IsDir() {
+		return "", fmt.Errorf("found site-packages is not a directory: %s", sitePackagesPath)
+	}
+	return sitePackagesPath, nil
+}
+
+// findPythonDirectory searches for a directory that matches "python3.*" inside the given libPath.
+func findPythonDirectory(libPath string) (string, error) {
+	var pythonDir string
+	found := false
+	filepath.Walk(libPath, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if !info.IsDir() || found {
+			return nil
+		}
+		matched, _ := regexp.MatchString(`python3\..*`, info.Name())
+		if matched {
+			pythonDir = info.Name()
+			found = true
+			// Use an error to stop walking the directory tree
+			return errors.New("python directory found")
+		}
+		return nil
+	})
+	if !found || pythonDir == "" {
+		return "", errors.New("unable to find a python3.* directory in the venv")
+	}
+	return pythonDir, nil
+}
+
 // Wsgi stores a reference to a Python Wsgi application
 type Wsgi struct {
 	app *C.WsgiApp
 }
 
-func NewWsgi(wsgi_pattern string) (*Wsgi, error) {
+func NewWsgi(wsgi_pattern string, venv_path string) (*Wsgi, error) {
 	module_app := strings.Split(wsgi_pattern, ":")
 	if len(module_app) != 2 {
 		return nil, errors.New("expected pattern $(MODULE_NAME):$(VARIABLE_NAME)")
@@ -128,9 +200,19 @@ func NewWsgi(wsgi_pattern string) (*Wsgi, error) {
 	app_name := C.CString(module_app[1])
 	defer C.free(unsafe.Pointer(app_name))
 
+	var packages_path *C.char = nil
+	if venv_path != "" {
+		sitePackagesPath, err := findSitePackagesInVenv(venv_path)
+		if err != nil {
+			return nil, err
+		}
+		packages_path = C.CString(sitePackagesPath)
+		defer C.free(unsafe.Pointer(packages_path))
+	}
+
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
-	app := C.App_import(module_name, app_name)
+	app := C.App_import(module_name, app_name, packages_path)
 	if app == nil {
 		return nil, errors.New("failed to import module")
 	}

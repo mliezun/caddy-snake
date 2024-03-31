@@ -161,12 +161,19 @@ static PyTypeObject ResponseType = {
     .tp_methods = Response_methods,
 };
 
-WsgiApp *App_import(const char *module_name, const char *app_name) {
+WsgiApp *App_import(const char *module_name, const char *app_name,
+                    const char *venv_path) {
   WsgiApp *app = malloc(sizeof(WsgiApp));
   if (app == NULL) {
     return NULL;
   }
   PyGILState_STATE gstate = PyGILState_Ensure();
+
+  // Add venv_path into sys.path list
+  if (venv_path) {
+    PyObject *sysPath = PySys_GetObject("path");
+    PyList_Append(sysPath, PyUnicode_FromString(venv_path));
+  }
 
   PyObject *module = PyImport_ImportModule(module_name);
   if (module == NULL) {
@@ -379,7 +386,6 @@ void Py_init_and_release_gil() {
   if (PyStatus_Exception(status)) {
     goto exception;
   }
-  config.write_bytecode = 0;
   status = Py_InitializeFromConfig(&config);
   if (PyStatus_Exception(status)) {
     goto exception;
