@@ -15,6 +15,7 @@ static PyObject *wsgi_version;
 static PyObject *sys_stderr;
 static PyObject *BytesIO;
 static PyObject *task_queue_put;
+static PyThreadState *interp;
 
 char *concatenate_strings(const char *str1, const char *str2) {
   size_t new_str_len = strlen(str1) + strlen(str2) + 1;
@@ -161,13 +162,26 @@ static PyTypeObject ResponseType = {
     .tp_methods = Response_methods,
 };
 
+static PyThreadState *Interpreter_acquire(PyInterpreterState *interp) {
+  PyThreadState *ts = PyThreadState_New(interp);
+  PyEval_RestoreThread(ts);
+  return ts;
+}
+
+static void Interpreter_release(PyThreadState *ts) {
+  // clear ts
+  PyThreadState_Clear(ts);
+  // delete the current thread state and release the GIL
+  PyThreadState_DeleteCurrent();
+}
+
 WsgiApp *App_import(const char *module_name, const char *app_name,
                     const char *venv_path) {
   WsgiApp *app = malloc(sizeof(WsgiApp));
   if (app == NULL) {
     return NULL;
   }
-  PyGILState_STATE gstate = PyGILState_Ensure();
+  PyThreadState *ts = Interpreter_acquire(interp->interp);
 
   // Add venv_path into sys.path list
   if (venv_path) {
@@ -178,7 +192,7 @@ WsgiApp *App_import(const char *module_name, const char *app_name,
   PyObject *module = PyImport_ImportModule(module_name);
   if (module == NULL) {
     PyErr_Print();
-    PyGILState_Release(gstate);
+    Interpreter_release(ts);
     return NULL;
   }
 
@@ -187,24 +201,24 @@ WsgiApp *App_import(const char *module_name, const char *app_name,
     if (PyErr_Occurred()) {
       PyErr_Print();
     }
-    PyGILState_Release(gstate);
+    Interpreter_release(ts);
     return NULL;
   }
 
-  PyGILState_Release(gstate);
+  Interpreter_release(ts);
   return app;
 }
 
 void App_cleanup(WsgiApp *app) {
-  PyGILState_STATE gstate = PyGILState_Ensure();
+  PyThreadState *ts = Interpreter_acquire(interp->interp);
   Py_XDECREF(app->handler);
-  PyGILState_Release(gstate);
+  Interpreter_release(ts);
   free(app);
 }
 
 void App_handle_request(WsgiApp *app, int64_t request_id, HTTPHeaders *headers,
                         const char *body) {
-  PyGILState_STATE gstate = PyGILState_Ensure();
+  PyThreadState *ts = Interpreter_acquire(interp->interp);
 
   PyObject *environ = PyDict_New();
   for (size_t i = 0; i < headers->count; i++) {
@@ -238,7 +252,7 @@ void App_handle_request(WsgiApp *app, int64_t request_id, HTTPHeaders *headers,
   r->request_environ = environ;
   PyObject_CallOneArg(task_queue_put, (PyObject *)r);
 
-  PyGILState_Release(gstate);
+  Interpreter_release(ts);
 }
 
 static void HTTPHeaders_free(HTTPHeaders *http_headers, size_t pos) {
@@ -392,6 +406,10 @@ void Py_init_and_release_gil() {
   }
   PyConfig_Clear(&config);
 
+  interp = Py_NewInterpreter();
+  PyThreadState *ts = PyThreadState_New(interp->interp);
+  PyThreadState_Swap(ts);
+
   // Configure python path to recognize modules in the current directory
   PyObject *sysPath = PySys_GetObject("path");
   PyList_Insert(sysPath, 0, PyUnicode_FromString(""));
@@ -448,7 +466,8 @@ void Py_init_and_release_gil() {
   // Py_DECREF(io_module);
   // Py_DECREF(caddysnake_module);
 
-  PyEval_ReleaseThread(PyGILState_GetThisThreadState());
+  PyThreadState_Clear(ts);
+  PyThreadState_DeleteCurrent();
   return;
 
 exception:
