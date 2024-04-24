@@ -161,8 +161,8 @@ static PyTypeObject ResponseType = {
     .tp_methods = Response_methods,
 };
 
-WsgiApp *App_import(const char *module_name, const char *app_name,
-                    const char *venv_path) {
+WsgiApp *WsgiApp_import(const char *module_name, const char *app_name,
+                        const char *venv_path) {
   WsgiApp *app = malloc(sizeof(WsgiApp));
   if (app == NULL) {
     return NULL;
@@ -195,15 +195,15 @@ WsgiApp *App_import(const char *module_name, const char *app_name,
   return app;
 }
 
-void App_cleanup(WsgiApp *app) {
+void WsgiApp_cleanup(WsgiApp *app) {
   PyGILState_STATE gstate = PyGILState_Ensure();
   Py_XDECREF(app->handler);
   PyGILState_Release(gstate);
   free(app);
 }
 
-void App_handle_request(WsgiApp *app, int64_t request_id, HTTPHeaders *headers,
-                        const char *body) {
+void WsgiApp_handle_request(WsgiApp *app, int64_t request_id,
+                            HTTPHeaders *headers, const char *body) {
   PyGILState_STATE gstate = PyGILState_Ensure();
 
   PyObject *environ = PyDict_New();

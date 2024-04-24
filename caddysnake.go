@@ -212,7 +212,7 @@ func NewWsgi(wsgi_pattern string, venv_path string) (*Wsgi, error) {
 
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
-	app := C.App_import(module_name, app_name, packages_path)
+	app := C.WsgiApp_import(module_name, app_name, packages_path)
 	if app == nil {
 		return nil, errors.New("failed to import module")
 	}
@@ -224,7 +224,7 @@ func (m *Wsgi) Cleanup() {
 	if m.app != nil {
 		runtime.LockOSThread()
 		defer runtime.UnlockOSThread()
-		C.App_cleanup(m.app)
+		C.WsgiApp_cleanup(m.app)
 	}
 }
 
@@ -317,7 +317,7 @@ func (m *Wsgi) HandleRequest(w http.ResponseWriter, r *http.Request) error {
 	lock.Unlock()
 
 	runtime.LockOSThread()
-	C.App_handle_request(m.app, C.int64_t(request_id), rh, body_str)
+	C.WsgiApp_handle_request(m.app, C.int64_t(request_id), rh, body_str)
 	runtime.UnlockOSThread()
 
 	h := <-ch
