@@ -355,13 +355,14 @@ static PyObject *response_callback(PyObject *self, PyObject *args) {
   }
   Py_DECREF(iterator);
 
-  Py_BEGIN_ALLOW_THREADS go_callback(response->request_id,
-                                     response->response_status, http_headers,
-                                     response_body);
+  Py_BEGIN_ALLOW_THREADS wsgi_write_response(response->request_id,
+                                             response->response_status,
+                                             http_headers, response_body);
   Py_END_ALLOW_THREADS goto end;
 
 finalize_error:
-  Py_BEGIN_ALLOW_THREADS go_callback(response->request_id, 500, NULL, NULL);
+  Py_BEGIN_ALLOW_THREADS wsgi_write_response(response->request_id, 500, NULL,
+                                             NULL);
   Py_END_ALLOW_THREADS
 
       end : Py_RETURN_NONE;
@@ -454,4 +455,43 @@ void Py_init_and_release_gil() {
 exception:
   PyConfig_Clear(&config);
   Py_ExitStatusException(status);
+}
+
+// ASGI 3.0 protocol implementation
+struct AsgiApp {
+  PyObject *handler;
+};
+
+AsgiApp *AsgiApp_import(const char *module_name, const char *app_name,
+                        const char *venv_path) {
+  AsgiApp *app = malloc(sizeof(AsgiApp));
+  if (app == NULL) {
+    return NULL;
+  }
+  PyGILState_STATE gstate = PyGILState_Ensure();
+
+  // Add venv_path into sys.path list
+  if (venv_path) {
+    PyObject *sysPath = PySys_GetObject("path");
+    PyList_Append(sysPath, PyUnicode_FromString(venv_path));
+  }
+
+  PyObject *module = PyImport_ImportModule(module_name);
+  if (module == NULL) {
+    PyErr_Print();
+    PyGILState_Release(gstate);
+    return NULL;
+  }
+
+  app->handler = PyObject_GetAttrString(module, app_name);
+  if (!app->handler || !PyCallable_Check(app->handler)) {
+    if (PyErr_Occurred()) {
+      PyErr_Print();
+    }
+    PyGILState_Release(gstate);
+    return NULL;
+  }
+
+  PyGILState_Release(gstate);
+  return app;
 }

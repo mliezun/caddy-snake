@@ -120,8 +120,8 @@ func parsePythonDirective(h httpcaddyfile.Helper) (caddyhttp.MiddlewareHandler, 
 	return app, nil
 }
 
-// RequestHandler stores the result of a request handled by a Wsgi app
-type RequestHandler struct {
+// WsgiRequestHandler stores the result of a request handled by a Wsgi app
+type WsgiRequestHandler struct {
 	status_code C.int
 	headers     *C.HTTPHeaders
 	body        *C.char
@@ -129,7 +129,7 @@ type RequestHandler struct {
 
 var lock sync.RWMutex = sync.RWMutex{}
 var request_counter int64 = 0
-var handlers map[int64]chan RequestHandler = map[int64]chan RequestHandler{}
+var wsgi_handlers map[int64]chan WsgiRequestHandler = map[int64]chan WsgiRequestHandler{}
 
 func init() {
 	C.Py_init_and_release_gil()
@@ -309,11 +309,11 @@ func (m *Wsgi) HandleRequest(w http.ResponseWriter, r *http.Request) error {
 	body_str := C.CString(string(body))
 	defer C.free(unsafe.Pointer(body_str))
 
-	ch := make(chan RequestHandler)
+	ch := make(chan WsgiRequestHandler)
 	lock.Lock()
 	request_counter++
 	request_id := request_counter
-	handlers[request_id] = ch
+	wsgi_handlers[request_id] = ch
 	lock.Unlock()
 
 	runtime.LockOSThread()
@@ -350,15 +350,15 @@ func (m *Wsgi) HandleRequest(w http.ResponseWriter, r *http.Request) error {
 	return nil
 }
 
-//export go_callback
-func go_callback(request_id C.int64_t, status_code C.int, headers *C.HTTPHeaders, body *C.char) {
+//export wsgi_write_response
+func wsgi_write_response(request_id C.int64_t, status_code C.int, headers *C.HTTPHeaders, body *C.char) {
 	lock.Lock()
 	defer lock.Unlock()
-	ch := handlers[int64(request_id)]
-	ch <- RequestHandler{
+	ch := wsgi_handlers[int64(request_id)]
+	ch <- WsgiRequestHandler{
 		status_code: status_code,
 		body:        body,
 		headers:     headers,
 	}
-	delete(handlers, int64(request_id))
+	delete(wsgi_handlers, int64(request_id))
 }
