@@ -15,6 +15,8 @@ static PyObject *wsgi_version;
 static PyObject *sys_stderr;
 static PyObject *BytesIO;
 static PyObject *task_queue_put;
+static PyObject *asyncio_Event;
+static PyObject *asyncio_Loop;
 
 char *concatenate_strings(const char *str1, const char *str2) {
   size_t new_str_len = strlen(str1) + strlen(str2) + 1;
@@ -378,85 +380,6 @@ static struct PyModuleDef CaddysnakeModule = {
     PyModuleDef_HEAD_INIT, "caddysnake", NULL, -1, CaddysnakeMethods,
 };
 
-void Py_init_and_release_gil() {
-  PyStatus status;
-  PyConfig config;
-  PyConfig_InitPythonConfig(&config);
-  // Set the program name. Implicitly preinitialize Python
-  status = PyConfig_SetString(&config, &config.program_name, L"caddysnake");
-  if (PyStatus_Exception(status)) {
-    goto exception;
-  }
-  status = Py_InitializeFromConfig(&config);
-  if (PyStatus_Exception(status)) {
-    goto exception;
-  }
-  PyConfig_Clear(&config);
-
-  // Configure python path to recognize modules in the current directory
-  PyObject *sysPath = PySys_GetObject("path");
-  PyList_Insert(sysPath, 0, PyUnicode_FromString(""));
-
-  // Used for turning bytes-like object into a file-like object
-  PyObject *io_module = PyImport_ImportModule("io");
-  BytesIO = PyObject_GetAttrString(io_module, "BytesIO");
-
-  PyObject *caddysnake_module = PyModule_Create(&CaddysnakeModule);
-  PyObject *response_callback_fn =
-      PyObject_GetAttrString(caddysnake_module, "response_callback");
-
-  // Initialize types
-  PyType_Ready(&ResponseType);
-
-  // Setup task queue and consumer threads
-  PyRun_SimpleString(
-      "def _setup_caddysnake(callback):\n"
-      "\tfrom queue import SimpleQueue\n"
-      "\tfrom threading import Thread\n"
-      "\ttask_queue = SimpleQueue()\n"
-      "\tdef process_request_response(task):\n"
-      "\t\ttry:\n"
-      "\t\t\tresult = task.call_wsgi()\n"
-      "\t\t\tcallback(task, None)\n"
-      "\t\texcept Exception as e:\n"
-      "\t\t\tcallback(task, e)\n"
-      "\tdef worker():\n"
-      "\t\twhile True:\n"
-      "\t\t\ttask = task_queue.get()\n"
-      "\t\t\tThread(target=process_request_response, args=(task,)).start()\n"
-      "\tThread(target=worker).start()\n"
-      "\treturn task_queue\n");
-  PyObject *main_module = PyImport_AddModule("__main__");
-  PyObject *setup_fn = PyObject_GetAttrString(main_module, "_setup_caddysnake");
-  PyObject *task_queue = PyObject_CallOneArg(setup_fn, response_callback_fn);
-  task_queue_put = PyObject_GetAttrString(task_queue, "put");
-  PyRun_SimpleString("del _setup_caddysnake");
-
-  // Setup WSGI version
-  wsgi_version = PyTuple_New(2);
-  PyTuple_SetItem(wsgi_version, 0, PyLong_FromLong(1));
-  PyTuple_SetItem(wsgi_version, 1, PyLong_FromLong(0));
-
-  // Setup stderr for logging
-  sys_stderr = PySys_GetObject("stderr");
-
-  // This are global objects expected to exist during the entire program
-  // lifetime. Refcounts can be safely decreased, but there's no need to do it
-  // because we expect the objects to stick around forever.
-  // Py_DECREF(task_queue);
-  // Py_DECREF(setup_fn);
-  // Py_DECREF(response_callback_fn);
-  // Py_DECREF(io_module);
-  // Py_DECREF(caddysnake_module);
-
-  PyEval_ReleaseThread(PyGILState_GetThisThreadState());
-  return;
-
-exception:
-  PyConfig_Clear(&config);
-  Py_ExitStatusException(status);
-}
-
 // ASGI 3.0 protocol implementation
 struct AsgiApp {
   PyObject *handler;
@@ -564,3 +487,240 @@ PyObject *asgi_receive_data_start(PyObject *self) {
   return PyBytes_FromString(self->data);
 }
 */
+
+struct AsgiEvent {
+  PyObject_HEAD AsgiApp *app;
+  uint64_t request_id;
+  PyObject *event;
+};
+
+static PyObject *AsgiEvent_new(PyTypeObject *type, PyObject *args,
+                               PyObject *kwds) {
+  AsgiEvent *self;
+  self = (AsgiEvent *)type->tp_alloc(type, 0);
+  if (self != NULL) {
+    self->request_id = 0;
+    self->event = NULL;
+  }
+  return (PyObject *)self;
+}
+
+static void AsgiEvent_dealloc(AsgiEvent *self) {
+  Py_XDECREF(self->event);
+  Py_TYPE(self)->tp_free((PyObject *)self);
+}
+
+void AsgiEvent_set(AsgiEvent *self) {
+  PyGILState_STATE gstate = PyGILState_Ensure();
+  PyObject *set_fn = PyObject_GetAttrString((PyObject *)self->event, "set");
+  PyObject_CallNoArgs(set_fn);
+  Py_DECREF(set_fn);
+  Debug_obj(self->event);
+  PyGILState_Release(gstate);
+  printf("Event is set\n");
+}
+
+static PyObject *AsgiEvent_wait(AsgiEvent *self, PyObject *args) {
+  printf("The thing is waiting\n");
+  PyObject *wait_fn = PyObject_GetAttrString((PyObject *)self->event, "wait");
+  PyObject *coro = PyObject_CallNoArgs(wait_fn);
+  Py_DECREF(wait_fn);
+  return coro;
+}
+
+static PyObject *AsgiEvent_receive_start(AsgiEvent *self, PyObject *args) {
+  asgi_receive_start(self->request_id, self);
+  return Py_None;
+}
+
+static PyObject *AsgiEvent_receive_end(AsgiEvent *self, PyObject *args) {
+  printf("The thing is receiving\n");
+  return PyDict_New();
+}
+
+static PyMethodDef AsgiEvent_methods[] = {
+    {"wait", (PyCFunction)AsgiEvent_wait, METH_VARARGS,
+     "Wait until ASGI Event is set, calls the underlying asnycio.Event set() "
+     "method."},
+    {"receive_start", (PyCFunction)AsgiEvent_receive_start, METH_VARARGS,
+     "Start reading receive data."},
+    {"receive_end", (PyCFunction)AsgiEvent_receive_end, METH_VARARGS,
+     "Return all received data."},
+    {NULL} /* Sentinel */
+};
+
+static PyTypeObject AsgiEventType = {
+    .ob_base = PyVarObject_HEAD_INIT(NULL, 0).tp_name = "caddysnake.AsgiEvent",
+    .tp_doc = PyDoc_STR("ASGI Event object"),
+    .tp_basicsize = sizeof(AsgiEvent),
+    .tp_itemsize = 0,
+    .tp_flags = Py_TPFLAGS_DEFAULT | Py_TPFLAGS_BASETYPE,
+    .tp_new = AsgiEvent_new,
+    .tp_dealloc = (destructor)AsgiEvent_dealloc,
+    .tp_methods = AsgiEvent_methods,
+};
+
+void AsgiApp_handle_request(AsgiApp *app, uint64_t request_id,
+                            HTTPHeaders *headers, const char *body) {
+  PyGILState_STATE gstate = PyGILState_Ensure();
+
+  printf("I have the GIL!\n");
+
+  PyObject *scope = PyDict_New();
+  PyDict_SetItem(scope, PyUnicode_FromString("type"),
+                 PyUnicode_FromString("http"));
+  PyDict_SetItem(scope, PyUnicode_FromString("http_version"),
+                 PyUnicode_FromString("1.1"));
+  PyDict_SetItem(scope, PyUnicode_FromString("method"),
+                 PyUnicode_FromString("GET"));
+  PyDict_SetItem(scope, PyUnicode_FromString("path"),
+                 PyUnicode_FromString("/"));
+  PyDict_SetItem(scope, PyUnicode_FromString("raw_path"),
+                 PyUnicode_FromString("/"));
+  PyDict_SetItem(scope, PyUnicode_FromString("root_path"),
+                 PyUnicode_FromString("/"));
+  PyDict_SetItem(scope, PyUnicode_FromString("scheme"),
+                 PyUnicode_FromString("http"));
+  PyDict_SetItem(scope, PyUnicode_FromString("query_string"),
+                 PyUnicode_FromString(""));
+  PyDict_SetItem(scope, PyUnicode_FromString("headers"), PyList_New(0));
+  PyDict_SetItem(scope, PyUnicode_FromString("client"),
+                 PyUnicode_FromString("127.0.0.1"));
+  PyDict_SetItem(scope, PyUnicode_FromString("server"),
+                 PyUnicode_FromString("127.0.0.1"));
+
+  Debug_obj(scope);
+
+  AsgiEvent *event =
+      (AsgiEvent *)PyObject_CallObject((PyObject *)&AsgiEventType, NULL);
+  event->app = app;
+  event->request_id = request_id;
+  event->event = PyObject_CallNoArgs(asyncio_Event);
+
+  Debug_obj(event);
+  Debug_obj(event->event);
+
+  PyRun_SimpleString("def build_receive(event):\n"
+                     "\tasync def receive():\n"
+                     "\t\tevent.receive_start()\n"
+                     "\t\tprint('after start recv')\n"
+                     "\t\tawait event.wait()\n"
+                     "\t\tprint('after wait recv')\n"
+                     "\t\treturn event.receive_end()\n"
+                     "\treturn receive\n");
+  printf("New build_receive\n");
+  PyObject *main_module = PyImport_AddModule("__main__");
+  printf("Imported main\n");
+  PyObject *build_receive =
+      PyObject_GetAttrString(main_module, "build_receive");
+  printf("Get main\n");
+
+  PyObject *receive = PyObject_CallOneArg(build_receive, (PyObject *)event);
+  printf("Build receive\n");
+
+  Debug_obj(app->handler);
+
+  PyObject *args = PyTuple_New(3);
+  PyTuple_SetItem(args, 0, scope);
+  PyTuple_SetItem(args, 1, receive);
+  PyTuple_SetItem(args, 2, Py_None);
+  PyObject *coro = PyObject_Call((PyObject *)app->handler, args, NULL);
+
+  Debug_obj(coro);
+  PyObject *run_until_complete =
+      PyObject_GetAttrString(asyncio_Loop, "run_until_complete");
+  PyObject_CallOneArg(run_until_complete, coro);
+
+  printf("Has completed\n");
+
+  PyGILState_Release(gstate);
+}
+
+// Initialization
+
+void Py_init_and_release_gil() {
+  PyStatus status;
+  PyConfig config;
+  PyConfig_InitPythonConfig(&config);
+  // Set the program name. Implicitly preinitialize Python
+  status = PyConfig_SetString(&config, &config.program_name, L"caddysnake");
+  if (PyStatus_Exception(status)) {
+    goto exception;
+  }
+  status = Py_InitializeFromConfig(&config);
+  if (PyStatus_Exception(status)) {
+    goto exception;
+  }
+  PyConfig_Clear(&config);
+
+  // Configure python path to recognize modules in the current directory
+  PyObject *sysPath = PySys_GetObject("path");
+  PyList_Insert(sysPath, 0, PyUnicode_FromString(""));
+
+  // Used for turning bytes-like object into a file-like object
+  PyObject *io_module = PyImport_ImportModule("io");
+  BytesIO = PyObject_GetAttrString(io_module, "BytesIO");
+
+  // Used for events
+  PyObject *asyncio = PyImport_ImportModule("asyncio");
+  asyncio_Event = PyObject_GetAttrString(asyncio, "Event");
+  PyObject *loop_name = PyUnicode_FromString("new_event_loop");
+  asyncio_Loop = PyObject_CallMethodNoArgs(asyncio, loop_name);
+  Py_DECREF(loop_name);
+
+  PyObject *caddysnake_module = PyModule_Create(&CaddysnakeModule);
+  PyObject *response_callback_fn =
+      PyObject_GetAttrString(caddysnake_module, "response_callback");
+
+  // Initialize types
+  PyType_Ready(&ResponseType);
+  PyType_Ready(&AsgiEventType);
+
+  // Setup task queue and consumer threads
+  PyRun_SimpleString(
+      "def _setup_caddysnake(callback):\n"
+      "\tfrom queue import SimpleQueue\n"
+      "\tfrom threading import Thread\n"
+      "\ttask_queue = SimpleQueue()\n"
+      "\tdef process_request_response(task):\n"
+      "\t\ttry:\n"
+      "\t\t\tresult = task.call_wsgi()\n"
+      "\t\t\tcallback(task, None)\n"
+      "\t\texcept Exception as e:\n"
+      "\t\t\tcallback(task, e)\n"
+      "\tdef worker():\n"
+      "\t\twhile True:\n"
+      "\t\t\ttask = task_queue.get()\n"
+      "\t\t\tThread(target=process_request_response, args=(task,)).start()\n"
+      "\tThread(target=worker).start()\n"
+      "\treturn task_queue\n");
+  PyObject *main_module = PyImport_AddModule("__main__");
+  PyObject *setup_fn = PyObject_GetAttrString(main_module, "_setup_caddysnake");
+  PyObject *task_queue = PyObject_CallOneArg(setup_fn, response_callback_fn);
+  task_queue_put = PyObject_GetAttrString(task_queue, "put");
+  PyRun_SimpleString("del _setup_caddysnake");
+
+  // Setup WSGI version
+  wsgi_version = PyTuple_New(2);
+  PyTuple_SetItem(wsgi_version, 0, PyLong_FromLong(1));
+  PyTuple_SetItem(wsgi_version, 1, PyLong_FromLong(0));
+
+  // Setup stderr for logging
+  sys_stderr = PySys_GetObject("stderr");
+
+  // This are global objects expected to exist during the entire program
+  // lifetime. Refcounts can be safely decreased, but there's no need to do it
+  // because we expect the objects to stick around forever.
+  // Py_DECREF(task_queue);
+  // Py_DECREF(setup_fn);
+  // Py_DECREF(response_callback_fn);
+  // Py_DECREF(io_module);
+  // Py_DECREF(caddysnake_module);
+
+  PyEval_ReleaseThread(PyGILState_GetThisThreadState());
+  return;
+
+exception:
+  PyConfig_Clear(&config);
+  Py_ExitStatusException(status);
+}

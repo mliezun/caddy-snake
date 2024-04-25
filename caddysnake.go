@@ -362,3 +362,23 @@ func wsgi_write_response(request_id C.int64_t, status_code C.int, headers *C.HTT
 	}
 	delete(wsgi_handlers, int64(request_id))
 }
+
+func CallFictionalAsgi() {
+	asgi_app := C.AsgiApp_import(C.CString("simple_asgi"), C.CString("main"), C.CString("venv/lib/python3.12/site-packages"))
+	C.AsgiApp_handle_request(asgi_app, 100, nil, nil)
+}
+
+var asgi_lock sync.RWMutex = sync.RWMutex{}
+var asgi_request_counter uint64 = 0
+
+// var wsgi_handlers map[uint64]chan WsgiRequestHandler = map[uint64]chan WsgiRequestHandler{}
+
+//export asgi_receive_start
+func asgi_receive_start(request_id C.uint64_t, event *C.AsgiEvent) {
+	go func() {
+		fmt.Println("inside asgi_receive_start")
+		runtime.LockOSThread()
+		defer runtime.UnlockOSThread()
+		C.AsgiEvent_set(event)
+	}()
+}
