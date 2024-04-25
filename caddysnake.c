@@ -495,3 +495,72 @@ AsgiApp *AsgiApp_import(const char *module_name, const char *app_name,
   PyGILState_Release(gstate);
   return app;
 }
+/*
+# Standard application
+async def application(scope, receive, send):
+  event = await receive()
+  ...
+  await send({"type": "websocket.send", ...})
+
+# Server implementation
+def build_receive(request_id):
+  async def receive():
+    while True:
+      # asgi_* functions are in Go
+      if asgi_event_ready(request_id):
+        return asgi_receive_event(request_id)
+      # Release control to event loop
+      await asyncio.sleep(0)
+  return receive
+
+def build_send(request_id):
+  async def send(event):
+    # asgi_* functions are in Go
+    asgi_send_event(request_id, event)
+    while True:
+      if asgi_event_sent(request_id):
+        return
+      # Release control to event loop
+      await asyncio.sleep(0)
+
+# Alternative implementation
+def build_receive(event):
+  async def receive():
+    event.asgi_receive_data_start()
+    await event.wait()
+    return event.asgi_receive_data_end()
+  return receive
+
+def build_send(event):
+  async def send(data):
+    event.asgi_send_data(data)
+    await event.wait()
+
+PyObject *asgi_receive_data_start(PyObject *self) {
+  go_receive_data_start(self->request_id, (void *) self); // Call go
+}
+
+func go_receive_data_start(request_id C.int64_t, object unsafe.Pointer) {
+  go func() {
+    lock.Lock()
+    hn := asgi_handlers[int(request_id)]
+    lock.Unlock()
+    data := io.ReadAll(hn.Body)
+    hn.Data = C.CString(unsafe.Pointer(data))
+    asgi_set_event(object, hn.Data)
+  }()
+}
+
+void asgi_set_event(void *object, char *data) {
+  // Acquire GIL
+  PyObject *event = (PyObject *) object;
+  event->data = data;
+  PyObject *event_set = PyObject_GetAttrString(event, "set");
+  PyObject_Call(event_set, NULL, NULL);
+  // Release GIL
+}
+
+PyObject *asgi_receive_data_start(PyObject *self) {
+  return PyBytes_FromString(self->data);
+}
+*/
