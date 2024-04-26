@@ -29,15 +29,17 @@ def caddysnake_setup_asgi(loop):
     
     # See: https://stackoverflow.com/questions/33000200/asyncio-wait-for-event-from-other-thread
     class Event_ts(asyncio.Event):
-        #TODO: clear() method
         def set(self):
-            #FIXME: The _loop attribute is not documented as public api!
-            self._loop.call_soon_threadsafe(super().set)
+            loop.call_soon_threadsafe(super().set)
+            
+        def clear(self):
+            loop.call_soon_threadsafe(super().clear)
             
     def build_receive(asgi_event):
         async def receive():
             asgi_event.receive_start()
             await asgi_event.wait()
+            asgi_event.clear()
             return asgi_event.receive_end()
         return receive
     
@@ -45,6 +47,7 @@ def caddysnake_setup_asgi(loop):
         async def send(data):
             asgi_event.send(data)
             await asgi_event.wait()
+            asgi_event.clear()
         return send
     
     Thread(target=loop.run_forever).start()

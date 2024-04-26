@@ -35,7 +35,7 @@ char *concatenate_strings(const char *str1, const char *str2) {
   return result;
 }
 
-char *copy_string(PyObject *pystr) {
+char *copy_pystring(PyObject *pystr) {
   Py_ssize_t og_size = 0;
   const char *og_str = PyUnicode_AsUTF8AndSize(pystr, &og_size);
   size_t new_str_len = og_size + 1;
@@ -47,12 +47,12 @@ char *copy_string(PyObject *pystr) {
   return result;
 }
 
-HTTPHeaders *HTTPHeaders_new(size_t count) {
-  HTTPHeaders *new_request = (HTTPHeaders *)malloc(sizeof(HTTPHeaders));
-  new_request->count = count;
-  new_request->keys = malloc(sizeof(char *) * count);
-  new_request->values = malloc(sizeof(char *) * count);
-  return new_request;
+MapKeyVal *MapKeyVal_new(size_t count) {
+  MapKeyVal *new_map = (MapKeyVal *)malloc(sizeof(MapKeyVal));
+  new_map->count = count;
+  new_map->keys = malloc(sizeof(char *) * count);
+  new_map->values = malloc(sizeof(char *) * count);
+  return new_map;
 }
 
 typedef struct {
@@ -211,7 +211,7 @@ void WsgiApp_cleanup(WsgiApp *app) {
 }
 
 void WsgiApp_handle_request(WsgiApp *app, int64_t request_id,
-                            HTTPHeaders *headers, const char *body) {
+                            MapKeyVal *headers, const char *body) {
   PyGILState_STATE gstate = PyGILState_Ensure();
 
   PyObject *environ = PyDict_New();
@@ -249,15 +249,15 @@ void WsgiApp_handle_request(WsgiApp *app, int64_t request_id,
   PyGILState_Release(gstate);
 }
 
-static void HTTPHeaders_free(HTTPHeaders *http_headers, size_t pos) {
-  if (pos > http_headers->count) {
-    pos = http_headers->count;
+static void MapKeyVal_free(MapKeyVal *map, size_t pos) {
+  if (pos > map->count) {
+    pos = map->count;
   }
   for (size_t i = 0; i < pos; i++) {
-    free(http_headers->keys[i]);
-    free(http_headers->values[i]);
+    free(map->keys[i]);
+    free(map->values[i]);
   }
-  free(http_headers);
+  free(map);
 }
 
 static PyObject *response_callback(PyObject *self, PyObject *args) {
@@ -340,7 +340,7 @@ static PyObject *response_callback(PyObject *self, PyObject *args) {
     goto finalize_error;
   }
 
-  HTTPHeaders *http_headers = HTTPHeaders_new(headers_count);
+  MapKeyVal *http_headers = MapKeyVal_new(headers_count);
 
   PyObject *key, *value, *item;
   size_t pos = 0;
@@ -351,13 +351,13 @@ static PyObject *response_callback(PyObject *self, PyObject *args) {
       PyErr_Print();
       Py_DECREF(item);
       Py_DECREF(iterator);
-      HTTPHeaders_free(http_headers, pos);
+      MapKeyVal_free(http_headers, pos);
       goto finalize_error;
     }
     key = PyTuple_GetItem(item, 0);
     value = PyTuple_GetItem(item, 1);
-    http_headers->keys[pos] = copy_string(key);
-    http_headers->values[pos] = copy_string(value);
+    http_headers->keys[pos] = copy_pystring(key);
+    http_headers->values[pos] = copy_pystring(value);
     Py_DECREF(item);
     pos++;
   }
@@ -424,75 +424,6 @@ AsgiApp *AsgiApp_import(const char *module_name, const char *app_name,
   PyGILState_Release(gstate);
   return app;
 }
-/*
-# Standard application
-async def application(scope, receive, send):
-  event = await receive()
-  ...
-  await send({"type": "websocket.send", ...})
-
-# Server implementation
-def build_receive(request_id):
-  async def receive():
-    while True:
-      # asgi_* functions are in Go
-      if asgi_event_ready(request_id):
-        return asgi_receive_event(request_id)
-      # Release control to event loop
-      await asyncio.sleep(0)
-  return receive
-
-def build_send(request_id):
-  async def send(event):
-    # asgi_* functions are in Go
-    asgi_send_event(request_id, event)
-    while True:
-      if asgi_event_sent(request_id):
-        return
-      # Release control to event loop
-      await asyncio.sleep(0)
-
-# Alternative implementation
-def build_receive(event):
-  async def receive():
-    event.asgi_receive_data_start()
-    await event.wait()
-    return event.asgi_receive_data_end()
-  return receive
-
-def build_send(event):
-  async def send(data):
-    event.asgi_send_data(data)
-    await event.wait()
-
-PyObject *asgi_receive_data_start(PyObject *self) {
-  go_receive_data_start(self->request_id, (void *) self); // Call go
-}
-
-func go_receive_data_start(request_id C.int64_t, object unsafe.Pointer) {
-  go func() {
-    lock.Lock()
-    hn := asgi_handlers[int(request_id)]
-    lock.Unlock()
-    data := io.ReadAll(hn.Body)
-    hn.Data = C.CString(unsafe.Pointer(data))
-    asgi_set_event(object, hn.Data)
-  }()
-}
-
-void asgi_set_event(void *object, char *data) {
-  // Acquire GIL
-  PyObject *event = (PyObject *) object;
-  event->data = data;
-  PyObject *event_set = PyObject_GetAttrString(event, "set");
-  PyObject_Call(event_set, NULL, NULL);
-  // Release GIL
-}
-
-PyObject *asgi_receive_data_start(PyObject *self) {
-  return PyBytes_FromString(self->data);
-}
-*/
 
 struct AsgiEvent {
   PyObject_HEAD AsgiApp *app;
@@ -532,6 +463,14 @@ static PyObject *AsgiEvent_wait(AsgiEvent *self, PyObject *args) {
   return coro;
 }
 
+static PyObject *AsgiEvent_clear(AsgiEvent *self, PyObject *args) {
+  PyObject *clear_fn =
+      PyObject_GetAttrString((PyObject *)self->event_ts, "clear");
+  PyObject_CallNoArgs(clear_fn);
+  Py_DECREF(clear_fn);
+  return Py_None;
+}
+
 static PyObject *AsgiEvent_receive_start(AsgiEvent *self, PyObject *args) {
   asgi_receive_start(self->request_id, self);
   return Py_None;
@@ -541,14 +480,22 @@ static PyObject *AsgiEvent_receive_end(AsgiEvent *self, PyObject *args) {
   return PyDict_New();
 }
 
+static PyObject *AsgiEvent_send(AsgiEvent *self, PyObject *args) {
+  return PyDict_New();
+}
+
 static PyMethodDef AsgiEvent_methods[] = {
     {"wait", (PyCFunction)AsgiEvent_wait, METH_VARARGS,
      "Wait until ASGI Event is set, calls the underlying asnycio.Event set() "
      "method."},
+    {"clear", (PyCFunction)AsgiEvent_clear, METH_VARARGS,
+     "Clear ASGI Event, calls the underlying asnycio.Event clear() method."},
     {"receive_start", (PyCFunction)AsgiEvent_receive_start, METH_VARARGS,
      "Start reading receive data."},
     {"receive_end", (PyCFunction)AsgiEvent_receive_end, METH_VARARGS,
      "Return all received data."},
+    {"send", (PyCFunction)AsgiEvent_send, METH_VARARGS,
+     "Send data back to client."},
     {NULL} /* Sentinel */
 };
 
@@ -563,32 +510,49 @@ static PyTypeObject AsgiEventType = {
     .tp_methods = AsgiEvent_methods,
 };
 
-void AsgiApp_handle_request(AsgiApp *app, uint64_t request_id,
-                            HTTPHeaders *headers, const char *body) {
+void AsgiApp_handle_request(AsgiApp *app, uint64_t request_id, MapKeyVal *scope,
+                            MapKeyVal *headers, const char *client_host,
+                            int client_port, const char *server_host,
+                            int server_port) {
   PyGILState_STATE gstate = PyGILState_Ensure();
 
-  PyObject *scope = PyDict_New();
-  PyDict_SetItem(scope, PyUnicode_FromString("type"),
-                 PyUnicode_FromString("http"));
-  PyDict_SetItem(scope, PyUnicode_FromString("http_version"),
-                 PyUnicode_FromString("1.1"));
-  PyDict_SetItem(scope, PyUnicode_FromString("method"),
-                 PyUnicode_FromString("GET"));
-  PyDict_SetItem(scope, PyUnicode_FromString("path"),
-                 PyUnicode_FromString("/"));
-  PyDict_SetItem(scope, PyUnicode_FromString("raw_path"),
-                 PyUnicode_FromString("/"));
-  PyDict_SetItem(scope, PyUnicode_FromString("root_path"),
-                 PyUnicode_FromString("/"));
-  PyDict_SetItem(scope, PyUnicode_FromString("scheme"),
-                 PyUnicode_FromString("http"));
-  PyDict_SetItem(scope, PyUnicode_FromString("query_string"),
-                 PyUnicode_FromString(""));
-  PyDict_SetItem(scope, PyUnicode_FromString("headers"), PyList_New(0));
-  PyDict_SetItem(scope, PyUnicode_FromString("client"),
-                 PyUnicode_FromString("127.0.0.1"));
-  PyDict_SetItem(scope, PyUnicode_FromString("server"),
-                 PyUnicode_FromString("127.0.0.1"));
+  PyObject *scope_dict = PyDict_New();
+  for (int i = 0; i < scope->count; i++) {
+    const char *key = scope->keys[i];
+    if (strcmp(key, "raw_path") == 0 || strcmp(key, "query_string") == 0) {
+      PyObject *value = PyBytes_FromString(scope->values[i]);
+      PyDict_SetItemString(scope_dict, key, value);
+
+      Py_DECREF(value);
+    } else {
+      PyObject *value = PyUnicode_FromString(scope->values[i]);
+      PyDict_SetItemString(scope_dict, key, value);
+
+      Py_DECREF(value);
+    }
+  }
+
+  PyObject *headers_tuple = PyTuple_New(headers->count);
+  for (int i = 0; i < headers->count; i++) {
+    PyObject *element = PyTuple_New(2);
+    PyTuple_SetItem(element, 0, PyBytes_FromString(headers->keys[i]));
+    PyTuple_SetItem(element, 1, PyBytes_FromString(headers->values[i]));
+    PyTuple_SetItem(headers_tuple, i, element);
+  }
+  PyDict_SetItemString(scope_dict, "headers", headers_tuple);
+  Py_DECREF(headers_tuple);
+
+  PyObject *client_tuple = PyTuple_New(2);
+  PyTuple_SetItem(client_tuple, 0, PyUnicode_FromString(client_host));
+  PyTuple_SetItem(client_tuple, 1, PyLong_FromLong(client_port));
+  PyDict_SetItemString(scope_dict, "client", client_tuple);
+  Py_DECREF(client_tuple);
+
+  PyObject *server_tuple = PyTuple_New(2);
+  PyTuple_SetItem(server_tuple, 0, PyUnicode_FromString(server_host));
+  PyTuple_SetItem(server_tuple, 1, PyLong_FromLong(server_port));
+  PyDict_SetItemString(scope_dict, "server", server_tuple);
+  Py_DECREF(server_tuple);
 
   AsgiEvent *asgi_event =
       (AsgiEvent *)PyObject_CallObject((PyObject *)&AsgiEventType, NULL);
@@ -598,19 +562,20 @@ void AsgiApp_handle_request(AsgiApp *app, uint64_t request_id,
 
   PyObject *receive =
       PyObject_CallOneArg(build_receive, (PyObject *)asgi_event);
+  PyObject *send = PyObject_CallOneArg(build_send, (PyObject *)asgi_event);
 
   PyObject *args = PyTuple_New(3);
-  PyTuple_SetItem(args, 0, scope);
+  PyTuple_SetItem(args, 0, scope_dict);
   PyTuple_SetItem(args, 1, receive);
-  PyTuple_SetItem(args, 2, Py_None);
+  PyTuple_SetItem(args, 2, send);
   PyObject *coro = PyObject_Call((PyObject *)app->handler, args, NULL);
+  Py_DECREF(args);
 
   args = PyTuple_New(2);
   PyTuple_SetItem(args, 0, coro);
   PyTuple_SetItem(args, 1, asyncio_Loop);
-  PyObject *run_until_complete =
-      PyObject_GetAttrString(asyncio_Loop, "run_until_complete");
   PyObject_Call(asyncio_run_coroutine_threadsafe, args, NULL);
+  Py_DECREF(args);
 
   PyGILState_Release(gstate);
 }

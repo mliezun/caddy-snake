@@ -128,7 +128,7 @@ func parsePythonDirective(h httpcaddyfile.Helper) (caddyhttp.MiddlewareHandler, 
 // WsgiRequestHandler stores the result of a request handled by a Wsgi app
 type WsgiRequestHandler struct {
 	status_code C.int
-	headers     *C.HTTPHeaders
+	headers     *C.MapKeyVal
 	body        *C.char
 }
 
@@ -271,7 +271,7 @@ func (m *Wsgi) HandleRequest(w http.ResponseWriter, r *http.Request) error {
 		"CONTENT_LENGTH":  r.Header.Get("Content-length"),
 		"wsgi.url_scheme": strings.ToLower(strings.Split(r.Proto, "/")[0]),
 	}
-	rh := C.HTTPHeaders_new(C.size_t(len(r.Header) + len(extra_headers)))
+	rh := C.MapKeyVal_new(C.size_t(len(r.Header) + len(extra_headers)))
 	defer C.free(unsafe.Pointer(rh))
 	defer C.free(unsafe.Pointer(rh.keys))
 	defer C.free(unsafe.Pointer(rh.values))
@@ -358,7 +358,7 @@ func (m *Wsgi) HandleRequest(w http.ResponseWriter, r *http.Request) error {
 }
 
 //export wsgi_write_response
-func wsgi_write_response(request_id C.int64_t, status_code C.int, headers *C.HTTPHeaders, body *C.char) {
+func wsgi_write_response(request_id C.int64_t, status_code C.int, headers *C.MapKeyVal, body *C.char) {
 	lock.Lock()
 	defer lock.Unlock()
 	ch := wsgi_handlers[int64(request_id)]
@@ -374,7 +374,16 @@ func CallFictionalAsgi() {
 	asgi_app := C.AsgiApp_import(C.CString("simple_asgi"), C.CString("main"), C.CString("venv/lib/python3.12/site-packages"))
 	start := time.Now()
 	for i := 0; i < 10000; i++ {
-		C.AsgiApp_handle_request(asgi_app, C.uint64_t(i+100), nil, nil)
+		C.AsgiApp_handle_request(
+			asgi_app,
+			C.uint64_t(i),
+			C.MapKeyVal_new(0),
+			C.MapKeyVal_new(0),
+			C.CString("127.0.0.1"),
+			C.int(8383),
+			C.CString("127.0.0.1"),
+			C.int(8383),
+		)
 	}
 	fmt.Fprintln(os.Stderr, "Elapsed", time.Since(start))
 }
