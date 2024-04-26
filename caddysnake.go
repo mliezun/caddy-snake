@@ -11,13 +11,14 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
-	"time"
 	"unsafe"
 
 	"github.com/caddyserver/caddy/v2"
@@ -372,33 +373,248 @@ func wsgi_write_response(request_id C.int64_t, status_code C.int, headers *C.Map
 
 func CallFictionalAsgi() {
 	asgi_app := C.AsgiApp_import(C.CString("simple_asgi"), C.CString("main"), C.CString("venv/lib/python3.12/site-packages"))
-	start := time.Now()
-	for i := 0; i < 10000; i++ {
-		C.AsgiApp_handle_request(
-			asgi_app,
-			C.uint64_t(i),
-			C.MapKeyVal_new(0),
-			C.MapKeyVal_new(0),
-			C.CString("127.0.0.1"),
-			C.int(8383),
-			C.CString("127.0.0.1"),
-			C.int(8383),
-		)
+	module := Asgi{app: asgi_app}
+	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		if err := module.HandleRequest(w, r); err != nil {
+			w.WriteHeader(500)
+			w.Write([]byte("Server Error"))
+		}
+	})
+	// Set the server to listen on port 3500
+	fmt.Println("Server is running on http://localhost:3500")
+	if err := http.ListenAndServe(":3500", nil); err != nil {
+		fmt.Println("Error starting server:", err)
 	}
-	fmt.Fprintln(os.Stderr, "Elapsed", time.Since(start))
+	// start := time.Now()
+	// for i := 0; i < 10000; i++ {
+	// 	C.AsgiApp_handle_request(
+	// 		asgi_app,
+	// 		C.uint64_t(i),
+	// 		C.MapKeyVal_new(0),
+	// 		C.MapKeyVal_new(0),
+	// 		C.CString("127.0.0.1"),
+	// 		C.int(8383),
+	// 		C.CString("127.0.0.1"),
+	// 		C.int(8383),
+	// 	)
+	// }
+	// fmt.Fprintln(os.Stderr, "Elapsed", time.Since(start))
+}
+
+// ASGI: Implementation
+
+// Asgi stores a reference to a Python Asgi application
+type Asgi struct {
+	app *C.AsgiApp
+}
+
+// AsgiRequestHandler stores pointers to the request and the response writer
+type AsgiRequestHandler struct {
+	w    http.ResponseWriter
+	r    *http.Request
+	done chan error
+}
+
+func NewAsgiRequestHandler(w http.ResponseWriter, r *http.Request) *AsgiRequestHandler {
+	return &AsgiRequestHandler{
+		w:    w,
+		r:    r,
+		done: make(chan error),
+	}
 }
 
 var asgi_lock sync.RWMutex = sync.RWMutex{}
 var asgi_request_counter uint64 = 0
+var asgi_handlers map[uint64]*AsgiRequestHandler = map[uint64]*AsgiRequestHandler{}
 
-// var wsgi_handlers map[uint64]chan WsgiRequestHandler = map[uint64]chan WsgiRequestHandler{}
+// HandleRequest passes request down to Python ASGI app and writes responses and headers.
+func (m *Asgi) HandleRequest(w http.ResponseWriter, r *http.Request) error {
+	ctx := r.Context()
+	srvAddr := ctx.Value(http.LocalAddrContextKey).(net.Addr)
+	_, server_port_string, _ := net.SplitHostPort(srvAddr.String())
+	server_port, _ := strconv.Atoi(server_port_string)
+	server_host, _, _ := net.SplitHostPort(r.Host)
+	if server_host == "" {
+		// net.SplitHostPort returns error and an empty host when port is missing
+		server_host = r.Host
+	}
+	server_host_str := C.CString(server_host)
+	defer C.free(unsafe.Pointer(server_host_str))
+	client_host, client_port_string, _ := net.SplitHostPort(r.RemoteAddr)
+	client_port, _ := strconv.Atoi(client_port_string)
+	client_host_str := C.CString(client_host)
+	defer C.free(unsafe.Pointer(client_host_str))
+
+	decodedPath, err := url.PathUnescape(r.URL.Path)
+	if err != nil {
+		return err
+	}
+	scheme := "http"
+	if r.TLS != nil {
+		scheme = "https"
+	}
+	scope_map := map[string]string{
+		"type":         "http",
+		"http_version": fmt.Sprintf("%d.%d", r.ProtoMajor, r.ProtoMinor),
+		"method":       r.Method,
+		"scheme":       scheme,
+		"path":         decodedPath,
+		"raw_path":     r.URL.EscapedPath(),
+		"query_string": r.URL.RawQuery,
+		"root_path":    "",
+	}
+	scope := C.MapKeyVal_new(C.size_t(len(scope_map)))
+	defer C.free(unsafe.Pointer(scope))
+	defer C.free(unsafe.Pointer(scope.keys))
+	defer C.free(unsafe.Pointer(scope.values))
+	scope_count := 0
+	base_of_keys := uintptr(unsafe.Pointer(scope.keys))
+	base_of_values := uintptr(unsafe.Pointer(scope.values))
+	size_of_pointer := unsafe.Sizeof(scope.keys)
+	for k, v := range scope_map {
+		key_str := C.CString(k)
+		defer C.free(unsafe.Pointer(key_str))
+		value_str := C.CString(v)
+		defer C.free(unsafe.Pointer(value_str))
+		*(**C.char)(unsafe.Pointer(base_of_keys + uintptr(scope_count)*size_of_pointer)) = key_str
+		*(**C.char)(unsafe.Pointer(base_of_values + uintptr(scope_count)*size_of_pointer)) = value_str
+		scope_count++
+	}
+
+	request_headers := C.MapKeyVal_new(C.size_t(len(r.Header)))
+	defer C.free(unsafe.Pointer(request_headers))
+	defer C.free(unsafe.Pointer(request_headers.keys))
+	defer C.free(unsafe.Pointer(request_headers.values))
+	header_count := 0
+	base_of_keys = uintptr(unsafe.Pointer(request_headers.keys))
+	base_of_values = uintptr(unsafe.Pointer(request_headers.values))
+	for k, items := range r.Header {
+		key := strings.Map(upperCaseAndUnderscore, k)
+		if key == "PROXY" {
+			// golang cgi issue 16405
+			continue
+		}
+
+		joinStr := ", "
+		if k == "COOKIE" {
+			joinStr = "; "
+		}
+
+		key_str := C.CString(key)
+		defer C.free(unsafe.Pointer(key_str))
+		value_str := C.CString(strings.Join(items, joinStr))
+		defer C.free(unsafe.Pointer(value_str))
+		*(**C.char)(unsafe.Pointer(base_of_keys + uintptr(header_count)*size_of_pointer)) = key_str
+		*(**C.char)(unsafe.Pointer(base_of_values + uintptr(header_count)*size_of_pointer)) = value_str
+		header_count++
+	}
+
+	arh := NewAsgiRequestHandler(w, r)
+
+	asgi_lock.Lock()
+	asgi_request_counter++
+	request_id := asgi_request_counter
+	asgi_handlers[request_id] = arh
+	asgi_lock.Unlock()
+
+	runtime.LockOSThread()
+	C.AsgiApp_handle_request(
+		m.app,
+		C.uint64_t(request_id),
+		scope,
+		request_headers,
+		client_host_str,
+		C.int(client_port),
+		server_host_str,
+		C.int(server_port),
+	)
+	runtime.UnlockOSThread()
+
+	if err := <-arh.done; err != nil {
+		asgi_lock.Lock()
+		delete(asgi_handlers, request_id)
+		asgi_lock.Unlock()
+		return err
+	}
+
+	return nil
+}
 
 //export asgi_receive_start
 func asgi_receive_start(request_id C.uint64_t, event *C.AsgiEvent) {
+	//FIXME: make sure goroutines are ordered
 	go func() {
-		fmt.Println("inside asgi_receive_start")
+		asgi_lock.Lock()
+		arh := asgi_handlers[uint64(request_id)]
+		asgi_lock.Unlock()
+
+		body, err := io.ReadAll(arh.r.Body)
+		if err != nil {
+			arh.done <- err
+			return
+		}
+		body_str := C.CString(string(body))
+		defer C.free(unsafe.Pointer(body_str))
+
 		runtime.LockOSThread()
-		defer runtime.UnlockOSThread()
-		C.AsgiEvent_set(event)
+		C.AsgiEvent_set(event, body_str)
+		runtime.UnlockOSThread()
+	}()
+}
+
+//export asgi_set_headers
+func asgi_set_headers(request_id C.uint64_t, status_code C.int, headers *C.MapKeyVal) {
+	//FIXME: make sure goroutines are ordered
+	go func() {
+		asgi_lock.Lock()
+		arh := asgi_handlers[uint64(request_id)]
+		asgi_lock.Unlock()
+
+		size_of_pointer := unsafe.Sizeof(headers.keys)
+		if headers != nil {
+			defer C.free(unsafe.Pointer(headers))
+			defer C.free(unsafe.Pointer(headers.keys))
+			defer C.free(unsafe.Pointer(headers.values))
+
+			for i := 0; i < int(headers.count); i++ {
+				header_name_ptr := unsafe.Pointer(uintptr(unsafe.Pointer(headers.keys)) + uintptr(i)*size_of_pointer)
+				header_value_ptr := unsafe.Pointer(uintptr(unsafe.Pointer(headers.values)) + uintptr(i)*size_of_pointer)
+				header_name := *(**C.char)(header_name_ptr)
+				defer C.free(unsafe.Pointer(header_name))
+				header_value := *(**C.char)(header_value_ptr)
+				defer C.free(unsafe.Pointer(header_value))
+				arh.w.Header().Add(C.GoString(header_name), C.GoString(header_value))
+			}
+		}
+
+		arh.w.WriteHeader(int(status_code))
+	}()
+}
+
+//export asgi_add_response
+func asgi_add_response(request_id C.uint64_t, body *C.char) {
+	//FIXME: make sure goroutines are ordered
+	go func() {
+		asgi_lock.Lock()
+		arh := asgi_handlers[uint64(request_id)]
+		asgi_lock.Unlock()
+
+		body_bytes := []byte(C.GoString(body))
+		_, err := arh.w.Write(body_bytes)
+		if err != nil {
+			arh.done <- err
+		}
+	}()
+}
+
+//export asgi_send_response
+func asgi_send_response(request_id C.uint64_t) {
+	//FIXME: make sure goroutines are ordered
+	go func() {
+		asgi_lock.Lock()
+		arh := asgi_handlers[uint64(request_id)]
+		asgi_lock.Unlock()
+
+		arh.done <- nil
 	}()
 }

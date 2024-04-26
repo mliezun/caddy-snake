@@ -18,6 +18,7 @@ static PyObject *BytesIO;
 static PyObject *task_queue_put;
 
 // ASGI: global variables
+static PyObject *asgi_version;
 static PyObject *asyncio_Event_ts;
 static PyObject *asyncio_Loop;
 static PyObject *asyncio_run_coroutine_threadsafe;
@@ -429,6 +430,7 @@ struct AsgiEvent {
   PyObject_HEAD AsgiApp *app;
   uint64_t request_id;
   PyObject *event_ts;
+  PyObject *request_body;
 };
 
 static PyObject *AsgiEvent_new(PyTypeObject *type, PyObject *args,
@@ -438,17 +440,20 @@ static PyObject *AsgiEvent_new(PyTypeObject *type, PyObject *args,
   if (self != NULL) {
     self->request_id = 0;
     self->event_ts = NULL;
+    self->request_body = NULL;
   }
   return (PyObject *)self;
 }
 
 static void AsgiEvent_dealloc(AsgiEvent *self) {
   Py_XDECREF(self->event_ts);
+  Py_XDECREF(self->request_body);
   Py_TYPE(self)->tp_free((PyObject *)self);
 }
 
-void AsgiEvent_set(AsgiEvent *self) {
+void AsgiEvent_set(AsgiEvent *self, const char *body) {
   PyGILState_STATE gstate = PyGILState_Ensure();
+  self->request_body = PyBytes_FromString(body);
   PyObject *set_fn = PyObject_GetAttrString((PyObject *)self->event_ts, "set");
   PyObject_CallNoArgs(set_fn);
   Py_DECREF(set_fn);
@@ -477,11 +482,67 @@ static PyObject *AsgiEvent_receive_start(AsgiEvent *self, PyObject *args) {
 }
 
 static PyObject *AsgiEvent_receive_end(AsgiEvent *self, PyObject *args) {
-  return PyDict_New();
+  PyObject *data = PyDict_New();
+  PyObject *data_type = PyUnicode_FromString("http.request");
+  PyDict_SetItemString(data, "type", data_type);
+  PyDict_SetItemString(data, "body", self->request_body);
+  PyDict_SetItemString(data, "more_body", Py_False);
+  Py_DECREF(data_type);
+  return data;
 }
 
 static PyObject *AsgiEvent_send(AsgiEvent *self, PyObject *args) {
-  return PyDict_New();
+  PyObject *data = PyTuple_GetItem(args, 0);
+  PyObject *data_type = PyDict_GetItemString(data, "type");
+  if (PyUnicode_CompareWithASCIIString(data_type, "http.response.start") == 0) {
+    PyObject *status_code = PyDict_GetItemString(data, "status");
+    PyObject *headers = PyDict_GetItemString(data, "headers");
+
+    PyObject *iterator = PyObject_GetIter(headers);
+    Py_ssize_t headers_count = 0;
+    if (PyTuple_Check(headers)) {
+      headers_count = PyTuple_Size(headers);
+    } else if (PyList_Check(headers)) {
+      headers_count = PyList_Size(headers);
+    }
+    MapKeyVal *http_headers = MapKeyVal_new(headers_count);
+
+    PyObject *key, *value, *item;
+    size_t pos = 0;
+    while ((item = PyIter_Next(iterator))) {
+      // if (!PyTuple_Check(item) || PyTuple_Size(item) != 2) {
+      //   PyErr_SetString(PyExc_RuntimeError,
+      //                   "expected response headers to be tuples with 2
+      //                   items");
+      //   PyErr_Print();
+      //   Py_DECREF(item);
+      //   Py_DECREF(iterator);
+      //   MapKeyVal_free(http_headers, pos);
+      //   goto finalize_error;
+      // }
+      key = PyTuple_GetItem(item, 0);
+      value = PyTuple_GetItem(item, 1);
+      http_headers->keys[pos] = copy_pystring(key);
+      http_headers->values[pos] = copy_pystring(value);
+      Py_DECREF(item);
+      pos++;
+    }
+    Py_DECREF(iterator);
+
+    asgi_set_headers(self->request_id, PyLong_AsLong(status_code),
+                     http_headers);
+  } else if (PyUnicode_CompareWithASCIIString(data_type,
+                                              "http.response.body") == 0) {
+    PyObject *body = PyDict_GetItemString(data, "body");
+    asgi_add_response(self->request_id, PyBytes_AsString(body));
+
+    PyObject *more_body = PyDict_GetItemString(data, "more_body");
+    if (!more_body ||
+        PyObject_RichCompareBool(more_body, Py_False, Py_EQ) == 1) {
+      asgi_send_response(self->request_id);
+    }
+  }
+  return Py_None;
 }
 
 static PyMethodDef AsgiEvent_methods[] = {
@@ -517,6 +578,8 @@ void AsgiApp_handle_request(AsgiApp *app, uint64_t request_id, MapKeyVal *scope,
   PyGILState_STATE gstate = PyGILState_Ensure();
 
   PyObject *scope_dict = PyDict_New();
+  PyDict_SetItemString(scope_dict, "asgi", asgi_version);
+
   for (int i = 0; i < scope->count; i++) {
     const char *key = scope->keys[i];
     if (strcmp(key, "raw_path") == 0 || strcmp(key, "query_string") == 0) {
@@ -649,6 +712,11 @@ void Py_init_and_release_gil(const char *setup_py) {
   build_receive = PyTuple_GetItem(asgi_setup_result, 1);
   build_send = PyTuple_GetItem(asgi_setup_result, 2);
   PyRun_SimpleString("del caddysnake_setup_asgi");
+  // Setup ASGI version
+  asgi_version = PyDict_New();
+  PyDict_SetItemString(asgi_version, "version", PyUnicode_FromString("3.0"));
+  PyDict_SetItemString(asgi_version, "spec_version",
+                       PyUnicode_FromString("2.3"));
 
   // This are global objects expected to exist during the entire program
   // lifetime. Refcounts can be safely decreased, but there's no need to do it
