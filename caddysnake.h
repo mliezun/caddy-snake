@@ -5,7 +5,7 @@
 #include <stdint.h>
 #include <stdlib.h>
 
-void Py_init_and_release_gil();
+void Py_init_and_release_gil(const char *);
 
 typedef struct {
   size_t count;

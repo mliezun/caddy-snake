@@ -5,6 +5,7 @@ package caddysnake
 // #include "caddysnake.h"
 import "C"
 import (
+	_ "embed"
 	"errors"
 	"fmt"
 	"io"
@@ -16,6 +17,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"time"
 	"unsafe"
 
 	"github.com/caddyserver/caddy/v2"
@@ -24,6 +26,9 @@ import (
 	"github.com/caddyserver/caddy/v2/modules/caddyhttp"
 	"go.uber.org/zap"
 )
+
+//go:embed caddysnake.py
+var caddysnake_py string
 
 // CaddySnake module that communicates with a Wsgi app to handle requests
 type CaddySnake struct {
@@ -132,7 +137,9 @@ var request_counter int64 = 0
 var wsgi_handlers map[int64]chan WsgiRequestHandler = map[int64]chan WsgiRequestHandler{}
 
 func init() {
-	C.Py_init_and_release_gil()
+	setup_py := C.CString(caddysnake_py)
+	defer C.free(unsafe.Pointer(setup_py))
+	C.Py_init_and_release_gil(setup_py)
 	caddy.RegisterModule(CaddySnake{})
 	httpcaddyfile.RegisterHandlerDirective("python", parsePythonDirective)
 }
@@ -365,7 +372,11 @@ func wsgi_write_response(request_id C.int64_t, status_code C.int, headers *C.HTT
 
 func CallFictionalAsgi() {
 	asgi_app := C.AsgiApp_import(C.CString("simple_asgi"), C.CString("main"), C.CString("venv/lib/python3.12/site-packages"))
-	C.AsgiApp_handle_request(asgi_app, 100, nil, nil)
+	start := time.Now()
+	for i := 0; i < 10000; i++ {
+		C.AsgiApp_handle_request(asgi_app, C.uint64_t(i+100), nil, nil)
+	}
+	fmt.Fprintln(os.Stderr, "Elapsed", time.Since(start))
 }
 
 var asgi_lock sync.RWMutex = sync.RWMutex{}
