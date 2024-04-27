@@ -30,6 +30,7 @@ AsgiApp *AsgiApp_import(const char *, const char *, const char *);
 void AsgiApp_handle_request(AsgiApp *, uint64_t, MapKeyVal *, MapKeyVal *,
                             const char *, int, const char *, int);
 void AsgiEvent_set(AsgiEvent *, const char *);
+void AsgiApp_cleanup(AsgiApp *);
 
 extern void asgi_receive_start(uint64_t, AsgiEvent *);
 extern void asgi_add_response(uint64_t, char *);

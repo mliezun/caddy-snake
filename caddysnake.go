@@ -31,12 +31,18 @@ import (
 //go:embed caddysnake.py
 var caddysnake_py string
 
+type AppServer interface {
+	Cleanup()
+	HandleRequest(w http.ResponseWriter, r *http.Request) error
+}
+
 // CaddySnake module that communicates with a Wsgi app to handle requests
 type CaddySnake struct {
-	ModuleName string `json:"module_name,omitempty"`
+	ModuleWsgi string `json:"module_wsgi,omitempty"`
+	ModuleAsgi string `json:"module_asgi,omitempty"`
 	VenvPath   string `json:"venv_path,omitempty"`
 	logger     *zap.Logger
-	wsgi       *Wsgi
+	app        AppServer
 }
 
 // UnmarshalCaddyfile implements caddyfile.Unmarshaler.
@@ -44,12 +50,16 @@ func (f *CaddySnake) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 	for d.Next() {
 		args := d.RemainingArgs()
 		if len(args) == 1 {
-			f.ModuleName = args[0]
+			f.ModuleWsgi = args[0]
 		} else if len(args) == 0 {
 			for nesting := d.Nesting(); d.NextBlock(nesting); {
 				switch d.Val() {
+				case "module_asgi":
+					if !d.Args(&f.ModuleAsgi) {
+						return d.Errf("expected exactly one argument for module_asgi")
+					}
 				case "module_wsgi":
-					if !d.Args(&f.ModuleName) {
+					if !d.Args(&f.ModuleWsgi) {
 						return d.Errf("expected exactly one argument for module_wsgi")
 					}
 				case "venv":
@@ -78,12 +88,21 @@ func (CaddySnake) CaddyModule() caddy.ModuleInfo {
 // Provision sets up the module.
 func (f *CaddySnake) Provision(ctx caddy.Context) error {
 	f.logger = ctx.Logger(f)
-	w, err := NewWsgi(f.ModuleName, f.VenvPath)
-	if err != nil {
-		return err
+	if f.ModuleWsgi != "" {
+		w, err := NewWsgi(f.ModuleWsgi, f.VenvPath)
+		if err != nil {
+			return err
+		}
+		f.logger.Info("imported wsgi app", zap.String("module_wsgi", f.ModuleWsgi), zap.String("venv_path", f.VenvPath))
+		f.app = w
+	} else if f.ModuleAsgi != "" {
+		a, err := NewAsgi(f.ModuleAsgi, f.VenvPath)
+		if err != nil {
+			return err
+		}
+		f.logger.Info("imported asgi app", zap.String("module_asgi", f.ModuleAsgi), zap.String("venv_path", f.VenvPath))
+		f.app = a
 	}
-	f.logger.Info("imported wsgi app", zap.String("module_name", f.ModuleName), zap.String("venv_path", f.VenvPath))
-	f.wsgi = w
 	return nil
 }
 
@@ -94,16 +113,16 @@ func (m *CaddySnake) Validate() error {
 
 // Cleanup frees resources uses by module
 func (m *CaddySnake) Cleanup() error {
-	if m.wsgi != nil {
-		m.logger.Info("cleaning up caddy-snake wsgi module", zap.String("module_name", m.ModuleName))
-		m.wsgi.Cleanup()
+	if m.app != nil {
+		m.logger.Info("cleaning up module")
+		m.app.Cleanup()
 	}
 	return nil
 }
 
 // ServeHTTP implements caddyhttp.MiddlewareHandler.
 func (f CaddySnake) ServeHTTP(w http.ResponseWriter, r *http.Request, next caddyhttp.Handler) error {
-	if err := f.wsgi.HandleRequest(w, r); err != nil {
+	if err := f.app.HandleRequest(w, r); err != nil {
 		return err
 	}
 	return next.ServeHTTP(w, r)
@@ -371,41 +390,49 @@ func wsgi_write_response(request_id C.int64_t, status_code C.int, headers *C.Map
 	delete(wsgi_handlers, int64(request_id))
 }
 
-func CallFictionalAsgi() {
-	asgi_app := C.AsgiApp_import(C.CString("example_fastapi"), C.CString("app"), C.CString("venv/lib/python3.12/site-packages"))
-	module := Asgi{app: asgi_app}
-	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		if err := module.HandleRequest(w, r); err != nil {
-			w.WriteHeader(500)
-			w.Write([]byte("Server Error"))
-		}
-	})
-	// Set the server to listen on port 3500
-	fmt.Println("Server is running on http://localhost:3500")
-	if err := http.ListenAndServe(":3500", nil); err != nil {
-		fmt.Println("Error starting server:", err)
-	}
-	// start := time.Now()
-	// for i := 0; i < 10000; i++ {
-	// 	C.AsgiApp_handle_request(
-	// 		asgi_app,
-	// 		C.uint64_t(i),
-	// 		C.MapKeyVal_new(0),
-	// 		C.MapKeyVal_new(0),
-	// 		C.CString("127.0.0.1"),
-	// 		C.int(8383),
-	// 		C.CString("127.0.0.1"),
-	// 		C.int(8383),
-	// 	)
-	// }
-	// fmt.Fprintln(os.Stderr, "Elapsed", time.Since(start))
-}
-
 // ASGI: Implementation
 
 // Asgi stores a reference to a Python Asgi application
 type Asgi struct {
 	app *C.AsgiApp
+}
+
+func NewAsgi(wsgi_pattern string, venv_path string) (*Asgi, error) {
+	module_app := strings.Split(wsgi_pattern, ":")
+	if len(module_app) != 2 {
+		return nil, errors.New("expected pattern $(MODULE_NAME):$(VARIABLE_NAME)")
+	}
+	module_name := C.CString(module_app[0])
+	defer C.free(unsafe.Pointer(module_name))
+	app_name := C.CString(module_app[1])
+	defer C.free(unsafe.Pointer(app_name))
+
+	var packages_path *C.char = nil
+	if venv_path != "" {
+		sitePackagesPath, err := findSitePackagesInVenv(venv_path)
+		if err != nil {
+			return nil, err
+		}
+		packages_path = C.CString(sitePackagesPath)
+		defer C.free(unsafe.Pointer(packages_path))
+	}
+
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+	app := C.AsgiApp_import(module_name, app_name, packages_path)
+	if app == nil {
+		return nil, errors.New("failed to import module")
+	}
+	return &Asgi{app}, nil
+}
+
+// Cleanup deallocates CGO resources used by Wsgi app
+func (m *Asgi) Cleanup() {
+	if m.app != nil {
+		runtime.LockOSThread()
+		defer runtime.UnlockOSThread()
+		C.AsgiApp_cleanup(m.app)
+	}
 }
 
 // AsgiRequestHandler stores pointers to the request and the response writer
@@ -526,18 +553,17 @@ func (m *Asgi) HandleRequest(w http.ResponseWriter, r *http.Request) error {
 	base_of_keys = uintptr(unsafe.Pointer(request_headers.keys))
 	base_of_values = uintptr(unsafe.Pointer(request_headers.values))
 	for k, items := range r.Header {
-		key := strings.Map(upperCaseAndUnderscore, k)
-		if key == "PROXY" {
+		if k == "Proxy" {
 			// golang cgi issue 16405
 			continue
 		}
 
 		joinStr := ", "
-		if k == "COOKIE" {
+		if k == "Cookie" {
 			joinStr = "; "
 		}
 
-		key_str := C.CString(key)
+		key_str := C.CString(k)
 		defer C.free(unsafe.Pointer(key_str))
 		value_str := C.CString(strings.Join(items, joinStr))
 		defer C.free(unsafe.Pointer(value_str))
