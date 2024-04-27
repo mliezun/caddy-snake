@@ -413,14 +413,37 @@ type AsgiRequestHandler struct {
 	w    http.ResponseWriter
 	r    *http.Request
 	done chan error
+
+	operations chan AsgiOperations
+}
+
+type AsgiOperations struct {
+	stop bool
+	op   func()
+}
+
+func (h *AsgiRequestHandler) consume() {
+	for {
+		o := <-h.operations
+		if o.op != nil {
+			o.op()
+		}
+		if o.stop {
+			break
+		}
+	}
 }
 
 func NewAsgiRequestHandler(w http.ResponseWriter, r *http.Request) *AsgiRequestHandler {
-	return &AsgiRequestHandler{
+	h := &AsgiRequestHandler{
 		w:    w,
 		r:    r,
 		done: make(chan error),
+
+		operations: make(chan AsgiOperations, 4),
 	}
+	go h.consume()
+	return h
 }
 
 var asgi_lock sync.RWMutex = sync.RWMutex{}
@@ -542,12 +565,11 @@ func (m *Asgi) HandleRequest(w http.ResponseWriter, r *http.Request) error {
 
 //export asgi_receive_start
 func asgi_receive_start(request_id C.uint64_t, event *C.AsgiEvent) {
-	//FIXME: make sure goroutines are ordered
-	go func() {
-		asgi_lock.Lock()
-		arh := asgi_handlers[uint64(request_id)]
-		asgi_lock.Unlock()
+	asgi_lock.Lock()
+	arh := asgi_handlers[uint64(request_id)]
+	asgi_lock.Unlock()
 
+	arh.operations <- AsgiOperations{stop: false, op: func() {
 		body, err := io.ReadAll(arh.r.Body)
 		if err != nil {
 			arh.done <- err
@@ -559,17 +581,16 @@ func asgi_receive_start(request_id C.uint64_t, event *C.AsgiEvent) {
 		runtime.LockOSThread()
 		C.AsgiEvent_set(event, body_str)
 		runtime.UnlockOSThread()
-	}()
+	}}
 }
 
 //export asgi_set_headers
 func asgi_set_headers(request_id C.uint64_t, status_code C.int, headers *C.MapKeyVal) {
-	//FIXME: make sure goroutines are ordered
-	go func() {
-		asgi_lock.Lock()
-		arh := asgi_handlers[uint64(request_id)]
-		asgi_lock.Unlock()
+	asgi_lock.Lock()
+	arh := asgi_handlers[uint64(request_id)]
+	asgi_lock.Unlock()
 
+	arh.operations <- AsgiOperations{stop: false, op: func() {
 		size_of_pointer := unsafe.Sizeof(headers.keys)
 		if headers != nil {
 			defer C.free(unsafe.Pointer(headers))
@@ -588,33 +609,31 @@ func asgi_set_headers(request_id C.uint64_t, status_code C.int, headers *C.MapKe
 		}
 
 		arh.w.WriteHeader(int(status_code))
-	}()
+	}}
 }
 
 //export asgi_add_response
 func asgi_add_response(request_id C.uint64_t, body *C.char) {
-	//FIXME: make sure goroutines are ordered
-	go func() {
-		asgi_lock.Lock()
-		arh := asgi_handlers[uint64(request_id)]
-		asgi_lock.Unlock()
+	asgi_lock.Lock()
+	arh := asgi_handlers[uint64(request_id)]
+	asgi_lock.Unlock()
 
+	arh.operations <- AsgiOperations{stop: false, op: func() {
 		body_bytes := []byte(C.GoString(body))
 		_, err := arh.w.Write(body_bytes)
 		if err != nil {
 			arh.done <- err
 		}
-	}()
+	}}
 }
 
 //export asgi_send_response
 func asgi_send_response(request_id C.uint64_t) {
-	//FIXME: make sure goroutines are ordered
-	go func() {
-		asgi_lock.Lock()
-		arh := asgi_handlers[uint64(request_id)]
-		asgi_lock.Unlock()
+	asgi_lock.Lock()
+	arh := asgi_handlers[uint64(request_id)]
+	asgi_lock.Unlock()
 
+	arh.operations <- AsgiOperations{stop: true, op: func() {
 		arh.done <- nil
-	}()
+	}}
 }
