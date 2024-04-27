@@ -50,7 +50,7 @@ CGO_ENABLED=1 xcaddy build --with github.com/mliezun/caddy-snake@v0.0.5
 There's a template file in the project: [builder.Dockerfile](/builder.Dockerfile). It supports build arguments to configure which Python or Go version is desired for the build.
 
 ```Dockerfile
-FROM ubuntu:latest
+FROM ubuntu:22.04
 
 ARG GO_VERSION=1.22.1
 ARG PY_VERSION=3.12

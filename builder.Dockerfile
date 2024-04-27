@@ -1,4 +1,4 @@
-FROM ubuntu:latest
+FROM ubuntu:22.04
 
 ARG GO_VERSION=1.22.1
 ARG PY_VERSION=3.12
