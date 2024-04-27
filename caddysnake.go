@@ -415,6 +415,8 @@ type AsgiRequestHandler struct {
 	done chan error
 
 	operations chan AsgiOperations
+
+	is_websocket bool
 }
 
 type AsgiOperations struct {
@@ -468,16 +470,28 @@ func (m *Asgi) HandleRequest(w http.ResponseWriter, r *http.Request) error {
 	client_host_str := C.CString(client_host)
 	defer C.free(unsafe.Pointer(client_host_str))
 
+	is_websocket := r.Header.Get("connection") == "Upgrade" && r.Header.Get("upgrade") == "websocket" && r.Method == "GET"
+
 	decodedPath, err := url.PathUnescape(r.URL.Path)
 	if err != nil {
 		return err
 	}
-	scheme := "http"
-	if r.TLS != nil {
-		scheme = "https"
+	var conn_type, scheme string
+	if is_websocket {
+		conn_type = "websocket"
+		scheme = "ws"
+		if r.TLS != nil {
+			scheme = "wss"
+		}
+	} else {
+		conn_type = "http"
+		scheme = "http"
+		if r.TLS != nil {
+			scheme = "https"
+		}
 	}
 	scope_map := map[string]string{
-		"type":         "http",
+		"type":         conn_type,
 		"http_version": fmt.Sprintf("%d.%d", r.ProtoMajor, r.ProtoMinor),
 		"method":       r.Method,
 		"scheme":       scheme,
@@ -533,6 +547,7 @@ func (m *Asgi) HandleRequest(w http.ResponseWriter, r *http.Request) error {
 	}
 
 	arh := NewAsgiRequestHandler(w, r)
+	arh.is_websocket = is_websocket
 
 	asgi_lock.Lock()
 	asgi_request_counter++
@@ -554,6 +569,7 @@ func (m *Asgi) HandleRequest(w http.ResponseWriter, r *http.Request) error {
 	runtime.UnlockOSThread()
 
 	if err := <-arh.done; err != nil {
+		arh.operations <- AsgiOperations{stop: true}
 		asgi_lock.Lock()
 		delete(asgi_handlers, request_id)
 		asgi_lock.Unlock()
@@ -591,8 +607,8 @@ func asgi_set_headers(request_id C.uint64_t, status_code C.int, headers *C.MapKe
 	asgi_lock.Unlock()
 
 	arh.operations <- AsgiOperations{stop: false, op: func() {
-		size_of_pointer := unsafe.Sizeof(headers.keys)
 		if headers != nil {
+			size_of_pointer := unsafe.Sizeof(headers.keys)
 			defer C.free(unsafe.Pointer(headers))
 			defer C.free(unsafe.Pointer(headers.keys))
 			defer C.free(unsafe.Pointer(headers.values))
