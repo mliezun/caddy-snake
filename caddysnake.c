@@ -48,6 +48,21 @@ char *copy_pystring(PyObject *pystr) {
   return result;
 }
 
+char *copy_pybytes(PyObject *pybytes) {
+  Py_ssize_t og_size = 0;
+  char *og_str;
+  if (PyBytes_AsStringAndSize(pybytes, &og_str, &og_size) < 0) {
+    return NULL;
+  }
+  size_t new_str_len = og_size + 1;
+  char *result = malloc(new_str_len * sizeof(char));
+  if (result == NULL) {
+    return NULL;
+  }
+  strcpy(result, og_str);
+  return result;
+}
+
 MapKeyVal *MapKeyVal_new(size_t count) {
   MapKeyVal *new_map = (MapKeyVal *)malloc(sizeof(MapKeyVal));
   new_map->count = count;
@@ -453,7 +468,9 @@ static void AsgiEvent_dealloc(AsgiEvent *self) {
 
 void AsgiEvent_set(AsgiEvent *self, const char *body) {
   PyGILState_STATE gstate = PyGILState_Ensure();
-  self->request_body = PyBytes_FromString(body);
+  if (body) {
+    self->request_body = PyBytes_FromString(body);
+  }
   PyObject *set_fn = PyObject_GetAttrString((PyObject *)self->event_ts, "set");
   PyObject_CallNoArgs(set_fn);
   Py_DECREF(set_fn);
@@ -522,15 +539,15 @@ static PyObject *AsgiEvent_send(AsgiEvent *self, PyObject *args) {
       // }
       key = PyTuple_GetItem(item, 0);
       value = PyTuple_GetItem(item, 1);
-      http_headers->keys[pos] = copy_pystring(key);
-      http_headers->values[pos] = copy_pystring(value);
+      http_headers->keys[pos] = copy_pybytes(key);
+      http_headers->values[pos] = copy_pybytes(value);
       Py_DECREF(item);
       pos++;
     }
     Py_DECREF(iterator);
 
-    asgi_set_headers(self->request_id, PyLong_AsLong(status_code),
-                     http_headers);
+    asgi_set_headers(self->request_id, PyLong_AsLong(status_code), http_headers,
+                     self);
   } else if (PyUnicode_CompareWithASCIIString(data_type,
                                               "http.response.body") == 0) {
     PyObject *body = PyDict_GetItemString(data, "body");
@@ -539,7 +556,7 @@ static PyObject *AsgiEvent_send(AsgiEvent *self, PyObject *args) {
     PyObject *more_body = PyDict_GetItemString(data, "more_body");
     if (!more_body ||
         PyObject_RichCompareBool(more_body, Py_False, Py_EQ) == 1) {
-      asgi_send_response(self->request_id);
+      asgi_send_response(self->request_id, self);
     }
   }
   return Py_None;

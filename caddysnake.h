@@ -33,7 +33,7 @@ void AsgiEvent_set(AsgiEvent *, const char *);
 
 extern void asgi_receive_start(uint64_t, AsgiEvent *);
 extern void asgi_add_response(uint64_t, char *);
-extern void asgi_set_headers(uint64_t, int, MapKeyVal *);
-extern void asgi_send_response(uint64_t);
+extern void asgi_set_headers(uint64_t, int, MapKeyVal *, AsgiEvent *);
+extern void asgi_send_response(uint64_t, AsgiEvent *);
 
 #endif // CADDYSNAKE_H_

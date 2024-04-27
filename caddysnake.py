@@ -32,9 +32,6 @@ def caddysnake_setup_asgi(loop):
         def set(self):
             loop.call_soon_threadsafe(super().set)
             
-        def clear(self):
-            loop.call_soon_threadsafe(super().clear)
-            
     def build_receive(asgi_event):
         async def receive():
             asgi_event.receive_start()

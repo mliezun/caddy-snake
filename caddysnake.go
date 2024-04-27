@@ -372,7 +372,7 @@ func wsgi_write_response(request_id C.int64_t, status_code C.int, headers *C.Map
 }
 
 func CallFictionalAsgi() {
-	asgi_app := C.AsgiApp_import(C.CString("simple_asgi"), C.CString("main"), C.CString("venv/lib/python3.12/site-packages"))
+	asgi_app := C.AsgiApp_import(C.CString("example_fastapi"), C.CString("app"), C.CString("venv/lib/python3.12/site-packages"))
 	module := Asgi{app: asgi_app}
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if err := module.HandleRequest(w, r); err != nil {
@@ -585,7 +585,7 @@ func asgi_receive_start(request_id C.uint64_t, event *C.AsgiEvent) {
 }
 
 //export asgi_set_headers
-func asgi_set_headers(request_id C.uint64_t, status_code C.int, headers *C.MapKeyVal) {
+func asgi_set_headers(request_id C.uint64_t, status_code C.int, headers *C.MapKeyVal, event *C.AsgiEvent) {
 	asgi_lock.Lock()
 	arh := asgi_handlers[uint64(request_id)]
 	asgi_lock.Unlock()
@@ -609,6 +609,10 @@ func asgi_set_headers(request_id C.uint64_t, status_code C.int, headers *C.MapKe
 		}
 
 		arh.w.WriteHeader(int(status_code))
+
+		runtime.LockOSThread()
+		C.AsgiEvent_set(event, nil)
+		runtime.UnlockOSThread()
 	}}
 }
 
@@ -628,12 +632,16 @@ func asgi_add_response(request_id C.uint64_t, body *C.char) {
 }
 
 //export asgi_send_response
-func asgi_send_response(request_id C.uint64_t) {
+func asgi_send_response(request_id C.uint64_t, event *C.AsgiEvent) {
 	asgi_lock.Lock()
 	arh := asgi_handlers[uint64(request_id)]
 	asgi_lock.Unlock()
 
 	arh.operations <- AsgiOperations{stop: true, op: func() {
 		arh.done <- nil
+
+		runtime.LockOSThread()
+		C.AsgiEvent_set(event, nil)
+		runtime.UnlockOSThread()
 	}}
 }
