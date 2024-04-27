@@ -580,6 +580,11 @@ func (m *Asgi) HandleRequest(w http.ResponseWriter, r *http.Request) error {
 	request_id := asgi_request_counter
 	asgi_handlers[request_id] = arh
 	asgi_lock.Unlock()
+	defer func() {
+		asgi_lock.Lock()
+		delete(asgi_handlers, request_id)
+		asgi_lock.Unlock()
+	}()
 
 	runtime.LockOSThread()
 	C.AsgiApp_handle_request(
@@ -596,9 +601,6 @@ func (m *Asgi) HandleRequest(w http.ResponseWriter, r *http.Request) error {
 
 	if err := <-arh.done; err != nil {
 		arh.operations <- AsgiOperations{stop: true}
-		asgi_lock.Lock()
-		delete(asgi_handlers, request_id)
-		asgi_lock.Unlock()
 		return err
 	}
 
