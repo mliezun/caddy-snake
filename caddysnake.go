@@ -660,8 +660,8 @@ func asgi_set_headers(request_id C.uint64_t, status_code C.int, headers *C.MapKe
 	}}
 }
 
-//export asgi_add_response
-func asgi_add_response(request_id C.uint64_t, body *C.char) {
+//export asgi_send_response
+func asgi_send_response(request_id C.uint64_t, body *C.char, more_body C.uint8_t, event *C.AsgiEvent) {
 	asgi_lock.Lock()
 	arh := asgi_handlers[uint64(request_id)]
 	asgi_lock.Unlock()
@@ -671,18 +671,9 @@ func asgi_add_response(request_id C.uint64_t, body *C.char) {
 		_, err := arh.w.Write(body_bytes)
 		if err != nil {
 			arh.done <- err
+		} else if int(more_body) == 0 {
+			arh.done <- nil
 		}
-	}}
-}
-
-//export asgi_send_response
-func asgi_send_response(request_id C.uint64_t, event *C.AsgiEvent) {
-	asgi_lock.Lock()
-	arh := asgi_handlers[uint64(request_id)]
-	asgi_lock.Unlock()
-
-	arh.operations <- AsgiOperations{stop: true, op: func() {
-		arh.done <- nil
 
 		runtime.LockOSThread()
 		C.AsgiEvent_set(event, nil)

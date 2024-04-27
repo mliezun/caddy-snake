@@ -554,14 +554,15 @@ static PyObject *AsgiEvent_send(AsgiEvent *self, PyObject *args) {
                      self);
   } else if (PyUnicode_CompareWithASCIIString(data_type,
                                               "http.response.body") == 0) {
-    PyObject *body = PyDict_GetItemString(data, "body");
-    asgi_add_response(self->request_id, PyBytes_AsString(body));
-
     PyObject *more_body = PyDict_GetItemString(data, "more_body");
+    uint8_t send_more_body = 1;
     if (!more_body ||
         PyObject_RichCompareBool(more_body, Py_False, Py_EQ) == 1) {
-      asgi_send_response(self->request_id, self);
+      send_more_body = 0;
     }
+    PyObject *body = PyDict_GetItemString(data, "body");
+    asgi_send_response(self->request_id, PyBytes_AsString(body), send_more_body,
+                       self);
   }
   return Py_None;
 }
