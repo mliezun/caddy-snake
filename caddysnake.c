@@ -446,7 +446,6 @@ struct AsgiEvent {
   uint64_t request_id;
   PyObject *event_ts;
   PyObject *request_body;
-  PyObject *scope_dict;
 };
 
 static PyObject *AsgiEvent_new(PyTypeObject *type, PyObject *args,
@@ -457,7 +456,6 @@ static PyObject *AsgiEvent_new(PyTypeObject *type, PyObject *args,
     self->request_id = 0;
     self->event_ts = NULL;
     self->request_body = NULL;
-    self->scope_dict = NULL;
   }
   return (PyObject *)self;
 }
@@ -465,7 +463,6 @@ static PyObject *AsgiEvent_new(PyTypeObject *type, PyObject *args,
 static void AsgiEvent_dealloc(AsgiEvent *self) {
   Py_XDECREF(self->event_ts);
   Py_XDECREF(self->request_body);
-  Py_XDECREF(self->scope_dict);
   Py_TYPE(self)->tp_free((PyObject *)self);
 }
 
@@ -644,7 +641,6 @@ void AsgiApp_handle_request(AsgiApp *app, uint64_t request_id, MapKeyVal *scope,
   asgi_event->app = app;
   asgi_event->request_id = request_id;
   asgi_event->event_ts = PyObject_CallNoArgs(asyncio_Event_ts);
-  asgi_event->scope_dict = scope_dict;
 
   PyObject *receive =
       PyObject_CallOneArg(build_receive, (PyObject *)asgi_event);

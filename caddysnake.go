@@ -581,6 +581,7 @@ func (m *Asgi) HandleRequest(w http.ResponseWriter, r *http.Request) error {
 	asgi_handlers[request_id] = arh
 	asgi_lock.Unlock()
 	defer func() {
+		arh.operations <- AsgiOperations{stop: true}
 		asgi_lock.Lock()
 		delete(asgi_handlers, request_id)
 		asgi_lock.Unlock()
@@ -600,7 +601,6 @@ func (m *Asgi) HandleRequest(w http.ResponseWriter, r *http.Request) error {
 	runtime.UnlockOSThread()
 
 	if err := <-arh.done; err != nil {
-		arh.operations <- AsgiOperations{stop: true}
 		return err
 	}
 
@@ -613,7 +613,7 @@ func asgi_receive_start(request_id C.uint64_t, event *C.AsgiEvent) {
 	arh := asgi_handlers[uint64(request_id)]
 	asgi_lock.Unlock()
 
-	arh.operations <- AsgiOperations{stop: false, op: func() {
+	arh.operations <- AsgiOperations{op: func() {
 		body, err := io.ReadAll(arh.r.Body)
 		if err != nil {
 			arh.done <- err
@@ -634,7 +634,7 @@ func asgi_set_headers(request_id C.uint64_t, status_code C.int, headers *C.MapKe
 	arh := asgi_handlers[uint64(request_id)]
 	asgi_lock.Unlock()
 
-	arh.operations <- AsgiOperations{stop: false, op: func() {
+	arh.operations <- AsgiOperations{op: func() {
 		if headers != nil {
 			size_of_pointer := unsafe.Sizeof(headers.keys)
 			defer C.free(unsafe.Pointer(headers))
@@ -666,7 +666,7 @@ func asgi_send_response(request_id C.uint64_t, body *C.char, more_body C.uint8_t
 	arh := asgi_handlers[uint64(request_id)]
 	asgi_lock.Unlock()
 
-	arh.operations <- AsgiOperations{stop: false, op: func() {
+	arh.operations <- AsgiOperations{op: func() {
 		body_bytes := []byte(C.GoString(body))
 		_, err := arh.w.Write(body_bytes)
 		if err != nil {
