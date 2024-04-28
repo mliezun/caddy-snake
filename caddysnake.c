@@ -445,6 +445,7 @@ struct AsgiEvent {
   PyObject_HEAD AsgiApp *app;
   uint64_t request_id;
   PyObject *event_ts;
+  PyObject *future;
   PyObject *request_body;
 };
 
@@ -455,6 +456,7 @@ static PyObject *AsgiEvent_new(PyTypeObject *type, PyObject *args,
   if (self != NULL) {
     self->request_id = 0;
     self->event_ts = NULL;
+    self->future = NULL;
     self->request_body = NULL;
   }
   return (PyObject *)self;
@@ -462,6 +464,7 @@ static PyObject *AsgiEvent_new(PyTypeObject *type, PyObject *args,
 
 static void AsgiEvent_dealloc(AsgiEvent *self) {
   Py_XDECREF(self->event_ts);
+  Py_XDECREF(self->future);
   Py_XDECREF(self->request_body);
   Py_TYPE(self)->tp_free((PyObject *)self);
 }
@@ -653,10 +656,12 @@ void AsgiApp_handle_request(AsgiApp *app, uint64_t request_id, MapKeyVal *scope,
   PyObject *coro = PyObject_Call((PyObject *)app->handler, args, NULL);
   Py_DECREF(args);
 
+  Py_INCREF(asyncio_Loop);
   args = PyTuple_New(2);
   PyTuple_SetItem(args, 0, coro);
   PyTuple_SetItem(args, 1, asyncio_Loop);
-  PyObject_Call(asyncio_run_coroutine_threadsafe, args, NULL);
+  asgi_event->future =
+      PyObject_Call(asyncio_run_coroutine_threadsafe, args, NULL);
   Py_DECREF(args);
 
   Py_DECREF(asgi_event);
