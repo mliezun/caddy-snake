@@ -493,12 +493,12 @@ static PyObject *AsgiEvent_clear(AsgiEvent *self, PyObject *args) {
       PyObject_GetAttrString((PyObject *)self->event_ts, "clear");
   PyObject_CallNoArgs(clear_fn);
   Py_DECREF(clear_fn);
-  return Py_None;
+  Py_RETURN_NONE;
 }
 
 static PyObject *AsgiEvent_receive_start(AsgiEvent *self, PyObject *args) {
   asgi_receive_start(self->request_id, self);
-  return Py_None;
+  Py_RETURN_NONE;
 }
 
 static PyObject *AsgiEvent_receive_end(AsgiEvent *self, PyObject *args) {
@@ -564,7 +564,7 @@ static PyObject *AsgiEvent_send(AsgiEvent *self, PyObject *args) {
     asgi_send_response(self->request_id, PyBytes_AsString(body), send_more_body,
                        self);
   }
-  return Py_None;
+  Py_RETURN_NONE;
 }
 
 static PyMethodDef AsgiEvent_methods[] = {
