@@ -1,8 +1,12 @@
 # Caddy Snake 🐍
 
-Caddy plugin that gives native support for Python WSGI apps.
+> [Caddy](https://github.com/caddyserver/caddy) is a powerful, enterprise-ready, open source web server with automatic HTTPS written in Go.
 
-It embeds the Python interpreter inside Caddy and serves requests directly without going through a reverse proxy or creating a new process.
+This plugin provides native support for Python apps.
+
+It embeds the Python interpreter inside Caddy and serves requests directly without going through a reverse proxy.
+
+It supports both WSGI and ASGI, which means you can run all types of frameworks like Flask, Django and FastAPI.
 
 ## Docker image
 
