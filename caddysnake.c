@@ -464,7 +464,8 @@ static PyObject *AsgiEvent_new(PyTypeObject *type, PyObject *args,
 
 static void AsgiEvent_dealloc(AsgiEvent *self) {
   Py_XDECREF(self->event_ts);
-  Py_XDECREF(self->future);
+  // Future is freed in AsgiEvent_result
+  // Py_XDECREF(self->future);
   Py_XDECREF(self->request_body);
   Py_TYPE(self)->tp_free((PyObject *)self);
 }
@@ -510,6 +511,28 @@ static PyObject *AsgiEvent_receive_end(AsgiEvent *self, PyObject *args) {
   Py_DECREF(data_type);
   Py_DECREF(self->request_body);
   return data;
+}
+
+/*
+AsgiEvent_result is called when an execution of AsgiApp finishes.
+*/
+static PyObject *AsgiEvent_result(AsgiEvent *self, PyObject *args) {
+  PyObject *future_exception =
+      PyObject_GetAttrString(self->future, "exception");
+  PyObject *exc = PyObject_CallNoArgs(future_exception);
+  if (exc != Py_None) {
+    PyErr_DisplayException(exc);
+    Py_DECREF(exc);
+    asgi_cancel_request(self->request_id);
+  }
+  Py_DECREF(future_exception);
+
+  // Freeing future here because there is a circular reference
+  // between AsgiEvent and Future.
+  Py_DECREF(self->future);
+  self->future = NULL;
+
+  Py_RETURN_NONE;
 }
 
 static PyObject *AsgiEvent_send(AsgiEvent *self, PyObject *args) {
@@ -579,6 +602,8 @@ static PyMethodDef AsgiEvent_methods[] = {
      "Return all received data."},
     {"send", (PyCFunction)AsgiEvent_send, METH_VARARGS,
      "Send data back to client."},
+    {"result", (PyCFunction)AsgiEvent_result, METH_VARARGS,
+     "Called when the Future has finished."},
     {NULL} /* Sentinel */
 };
 
@@ -662,7 +687,7 @@ void AsgiApp_handle_request(AsgiApp *app, uint64_t request_id, MapKeyVal *scope,
   PyTuple_SetItem(args, 0, scope_dict);
   PyTuple_SetItem(args, 1, receive);
   PyTuple_SetItem(args, 2, send);
-  PyObject *coro = PyObject_Call((PyObject *)app->handler, args, NULL);
+  PyObject *coro = PyObject_Call(app->handler, args, NULL);
   Py_DECREF(args);
 
   Py_INCREF(asyncio_Loop);
@@ -672,6 +697,14 @@ void AsgiApp_handle_request(AsgiApp *app, uint64_t request_id, MapKeyVal *scope,
   asgi_event->future =
       PyObject_Call(asyncio_run_coroutine_threadsafe, args, NULL);
   Py_DECREF(args);
+
+  PyObject *add_done_callback =
+      PyObject_GetAttrString(asgi_event->future, "add_done_callback");
+  PyObject *asgi_event_result =
+      PyObject_GetAttrString((PyObject *)asgi_event, "result");
+  PyObject_CallOneArg(add_done_callback, asgi_event_result);
+  Py_DECREF(add_done_callback);
+  Py_DECREF(asgi_event_result);
 
   Py_DECREF(asgi_event);
 

@@ -35,5 +35,6 @@ void AsgiApp_cleanup(AsgiApp *);
 extern void asgi_receive_start(uint64_t, AsgiEvent *);
 extern void asgi_send_response(uint64_t, char *, uint8_t, AsgiEvent *);
 extern void asgi_set_headers(uint64_t, int, MapKeyVal *, AsgiEvent *);
+extern void asgi_cancel_request(uint64_t);
 
 #endif // CADDYSNAKE_H_

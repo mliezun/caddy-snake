@@ -680,3 +680,12 @@ func asgi_send_response(request_id C.uint64_t, body *C.char, more_body C.uint8_t
 		runtime.UnlockOSThread()
 	}}
 }
+
+//export asgi_cancel_request
+func asgi_cancel_request(request_id C.uint64_t) {
+	asgi_lock.Lock()
+	arh := asgi_handlers[uint64(request_id)]
+	asgi_lock.Unlock()
+
+	arh.done <- errors.New("request cancelled")
+}
