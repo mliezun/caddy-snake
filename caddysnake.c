@@ -521,7 +521,13 @@ static PyObject *AsgiEvent_result(AsgiEvent *self, PyObject *args) {
       PyObject_GetAttrString(self->future, "exception");
   PyObject *exc = PyObject_CallNoArgs(future_exception);
   if (exc != Py_None) {
+#if PY_MINOR_VERSION >= 12
+    // PyErr_DisplayException was introduced in Python 3.12
     PyErr_DisplayException(exc);
+#else
+    PyErr_SetRaisedException(exc);
+    PyErr_Print();
+#endif
     Py_DECREF(exc);
     asgi_cancel_request(self->request_id);
   }
