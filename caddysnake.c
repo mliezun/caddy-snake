@@ -525,8 +525,7 @@ static PyObject *AsgiEvent_result(AsgiEvent *self, PyObject *args) {
     // PyErr_DisplayException was introduced in Python 3.12
     PyErr_DisplayException(exc);
 #else
-    PyErr_SetRaisedException(exc);
-    PyErr_Print();
+    PyErr_Display(NULL, exc, NULL);
 #endif
     Py_DECREF(exc);
     asgi_cancel_request(self->request_id);
