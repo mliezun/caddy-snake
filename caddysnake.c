@@ -643,7 +643,16 @@ void AsgiApp_handle_request(AsgiApp *app, uint64_t request_id, MapKeyVal *scope,
       (AsgiEvent *)PyObject_CallObject((PyObject *)&AsgiEventType, NULL);
   asgi_event->app = app;
   asgi_event->request_id = request_id;
+#if PY_MINOR_VERSION == 9
+  PyObject *noargs = PyTuple_New(0);
+  PyObject *kwargs = PyDict_New();
+  PyDict_SetItemString(kwargs, "loop", asyncio_Loop);
+  asgi_event->event_ts = PyObject_Call(asyncio_Event_ts, noargs, kwargs);
+  Py_DECREF(kwargs);
+  Py_DECREF(noargs);
+#else
   asgi_event->event_ts = PyObject_CallNoArgs(asyncio_Event_ts);
+#endif
 
   PyObject *receive =
       PyObject_CallOneArg(build_receive, (PyObject *)asgi_event);
