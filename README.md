@@ -108,7 +108,26 @@ localhost:9080 {
 }
 ```
 
-The `python` rule is an HTTP handler that expects a wsgi app as an argument.
+The `python` rule is an HTTP handler that expects a WSGI app as an argument.
+
+If you want to use an ASGI app, like FastAPI or other async frameworks you can use the following config:
+
+```Caddyfile
+{
+    http_port 9080
+    https_port 9443
+    log {
+        level error
+    }
+}
+localhost:9080 {
+    route {
+        python {
+            module_asgi "example_fastapi:app"
+        }
+    }
+}
+```
 
 ## Examples
 
