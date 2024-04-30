@@ -19,6 +19,8 @@ localhost:9080 {
 		python "simple_exception:main"
 	}
 	route /app4 {
-		python "example_fastapi:app"
+		python {
+			module_asgi "example_fastapi:app"
+		}
 	}
 }

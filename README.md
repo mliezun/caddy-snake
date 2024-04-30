@@ -1,8 +1,12 @@
 # Caddy Snake 🐍
 
-Caddy plugin that gives native support for Python WSGI apps.
+> [Caddy](https://github.com/caddyserver/caddy) is a powerful, enterprise-ready, open source web server with automatic HTTPS written in Go.
 
-It embeds the Python interpreter inside Caddy and serves requests directly without going through a reverse proxy or creating a new process.
+This plugin provides native support for Python apps.
+
+It embeds the Python interpreter inside Caddy and serves requests directly without going through a reverse proxy.
+
+It supports both WSGI and ASGI, which means you can run all types of frameworks like Flask, Django and FastAPI.
 
 ## Docker image
 
@@ -50,7 +54,7 @@ CGO_ENABLED=1 xcaddy build --with github.com/mliezun/caddy-snake@v0.0.5
 There's a template file in the project: [builder.Dockerfile](/builder.Dockerfile). It supports build arguments to configure which Python or Go version is desired for the build.
 
 ```Dockerfile
-FROM ubuntu:latest
+FROM ubuntu:22.04
 
 ARG GO_VERSION=1.22.1
 ARG PY_VERSION=3.12
@@ -104,7 +108,26 @@ localhost:9080 {
 }
 ```
 
-The `python` rule is an HTTP handler that expects a wsgi app as an argument.
+The `python` rule is an HTTP handler that expects a WSGI app as an argument.
+
+If you want to use an ASGI app, like FastAPI or other async frameworks you can use the following config:
+
+```Caddyfile
+{
+    http_port 9080
+    https_port 9443
+    log {
+        level error
+    }
+}
+localhost:9080 {
+    route {
+        python {
+            module_asgi "example_fastapi:app"
+        }
+    }
+}
+```
 
 ## Examples
 
