@@ -1,0 +1,12 @@
+localhost:9080 {
+	route /item/* {
+		python {
+			module_wsgi "main:app"
+			venv_path "./venv"
+		}
+	}
+
+	route / {
+		respond 404
+	}
+}
