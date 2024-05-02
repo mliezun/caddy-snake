@@ -466,7 +466,8 @@ static void AsgiEvent_dealloc(AsgiEvent *self) {
   Py_XDECREF(self->event_ts);
   // Future is freed in AsgiEvent_result
   // Py_XDECREF(self->future);
-  Py_XDECREF(self->request_body);
+  // Request body is freed in AsgiEvent_receive_end
+  // Py_XDECREF(self->request_body);
   Py_TYPE(self)->tp_free((PyObject *)self);
 }
 

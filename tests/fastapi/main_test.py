@@ -62,9 +62,12 @@ def make_objects(max_workers: int, count: int):
             future = executor.submit(item_lifecycle)
             future.add_done_callback(item_done)
 
-    if not failed:
-        print(f"Created and destroyed {count} objects")
-        print(f"Elapsed: {time.time()-start}s")
+    if failed:
+        print("Tests failed")
+        exit(1)
+
+    print(f"Created and destroyed {count} objects")
+    print(f"Elapsed: {time.time()-start}s")
 
 
 if __name__ == "__main__":

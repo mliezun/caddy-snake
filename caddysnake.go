@@ -610,8 +610,8 @@ func (m *Asgi) HandleRequest(w http.ResponseWriter, r *http.Request) error {
 //export asgi_receive_start
 func asgi_receive_start(request_id C.uint64_t, event *C.AsgiEvent) {
 	asgi_lock.Lock()
+	defer asgi_lock.Unlock()
 	arh := asgi_handlers[uint64(request_id)]
-	asgi_lock.Unlock()
 
 	arh.operations <- AsgiOperations{op: func() {
 		body, err := io.ReadAll(arh.r.Body)
@@ -631,8 +631,8 @@ func asgi_receive_start(request_id C.uint64_t, event *C.AsgiEvent) {
 //export asgi_set_headers
 func asgi_set_headers(request_id C.uint64_t, status_code C.int, headers *C.MapKeyVal, event *C.AsgiEvent) {
 	asgi_lock.Lock()
+	defer asgi_lock.Unlock()
 	arh := asgi_handlers[uint64(request_id)]
-	asgi_lock.Unlock()
 
 	arh.operations <- AsgiOperations{op: func() {
 		if headers != nil {
@@ -663,8 +663,8 @@ func asgi_set_headers(request_id C.uint64_t, status_code C.int, headers *C.MapKe
 //export asgi_send_response
 func asgi_send_response(request_id C.uint64_t, body *C.char, more_body C.uint8_t, event *C.AsgiEvent) {
 	asgi_lock.Lock()
+	defer asgi_lock.Unlock()
 	arh := asgi_handlers[uint64(request_id)]
-	asgi_lock.Unlock()
 
 	arh.operations <- AsgiOperations{op: func() {
 		body_bytes := []byte(C.GoString(body))
@@ -684,8 +684,10 @@ func asgi_send_response(request_id C.uint64_t, body *C.char, more_body C.uint8_t
 //export asgi_cancel_request
 func asgi_cancel_request(request_id C.uint64_t) {
 	asgi_lock.Lock()
-	arh := asgi_handlers[uint64(request_id)]
-	asgi_lock.Unlock()
-
-	arh.done <- errors.New("request cancelled")
+	defer asgi_lock.Unlock()
+	arh, ok := asgi_handlers[uint64(request_id)]
+	if ok {
+		fmt.Println(arh)
+		arh.done <- errors.New("request cancelled")
+	}
 }

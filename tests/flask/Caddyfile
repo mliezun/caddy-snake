@@ -1,8 +1,15 @@
+{
+	http_port 9080
+	https_port 9443
+	log {
+		level info
+	}
+}
 localhost:9080 {
 	route /item/* {
 		python {
 			module_wsgi "main:app"
-			venv_path "./venv"
+			venv "./venv"
 		}
 	}
 
