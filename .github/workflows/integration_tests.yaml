@@ -43,6 +43,6 @@ jobs:
       - name: Run integration tests
         working-directory: tests/${{ matrix.tool-name }}/
         run: |
-          ./caddy run --config Caddyfile &
+          ./caddy run --config Caddyfile 2>/dev/null &
           sleep 2
           python main_test.py
