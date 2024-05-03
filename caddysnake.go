@@ -687,6 +687,8 @@ func asgi_cancel_request(request_id C.uint64_t) {
 	defer asgi_lock.Unlock()
 	arh, ok := asgi_handlers[uint64(request_id)]
 	if ok {
+		fmt.Println("Stuck here?", arh)
 		arh.done <- errors.New("request cancelled")
+		fmt.Println("Not stuck")
 	}
 }
