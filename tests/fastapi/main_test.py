@@ -71,4 +71,4 @@ def make_objects(max_workers: int, count: int):
 
 
 if __name__ == "__main__":
-    make_objects(max_workers=4, count=10_000)
+    make_objects(max_workers=4, count=2_500)
