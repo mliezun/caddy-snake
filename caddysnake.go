@@ -467,7 +467,7 @@ func NewAsgiRequestHandler(w http.ResponseWriter, r *http.Request) *AsgiRequestH
 	h := &AsgiRequestHandler{
 		w:    w,
 		r:    r,
-		done: make(chan error, 1),
+		done: make(chan error, 2),
 
 		operations: make(chan AsgiOperations, 4),
 	}
