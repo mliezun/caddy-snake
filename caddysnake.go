@@ -467,7 +467,7 @@ func NewAsgiRequestHandler(w http.ResponseWriter, r *http.Request) *AsgiRequestH
 	h := &AsgiRequestHandler{
 		w:    w,
 		r:    r,
-		done: make(chan error),
+		done: make(chan error, 1),
 
 		operations: make(chan AsgiOperations, 4),
 	}
@@ -687,7 +687,6 @@ func asgi_cancel_request(request_id C.uint64_t) {
 	defer asgi_lock.Unlock()
 	arh, ok := asgi_handlers[uint64(request_id)]
 	if ok {
-		fmt.Println(arh)
 		arh.done <- errors.New("request cancelled")
 	}
 }
