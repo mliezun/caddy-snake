@@ -1,4 +1,4 @@
-// Caddy plugin that provides native support for Python WSGI apps.
+// Caddy plugin to serve Python apps.
 package caddysnake
 
 // #cgo pkg-config: python3-embed
@@ -32,12 +32,13 @@ import (
 //go:embed caddysnake.py
 var caddysnake_py string
 
+// AppServer defines the interface to interacting with a WSGI or ASGI server
 type AppServer interface {
 	Cleanup()
 	HandleRequest(w http.ResponseWriter, r *http.Request) error
 }
 
-// CaddySnake module that communicates with a Wsgi app to handle requests
+// CaddySnake module that communicates with a Python app
 type CaddySnake struct {
 	ModuleWsgi string `json:"module_wsgi,omitempty"`
 	ModuleAsgi string `json:"module_asgi,omitempty"`
@@ -146,15 +147,15 @@ func parsePythonDirective(h httpcaddyfile.Helper) (caddyhttp.MiddlewareHandler, 
 	return app, nil
 }
 
-// WsgiRequestHandler stores the result of a request handled by a Wsgi app
+// WsgiRequestHandler tracks the state of a HTTP request to a WSGI App
 type WsgiRequestHandler struct {
 	status_code C.int
 	headers     *C.MapKeyVal
 	body        *C.char
 }
 
-var lock sync.RWMutex = sync.RWMutex{}
-var request_counter int64 = 0
+var wsgi_lock sync.RWMutex = sync.RWMutex{}
+var wsgi_request_counter int64 = 0
 var wsgi_handlers map[int64]chan WsgiRequestHandler = map[int64]chan WsgiRequestHandler{}
 
 func init() {
@@ -218,6 +219,7 @@ type Wsgi struct {
 	app *C.WsgiApp
 }
 
+// NewWsgi imports a WSGI app
 func NewWsgi(wsgi_pattern string, venv_path string) (*Wsgi, error) {
 	module_app := strings.Split(wsgi_pattern, ":")
 	if len(module_app) != 2 {
@@ -355,11 +357,11 @@ func (m *Wsgi) HandleRequest(w http.ResponseWriter, r *http.Request) error {
 	defer C.free(unsafe.Pointer(body_str))
 
 	ch := make(chan WsgiRequestHandler)
-	lock.Lock()
-	request_counter++
-	request_id := request_counter
+	wsgi_lock.Lock()
+	wsgi_request_counter++
+	request_id := wsgi_request_counter
 	wsgi_handlers[request_id] = ch
-	lock.Unlock()
+	wsgi_lock.Unlock()
 
 	runtime.LockOSThread()
 	C.WsgiApp_handle_request(m.app, C.int64_t(request_id), rh, body_str)
@@ -397,8 +399,8 @@ func (m *Wsgi) HandleRequest(w http.ResponseWriter, r *http.Request) error {
 
 //export wsgi_write_response
 func wsgi_write_response(request_id C.int64_t, status_code C.int, headers *C.MapKeyVal, body *C.char) {
-	lock.Lock()
-	defer lock.Unlock()
+	wsgi_lock.Lock()
+	defer wsgi_lock.Unlock()
 	ch := wsgi_handlers[int64(request_id)]
 	ch <- WsgiRequestHandler{
 		status_code: status_code,
@@ -415,6 +417,7 @@ type Asgi struct {
 	app *C.AsgiApp
 }
 
+// NewAsgi imports a Python ASGI app
 func NewAsgi(wsgi_pattern string, venv_path string) (*Asgi, error) {
 	module_app := strings.Split(wsgi_pattern, ":")
 	if len(module_app) != 2 {
@@ -444,7 +447,7 @@ func NewAsgi(wsgi_pattern string, venv_path string) (*Asgi, error) {
 	return &Asgi{app}, nil
 }
 
-// Cleanup deallocates CGO resources used by Wsgi app
+// Cleanup deallocates CGO resources used by Asgi app
 func (m *Asgi) Cleanup() {
 	if m.app != nil {
 		runtime.LockOSThread()
@@ -464,6 +467,7 @@ type AsgiRequestHandler struct {
 	is_websocket bool
 }
 
+// AsgiOperations stores operations that should be executed in the background
 type AsgiOperations struct {
 	stop bool
 	op   func()
@@ -481,6 +485,8 @@ func (h *AsgiRequestHandler) consume() {
 	}
 }
 
+// NewAsgiRequestHandler initializes handler and starts queue that consumes operations
+// in the background.
 func NewAsgiRequestHandler(w http.ResponseWriter, r *http.Request) *AsgiRequestHandler {
 	h := &AsgiRequestHandler{
 		w:    w,
