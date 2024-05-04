@@ -4,6 +4,8 @@ import wsgiref.validate
 
 db = {}
 
+CHUNK_SIZE = 256*2**20
+
 def store_item(id: str, content: dict):
     db[id] = content
     return b"Stored"
@@ -32,7 +34,12 @@ def app(environ: dict, start_response: Callable):
             content_type = "application/json"
         elif method == "post":
             request_body = environ["wsgi.input"]
-            content = json.loads(request_body.read())
+            body_content = b""
+            data = request_body.read(CHUNK_SIZE)
+            while data:
+                body_content += data
+                data = request_body.read(CHUNK_SIZE)
+            content = json.loads(body_content)
             body = store_item(item_id, content)
         elif method == "delete":
             body = delete_item(item_id)

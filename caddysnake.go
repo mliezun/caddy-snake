@@ -11,6 +11,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/textproto"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -291,7 +292,17 @@ func (m *Wsgi) HandleRequest(w http.ResponseWriter, r *http.Request) error {
 		"CONTENT_LENGTH":  r.Header.Get("Content-length"),
 		"wsgi.url_scheme": strings.ToLower(strings.Split(r.Proto, "/")[0]),
 	}
-	rh := C.MapKeyVal_new(C.size_t(len(r.Header) + len(extra_headers)))
+	headers_length := len(r.Header)
+	if _, ok := r.Header[textproto.CanonicalMIMEHeaderKey("Proxy")]; ok {
+		headers_length -= 1
+	}
+	if _, ok := r.Header[textproto.CanonicalMIMEHeaderKey("Content-Type")]; ok {
+		headers_length -= 1
+	}
+	if _, ok := r.Header[textproto.CanonicalMIMEHeaderKey("Content-Length")]; ok {
+		headers_length -= 1
+	}
+	rh := C.MapKeyVal_new(C.size_t(headers_length + len(extra_headers)))
 	defer C.free(unsafe.Pointer(rh))
 	defer C.free(unsafe.Pointer(rh.keys))
 	defer C.free(unsafe.Pointer(rh.values))
@@ -303,6 +314,13 @@ func (m *Wsgi) HandleRequest(w http.ResponseWriter, r *http.Request) error {
 		key := strings.Map(upperCaseAndUnderscore, k)
 		if key == "PROXY" {
 			// golang cgi issue 16405
+			continue
+		}
+		// Content type and length already defined in extra_headers
+		if key == "CONTENT_TYPE" {
+			continue
+		}
+		if key == "CONTENT_LENGTH" {
 			continue
 		}
 
