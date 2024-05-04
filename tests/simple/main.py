@@ -1,5 +1,6 @@
 from typing import Callable
 import json
+import wsgiref.validate
 
 db = {}
 
@@ -16,7 +17,7 @@ def delete_item(id):
     del db[id]
     return b"Deleted"
 
-
+@wsgiref.validate.validator
 def app(environ: dict, start_response: Callable):
     """A simple WSGI application"""
     path: str = environ.get("PATH_INFO", "")

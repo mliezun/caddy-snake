@@ -1,3 +1,4 @@
+import wsgiref.validate
 from flask import Flask, request
 
 
@@ -22,3 +23,6 @@ def get_item(id: str):
 def delete_item(id):
     del db[id]
     return "Deleted"
+
+
+app = wsgiref.validate.validator(app)
