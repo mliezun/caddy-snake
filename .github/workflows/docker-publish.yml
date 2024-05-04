@@ -74,7 +74,7 @@ jobs:
           context: .
           push: ${{ github.event_name != 'pull_request' }}
           build-args: PY_VERSION=${{ matrix.python-version }}
-          tags: ${{ github.ref_name }}-py${{ matrix.python-version }},latest-py${{ matrix.python-version }}
+          tags: "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.ref_name }}-py${{ matrix.python-version }},${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest-py${{ matrix.python-version }}"
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
