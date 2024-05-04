@@ -6,7 +6,7 @@ This plugin provides native support for Python apps.
 
 It embeds the Python interpreter inside Caddy and serves requests directly without going through a reverse proxy.
 
-It supports both WSGI and ASGI, which means you can run all types of frameworks like Flask, Django and FastAPI.
+Supports both WSGI and ASGI, which means you can run all types of frameworks like Flask, Django and FastAPI.
 
 ## Quickstart
 
@@ -59,6 +59,11 @@ $ CGO_ENABLED=1 xcaddy build --with github.com/mliezun/caddy-snake
 $ ./caddy run --config Caddyfile
 ```
 
+```
+$ curl http://localhost:9080/hello-world
+Hello world!
+```
+
 #### Example usage: FastAPI
 
 `main.py`
@@ -89,6 +94,11 @@ Run:
 $ pip install fastapi
 $ CGO_ENABLED=1 xcaddy build --with github.com/mliezun/caddy-snake
 $ ./caddy run --config Caddyfile
+```
+
+```
+$ curl http://localhost:9080/hello-world
+Hello world!
 ```
 
 ## Use docker image
