@@ -13,7 +13,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        tool-name: ['flask', 'fastapi']
+        tool-name: ['flask', 'fastapi', 'simple']
         python-version: ['3.9', '3.10', '3.11', '3.12']
     env:
       GOEXPERIMENT: cgocheck2
