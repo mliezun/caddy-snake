@@ -2,6 +2,7 @@ import json
 
 db = {}
 
+
 def store_item(id: str, content: dict):
     db[id] = content
     return b"Stored"
@@ -39,8 +40,20 @@ async def app(scope, receive, send):
         else:
             status = 405
             body = b"Method Not Allowed"
-        await send({"type": "http.response.start", "status": status, "headers": [(b"Content-Type", content_type)]})
+        await send(
+            {
+                "type": "http.response.start",
+                "status": status,
+                "headers": [(b"Content-Type", content_type)],
+            }
+        )
         await send({"type": "http.response.body", "body": body})
     else:
-        await send({"type": "http.response.start", "status": 404, "headers": [(b"Content-Type", b"text/plain")]})
+        await send(
+            {
+                "type": "http.response.start",
+                "status": 404,
+                "headers": [(b"Content-Type", b"text/plain")],
+            }
+        )
         await send({"type": "http.response.body", "body": b"Not Found"})

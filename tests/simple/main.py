@@ -4,7 +4,8 @@ import wsgiref.validate
 
 db = {}
 
-CHUNK_SIZE = 256*2**20
+CHUNK_SIZE = 256 * 2**20
+
 
 def store_item(id: str, content: dict):
     db[id] = content
@@ -18,6 +19,7 @@ def get_item(id: str):
 def delete_item(id):
     del db[id]
     return b"Deleted"
+
 
 @wsgiref.validate.validator
 def app(environ: dict, start_response: Callable):
