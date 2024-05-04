@@ -8,12 +8,97 @@ It embeds the Python interpreter inside Caddy and serves requests directly witho
 
 It supports both WSGI and ASGI, which means you can run all types of frameworks like Flask, Django and FastAPI.
 
-## Docker image
+## Quickstart
 
-There's a docker image available, it ships Python 3.12 and can be used as follows:
+#### Requirements
+
+- Python >= 3.9 + dev files
+- C compiler and build tools
+- Go >= 1.21 and [Xcaddy](https://github.com/caddyserver/xcaddy)
+
+Install requirements on Ubuntu 24.04:
+
+```
+$ sudo apt-get install python3-dev build-essential pkg-config golang
+$ go install github.com/caddyserver/xcaddy/cmd/xcaddy@latest
+```
+
+You can also [build with Docker](#build-with-docker-or-podman).
+
+#### Example usage: Flask
+
+`main.py`
+
+```python
+from flask import Flask
+
+app = Flask(__name__)
+
+@app.route("/hello-world")
+def hello():
+    return "Hello world!"
+```
+
+`Caddyfile`
+
+```Caddyfile
+localhost:9080 {
+    route {
+        python {
+            module_wsgi "main:app"
+        }
+    }
+}
+```
+
+Run:
+
+```
+$ pip install Flask
+$ CGO_ENABLED=1 xcaddy build --with github.com/mliezun/caddy-snake
+$ ./caddy run --config Caddyfile
+```
+
+#### Example usage: FastAPI
+
+`main.py`
+
+```python
+from fastapi import FastAPI
+
+@app.get("/hello-world")
+def hello():
+    return "Hello world!"
+```
+
+`Caddyfile`
+
+```Caddyfile
+localhost:9080 {
+    route {
+        python {
+            module_asgi "main:app"
+        }
+    }
+}
+```
+
+Run:
+
+```
+$ pip install fastapi
+$ CGO_ENABLED=1 xcaddy build --with github.com/mliezun/caddy-snake
+$ ./caddy run --config Caddyfile
+```
+
+## Use docker image
+
+There are docker images available with the following Python versions: `3.9`, `3.10`, `3.11`, `3.12`
+
+Example usage:
 
 ```Dockerfile
-FROM ghcr.io/mliezun/caddy-snake:main
+FROM ghcr.io/mliezun/caddy-snake:latest-py3.12
 
 WORKDIR /app
 
@@ -24,62 +109,11 @@ COPY . /app
 CMD ["caddy", "run", "--config", "/app/Caddyfile"]
 ```
 
-## Build from source
-
-Go 1.21 and Python 3.9 or later is required, with development files to embed the interpreter.
-
-To install in Ubuntu do:
-
-```bash
-sudo apt-get update
-sudo apt-get install -y python3-dev
-```
-
-To install in macOS do:
-
-```bash
-brew install python@3
-```
-
-### Bundling with Caddy
-
-Build this module using [xcaddy](https://github.com/caddyserver/xcaddy):
-
-```bash
-CGO_ENABLED=1 xcaddy build --with github.com/mliezun/caddy-snake@v0.0.5
-```
-
-### Build with Docker (or Podman)
+### Build with Docker
 
 There's a template file in the project: [builder.Dockerfile](/builder.Dockerfile). It supports build arguments to configure which Python or Go version is desired for the build.
 
-```Dockerfile
-FROM ubuntu:22.04
-
-ARG GO_VERSION=1.22.1
-ARG PY_VERSION=3.12
-
-RUN export DEBIAN_FRONTEND=noninteractive &&\
-    apt-get update -yyqq &&\
-    apt-get install -yyqq wget tar software-properties-common gcc pkgconf &&\
-    add-apt-repository -y ppa:deadsnakes/ppa &&\
-    apt-get update -yyqq &&\
-    apt-get install -yyqq python${PY_VERSION}-dev &&\
-    mv /usr/lib/x86_64-linux-gnu/pkgconfig/python-${PY_VERSION}-embed.pc /usr/lib/x86_64-linux-gnu/pkgconfig/python3-embed.pc &&\
-    rm -rf /var/lib/apt/lists/* &&\
-    wget https://dl.google.com/go/go${GO_VERSION}.linux-amd64.tar.gz && \
-    tar -C /usr/local -xzf go*.linux-amd64.tar.gz && \
-    rm go*.linux-amd64.tar.gz
-
-ENV PATH=$PATH:/usr/local/go/bin
-
-RUN go install github.com/caddyserver/xcaddy/cmd/xcaddy@latest &&\
-    cd /usr/local/bin &&\
-    CGO_ENABLED=1 /root/go/bin/xcaddy build --with github.com/mliezun/caddy-snake &&\
-    rm -rf /build
-
-CMD ["cp", "/usr/local/bin/caddy", "/output/caddy"]
-```
+Make sure to use the same Python version as you have installed in your system.
 
 You can copy the contents of the builder Dockerfile and execute the following commands to get your Caddy binary: 
 
@@ -91,60 +125,14 @@ docker build -f builder.Dockerfile --build-arg PY_VERSION=3.9 -t caddy-snake .
 docker run --rm -v $(pwd):/output caddy-snake
 ```
 
-## Example Caddyfile
-
-```Caddyfile
-{
-    http_port 9080
-    https_port 9443
-    log {
-        level error
-    }
-}
-localhost:9080 {
-    route {
-        python "simple_app:main"
-    }
-}
-```
-
-The `python` rule is an HTTP handler that expects a WSGI app as an argument.
-
-If you want to use an ASGI app, like FastAPI or other async frameworks you can use the following config:
-
-```Caddyfile
-{
-    http_port 9080
-    https_port 9443
-    log {
-        level error
-    }
-}
-localhost:9080 {
-    route {
-        python {
-            module_asgi "example_fastapi:app"
-        }
-    }
-}
-```
-
-## Examples
-
-- [simple_app](/examples/simple_app.py). WSGI App that returns the standard hello world message and a UUID.
-- [simple_exception](/examples/simple_exception.py). WSGI App that always raises an exception.
-- [example_flask](/examples/example_flask.py). Flask application that also returns hello world message and a UUID.
-- [example_fastapi](/examples/example_fastapi.py). FastAPI application that also returns hello world message and a UUID.
-- [Caddyfile](/examples/Caddyfile). Caddy config that uses all of the example apps.
-
 **NOTE**
 
 It's also possible to provide virtual environments with the following syntax:
 
 ```Caddyfile
 python {
-    module_wsgi "simple_app:main"
-    venv_path "./venv"
+    module_wsgi "main:app"
+    venv "./venv"
 }
 ```
 
@@ -163,6 +151,7 @@ What it does behind the scenes is to append `venv/lib/python3.x/site-packages` t
 - [Apache mod_wsgi](https://github.com/GrahamDumpleton/mod_wsgi)
 - [FrankenPHP](https://github.com/dunglas/frankenphp)
 - [WSGI Standard PEP 3333](https://peps.python.org/pep-3333/)
+- [ASGI Spec](https://asgi.readthedocs.io/en/latest/index.html)
 
 ## LICENSE
 
