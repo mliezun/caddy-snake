@@ -23,7 +23,7 @@ $ sudo apt-get install python3-dev build-essential pkg-config golang
 $ go install github.com/caddyserver/xcaddy/cmd/xcaddy@latest
 ```
 
-You can also [build with Docker](#build-with-docker-or-podman).
+You can also [build with Docker](#build-with-docker).
 
 #### Example usage: Flask
 
@@ -42,7 +42,7 @@ def hello():
 `Caddyfile`
 
 ```Caddyfile
-localhost:9080 {
+http://localhost:9080 {
     route {
         python {
             module_wsgi "main:app"
@@ -79,7 +79,7 @@ def hello():
 `Caddyfile`
 
 ```Caddyfile
-localhost:9080 {
+http://localhost:9080 {
     route {
         python {
             module_asgi "main:app"
