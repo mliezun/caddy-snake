@@ -64,6 +64,8 @@ $ curl http://localhost:9080/hello-world
 Hello world!
 ```
 
+See how to setup [Hot Reloading](#hot-reloading)
+
 #### Example usage: FastAPI
 
 `main.py`
@@ -100,6 +102,8 @@ $ ./caddy run --config Caddyfile
 $ curl http://localhost:9080/hello-world
 Hello world!
 ```
+
+See how to setup [Hot Reloading](#hot-reloading)
 
 ## Use docker image
 
@@ -150,6 +154,15 @@ What it does behind the scenes is to append `venv/lib/python3.x/site-packages` t
 
 > Disclaimer: Currently, when you provide a venv it gets added to the global `sys.path`, which in consequence
 > means all apps have access to those packages.
+
+## Hot reloading
+
+Currently the Python app is not reloaded by the plugin if a file changes. But it is possible to setup using [watchmedo](https://github.com/gorakhargosh/watchdog?tab=readme-ov-file#shell-utilities) to restart the Caddy process.
+
+```bash
+watchmedo auto-restart -d . -p "*.py" --recursive \
+    -- caddy run --config Caddyfile
+```
 
 ## Dev resources
 
