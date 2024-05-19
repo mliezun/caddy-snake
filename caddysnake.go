@@ -1,7 +1,7 @@
 // Caddy plugin to serve Python apps.
 package caddysnake
 
-// #cgo pkg-config: python-3.9-embed
+// #cgo pkg-config: python3-embed
 // #include "caddysnake.h"
 import "C"
 import (
