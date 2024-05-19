@@ -42,6 +42,7 @@ type AppServer interface {
 type CaddySnake struct {
 	ModuleWsgi string `json:"module_wsgi,omitempty"`
 	ModuleAsgi string `json:"module_asgi,omitempty"`
+	Lifespan   string `json:"lifespan,omitempty"`
 	VenvPath   string `json:"venv_path,omitempty"`
 	logger     *zap.Logger
 	app        AppServer
@@ -63,6 +64,10 @@ func (f *CaddySnake) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 				case "module_wsgi":
 					if !d.Args(&f.ModuleWsgi) {
 						return d.Errf("expected exactly one argument for module_wsgi")
+					}
+				case "lifespan":
+					if !d.Args(&f.Lifespan) || (f.Lifespan != "on" && f.Lifespan != "off") {
+						return d.Errf("expected exactly one argument for lifespan: on|off")
 					}
 				case "venv":
 					if !d.Args(&f.VenvPath) {
@@ -95,11 +100,14 @@ func (f *CaddySnake) Provision(ctx caddy.Context) error {
 		if err != nil {
 			return err
 		}
+		if f.Lifespan != "" {
+			f.logger.Warn("lifespan is only used in ASGI mode", zap.String("lifespan", f.Lifespan))
+		}
 		f.logger.Info("imported wsgi app", zap.String("module_wsgi", f.ModuleWsgi), zap.String("venv_path", f.VenvPath))
 		f.app = w
 	} else if f.ModuleAsgi != "" {
 		var err error
-		f.app, err = NewAsgi(f.ModuleAsgi, f.VenvPath)
+		f.app, err = NewAsgi(f.ModuleAsgi, f.VenvPath, f.Lifespan == "on")
 		if err != nil {
 			return err
 		}
@@ -418,7 +426,7 @@ type Asgi struct {
 }
 
 // NewAsgi imports a Python ASGI app
-func NewAsgi(wsgi_pattern string, venv_path string) (*Asgi, error) {
+func NewAsgi(wsgi_pattern string, venv_path string, lifespan bool) (*Asgi, error) {
 	module_app := strings.Split(wsgi_pattern, ":")
 	if len(module_app) != 2 {
 		return nil, errors.New("expected pattern $(MODULE_NAME):$(VARIABLE_NAME)")
@@ -446,9 +454,12 @@ func NewAsgi(wsgi_pattern string, venv_path string) (*Asgi, error) {
 	}
 
 	var err error
-	ok := C.AsgiApp_lifespan_startup(app)
-	if uint8(ok) == 0 {
-		err = errors.New("startup failed")
+
+	if lifespan {
+		ok := C.AsgiApp_lifespan_startup(app)
+		if uint8(ok) == 0 {
+			err = errors.New("startup failed")
+		}
 	}
 
 	return &Asgi{app}, err
