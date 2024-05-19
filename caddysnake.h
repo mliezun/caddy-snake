@@ -27,6 +27,8 @@ extern void wsgi_write_response(int64_t, int, MapKeyVal *, char *);
 typedef struct AsgiApp AsgiApp;
 typedef struct AsgiEvent AsgiEvent;
 AsgiApp *AsgiApp_import(const char *, const char *, const char *);
+uint8_t AsgiApp_lifespan_startup(AsgiApp *);
+uint8_t AsgiApp_lifespan_shutdown(AsgiApp *);
 void AsgiApp_handle_request(AsgiApp *, uint64_t, MapKeyVal *, MapKeyVal *,
                             const char *, int, const char *, int);
 void AsgiEvent_set(AsgiEvent *, const char *);

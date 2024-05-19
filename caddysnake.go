@@ -1,7 +1,7 @@
 // Caddy plugin to serve Python apps.
 package caddysnake
 
-// #cgo pkg-config: python3-embed
+// #cgo pkg-config: python-3.9-embed
 // #include "caddysnake.h"
 import "C"
 import (
@@ -34,7 +34,7 @@ var caddysnake_py string
 
 // AppServer defines the interface to interacting with a WSGI or ASGI server
 type AppServer interface {
-	Cleanup()
+	Cleanup() error
 	HandleRequest(w http.ResponseWriter, r *http.Request) error
 }
 
@@ -98,12 +98,11 @@ func (f *CaddySnake) Provision(ctx caddy.Context) error {
 		f.logger.Info("imported wsgi app", zap.String("module_wsgi", f.ModuleWsgi), zap.String("venv_path", f.VenvPath))
 		f.app = w
 	} else if f.ModuleAsgi != "" {
-		a, err := NewAsgi(f.ModuleAsgi, f.VenvPath)
+		var err error
+		f.app, err = NewAsgi(f.ModuleAsgi, f.VenvPath)
 		if err != nil {
 			return err
 		}
-		f.logger.Info("imported asgi app", zap.String("module_asgi", f.ModuleAsgi), zap.String("venv_path", f.VenvPath))
-		f.app = a
 	}
 	return nil
 }
@@ -117,7 +116,7 @@ func (m *CaddySnake) Validate() error {
 func (m *CaddySnake) Cleanup() error {
 	if m.app != nil {
 		m.logger.Info("cleaning up module")
-		m.app.Cleanup()
+		return m.app.Cleanup()
 	}
 	return nil
 }
@@ -250,12 +249,13 @@ func NewWsgi(wsgi_pattern string, venv_path string) (*Wsgi, error) {
 }
 
 // Cleanup deallocates CGO resources used by Wsgi app
-func (m *Wsgi) Cleanup() {
+func (m *Wsgi) Cleanup() error {
 	if m.app != nil {
 		runtime.LockOSThread()
 		defer runtime.UnlockOSThread()
 		C.WsgiApp_cleanup(m.app)
 	}
+	return nil
 }
 
 // from golang cgi
@@ -444,16 +444,30 @@ func NewAsgi(wsgi_pattern string, venv_path string) (*Asgi, error) {
 	if app == nil {
 		return nil, errors.New("failed to import module")
 	}
-	return &Asgi{app}, nil
+
+	var err error
+	ok := C.AsgiApp_lifespan_startup(app)
+	if uint8(ok) == 0 {
+		err = errors.New("startup failed")
+	}
+
+	return &Asgi{app}, err
 }
 
 // Cleanup deallocates CGO resources used by Asgi app
-func (m *Asgi) Cleanup() {
+func (m *Asgi) Cleanup() (err error) {
 	if m.app != nil {
 		runtime.LockOSThread()
 		defer runtime.UnlockOSThread()
+
+		ok := C.AsgiApp_lifespan_shutdown(m.app)
+		if uint8(ok) == 0 {
+			err = errors.New("shutdown failure")
+		}
+
 		C.AsgiApp_cleanup(m.app)
 	}
+	return
 }
 
 // AsgiRequestHandler stores pointers to the request and the response writer

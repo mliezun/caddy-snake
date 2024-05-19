@@ -24,6 +24,7 @@ static PyObject *asyncio_Loop;
 static PyObject *asyncio_run_coroutine_threadsafe;
 static PyObject *build_receive;
 static PyObject *build_send;
+static PyObject *build_lifespan;
 
 char *concatenate_strings(const char *str1, const char *str2) {
   size_t new_str_len = strlen(str1) + strlen(str2) + 1;
@@ -418,6 +419,9 @@ static struct PyModuleDef CaddysnakeModule = {
 // ASGI 3.0 protocol implementation
 struct AsgiApp {
   PyObject *handler;
+  PyObject *state;
+
+  PyObject *lifespan_shutdown;
 };
 
 AsgiApp *AsgiApp_import(const char *module_name, const char *app_name,
@@ -426,6 +430,7 @@ AsgiApp *AsgiApp_import(const char *module_name, const char *app_name,
   if (app == NULL) {
     return NULL;
   }
+  app->lifespan_shutdown = NULL;
   PyGILState_STATE gstate = PyGILState_Ensure();
 
   // Add venv_path into sys.path list
@@ -449,9 +454,49 @@ AsgiApp *AsgiApp_import(const char *module_name, const char *app_name,
     PyGILState_Release(gstate);
     return NULL;
   }
+  app->state = PyDict_New();
 
   PyGILState_Release(gstate);
   return app;
+}
+
+uint8_t AsgiApp_lifespan_startup(AsgiApp *app) {
+  PyGILState_STATE gstate = PyGILState_Ensure();
+
+  PyObject *args = PyTuple_New(2);
+  PyTuple_SetItem(args, 0, app->handler);
+  PyTuple_SetItem(args, 1, app->state);
+  PyObject *result = PyObject_Call(build_lifespan, args, NULL);
+  Py_DECREF(args);
+
+  PyObject *lifespan_startup = PyTuple_GetItem(result, 0);
+  app->lifespan_shutdown = PyTuple_GetItem(result, 1);
+
+  result = PyObject_CallNoArgs(lifespan_startup);
+
+  uint8_t ok = result == Py_True;
+
+  Py_DECREF(lifespan_startup);
+
+  PyGILState_Release(gstate);
+
+  return ok;
+}
+
+uint8_t AsgiApp_lifespan_shutdown(AsgiApp *app) {
+  if (app->lifespan_shutdown == NULL) {
+    return 1;
+  }
+
+  PyGILState_STATE gstate = PyGILState_Ensure();
+
+  PyObject *result = PyObject_CallNoArgs(app->lifespan_shutdown);
+
+  uint8_t ok = result == Py_True;
+
+  PyGILState_Release(gstate);
+
+  return ok;
 }
 
 struct AsgiEvent {
@@ -683,6 +728,10 @@ void AsgiApp_handle_request(AsgiApp *app, uint64_t request_id, MapKeyVal *scope,
   PyDict_SetItemString(scope_dict, "server", server_tuple);
   Py_DECREF(server_tuple);
 
+  PyObject *state = PyDict_Copy(app->state);
+  PyDict_SetItemString(scope_dict, "state", state);
+  Py_DECREF(state);
+
   AsgiEvent *asgi_event =
       (AsgiEvent *)PyObject_CallObject((PyObject *)&AsgiEventType, NULL);
   asgi_event->app = app;
@@ -733,6 +782,8 @@ void AsgiApp_handle_request(AsgiApp *app, uint64_t request_id, MapKeyVal *scope,
 void AsgiApp_cleanup(AsgiApp *app) {
   PyGILState_STATE gstate = PyGILState_Ensure();
   Py_XDECREF(app->handler);
+  Py_XDECREF(app->state);
+  Py_XDECREF(app->lifespan_shutdown);
   PyGILState_Release(gstate);
   free(app);
 }
@@ -805,6 +856,7 @@ void Py_init_and_release_gil(const char *setup_py) {
   asyncio_Event_ts = PyTuple_GetItem(asgi_setup_result, 0);
   build_receive = PyTuple_GetItem(asgi_setup_result, 1);
   build_send = PyTuple_GetItem(asgi_setup_result, 2);
+  build_lifespan = PyTuple_GetItem(asgi_setup_result, 3);
   PyRun_SimpleString("del caddysnake_setup_asgi");
   // Setup ASGI version
   asgi_version = PyDict_New();
