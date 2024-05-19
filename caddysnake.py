@@ -46,11 +46,11 @@ def caddysnake_setup_asgi(loop):
             asgi_event.clear()
 
         return send
-    
+
     def build_lifespan(app, state):
         import sys
         import warnings
-        
+
         scope = {
             "type": "lifespan",
             "asgi": {
@@ -59,20 +59,20 @@ def caddysnake_setup_asgi(loop):
             },
             "state": state,
         }
-        
+
         startup_ok = asyncio.Future(loop=loop)
         shutdown_ok = asyncio.Future(loop=loop)
-        
+
         async def send(data):
             if data.get("message") and data["type"].endswith("failed"):
                 print(data["message"], file=sys.stderr)
-            
+
             ok = data["type"].endswith(".complete")
             if "startup" in data["type"]:
                 startup_ok.set_result(ok)
             if "shutdown" in data["type"]:
                 shutdown_ok.set_result(ok)
-            
+
         if sys.version_info[1] < 10:
             # Ignore loop arg deprecation warning
             with warnings.catch_warnings():
@@ -81,22 +81,28 @@ def caddysnake_setup_asgi(loop):
         else:
             # Loop is not needed on Python 3.10 and onwards
             receive_queue = asyncio.Queue()
+
         async def receive():
             return await receive_queue.get()
-        
+
         def wrap_future(future):
             async def wrapper():
                 return await future
+
             return wrapper()
-        
+
         def lifespan_startup():
-            loop.call_soon_threadsafe(receive_queue.put_nowait, {"type": "lifespan.startup"})
+            loop.call_soon_threadsafe(
+                receive_queue.put_nowait, {"type": "lifespan.startup"}
+            )
             coro = wrap_future(startup_ok)
             fut = asyncio.run_coroutine_threadsafe(coro, loop=loop)
             return fut.result()
 
         def lifespan_shutdown():
-            loop.call_soon_threadsafe(receive_queue.put_nowait, {"type": "lifespan.shutdown"})
+            loop.call_soon_threadsafe(
+                receive_queue.put_nowait, {"type": "lifespan.shutdown"}
+            )
             coro = wrap_future(shutdown_ok)
             fut = asyncio.run_coroutine_threadsafe(coro, loop=loop)
             return fut.result()
@@ -107,7 +113,7 @@ def caddysnake_setup_asgi(loop):
             fut.result()
 
         Thread(target=run_lifespan).start()
-        
+
         return lifespan_startup, lifespan_shutdown
 
     Thread(target=loop.run_forever).start()
