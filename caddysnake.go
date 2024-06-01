@@ -612,7 +612,7 @@ func (m *Asgi) HandleRequest(w http.ResponseWriter, r *http.Request) error {
 			joinStr = "; "
 		}
 
-		key_str := C.CString(k)
+		key_str := C.CString(strings.ToLower(k))
 		defer C.free(unsafe.Pointer(key_str))
 		value_str := C.CString(strings.Join(items, joinStr))
 		defer C.free(unsafe.Pointer(value_str))
