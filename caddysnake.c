@@ -474,13 +474,13 @@ uint8_t AsgiApp_lifespan_startup(AsgiApp *app) {
 
   result = PyObject_CallNoArgs(lifespan_startup);
 
-  uint8_t ok = result == Py_True;
+  uint8_t status = result == Py_True;
 
   Py_DECREF(lifespan_startup);
 
   PyGILState_Release(gstate);
 
-  return ok;
+  return status;
 }
 
 uint8_t AsgiApp_lifespan_shutdown(AsgiApp *app) {
@@ -492,11 +492,11 @@ uint8_t AsgiApp_lifespan_shutdown(AsgiApp *app) {
 
   PyObject *result = PyObject_CallNoArgs(app->lifespan_shutdown);
 
-  uint8_t ok = result == Py_True;
+  uint8_t status = result == Py_True;
 
   PyGILState_Release(gstate);
 
-  return ok;
+  return status;
 }
 
 struct AsgiEvent {
