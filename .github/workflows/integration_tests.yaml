@@ -45,4 +45,5 @@ jobs:
         run: |
           ./caddy run --config Caddyfile > caddy.log 2>&1 &
           sleep 2
+          source venv/bin/activate
           python main_test.py
