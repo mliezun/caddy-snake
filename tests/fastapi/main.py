@@ -1,9 +1,19 @@
 from typing import Optional
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from pydantic import BaseModel
 
-app = FastAPI()
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    print("Lifespan startup")
+
+    yield
+
+    print("Lifespan shutdown")
+
+app = FastAPI(lifespan=lifespan)
 
 db = {}
 
