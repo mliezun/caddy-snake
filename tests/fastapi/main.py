@@ -12,6 +12,7 @@ async def lifespan(app: FastAPI):
     yield
     print("Lifespan shutdown", file=sys.stderr)
 
+
 app = FastAPI(lifespan=lifespan)
 
 db = {}
