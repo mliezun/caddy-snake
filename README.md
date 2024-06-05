@@ -103,6 +103,8 @@ $ curl http://localhost:9080/hello-world
 Hello world!
 ```
 
+> NOTE: It's possible to enable/disable [lifespan events](https://fastapi.tiangolo.com/advanced/events/) by adding the `lifespan on|off` directive to your Caddy configuration. In the above case the lifespan events are disabled because the directive was omitted.
+
 See how to setup [Hot Reloading](#hot-reloading)
 
 ## Use docker image

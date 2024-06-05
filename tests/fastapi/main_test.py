@@ -3,6 +3,7 @@ import base64
 import uuid
 import time
 from concurrent.futures import ThreadPoolExecutor
+import psutil
 import requests
 
 item_count = 0
@@ -70,5 +71,35 @@ def make_objects(max_workers: int, count: int):
     print(f"Elapsed: {time.time()-start}s")
 
 
+def find_and_terminate_process(process_name):
+    for proc in psutil.process_iter(["pid", "name"]):
+        try:
+            if process_name in proc.info["name"]:
+                pid = proc.info["pid"]
+                p = psutil.Process(pid)
+                p.terminate()
+                print(f"Process {process_name} with PID {pid} terminated.")
+        except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+            pass
+
+
+def check_lifespan_events_on_logs(logs: str):
+    events_count = {
+        "Lifespan startup": 0,
+        "Lifespan shutdown": 0,
+    }
+    with open(logs, "r") as fd:
+        for line in fd:
+            event = line.strip()
+            if event in events_count:
+                events_count[event] += 1
+    for event, count in events_count.items():
+        assert (
+            count == 1
+        ), f"Expected '{event}' to only be seen once, but seen {count} times"
+
+
 if __name__ == "__main__":
     make_objects(max_workers=4, count=2_500)
+    find_and_terminate_process("caddy")
+    check_lifespan_events_on_logs("caddy.log")

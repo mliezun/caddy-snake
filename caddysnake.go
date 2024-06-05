@@ -34,7 +34,7 @@ var caddysnake_py string
 
 // AppServer defines the interface to interacting with a WSGI or ASGI server
 type AppServer interface {
-	Cleanup()
+	Cleanup() error
 	HandleRequest(w http.ResponseWriter, r *http.Request) error
 }
 
@@ -42,6 +42,7 @@ type AppServer interface {
 type CaddySnake struct {
 	ModuleWsgi string `json:"module_wsgi,omitempty"`
 	ModuleAsgi string `json:"module_asgi,omitempty"`
+	Lifespan   string `json:"lifespan,omitempty"`
 	VenvPath   string `json:"venv_path,omitempty"`
 	logger     *zap.Logger
 	app        AppServer
@@ -63,6 +64,10 @@ func (f *CaddySnake) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 				case "module_wsgi":
 					if !d.Args(&f.ModuleWsgi) {
 						return d.Errf("expected exactly one argument for module_wsgi")
+					}
+				case "lifespan":
+					if !d.Args(&f.Lifespan) || (f.Lifespan != "on" && f.Lifespan != "off") {
+						return d.Errf("expected exactly one argument for lifespan: on|off")
 					}
 				case "venv":
 					if !d.Args(&f.VenvPath) {
@@ -95,15 +100,17 @@ func (f *CaddySnake) Provision(ctx caddy.Context) error {
 		if err != nil {
 			return err
 		}
+		if f.Lifespan != "" {
+			f.logger.Warn("lifespan is only used in ASGI mode", zap.String("lifespan", f.Lifespan))
+		}
 		f.logger.Info("imported wsgi app", zap.String("module_wsgi", f.ModuleWsgi), zap.String("venv_path", f.VenvPath))
 		f.app = w
 	} else if f.ModuleAsgi != "" {
-		a, err := NewAsgi(f.ModuleAsgi, f.VenvPath)
+		var err error
+		f.app, err = NewAsgi(f.ModuleAsgi, f.VenvPath, f.Lifespan == "on")
 		if err != nil {
 			return err
 		}
-		f.logger.Info("imported asgi app", zap.String("module_asgi", f.ModuleAsgi), zap.String("venv_path", f.VenvPath))
-		f.app = a
 	}
 	return nil
 }
@@ -117,7 +124,7 @@ func (m *CaddySnake) Validate() error {
 func (m *CaddySnake) Cleanup() error {
 	if m.app != nil {
 		m.logger.Info("cleaning up module")
-		m.app.Cleanup()
+		return m.app.Cleanup()
 	}
 	return nil
 }
@@ -216,11 +223,21 @@ func findPythonDirectory(libPath string) (string, error) {
 
 // Wsgi stores a reference to a Python Wsgi application
 type Wsgi struct {
-	app *C.WsgiApp
+	app          *C.WsgiApp
+	wsgi_pattern string
 }
+
+var wsgiapp_cache map[string]*Wsgi = map[string]*Wsgi{}
 
 // NewWsgi imports a WSGI app
 func NewWsgi(wsgi_pattern string, venv_path string) (*Wsgi, error) {
+	wsgi_lock.Lock()
+	defer wsgi_lock.Unlock()
+
+	if app, ok := wsgiapp_cache[wsgi_pattern]; ok {
+		return app, nil
+	}
+
 	module_app := strings.Split(wsgi_pattern, ":")
 	if len(module_app) != 2 {
 		return nil, errors.New("expected pattern $(MODULE_NAME):$(VARIABLE_NAME)")
@@ -246,16 +263,28 @@ func NewWsgi(wsgi_pattern string, venv_path string) (*Wsgi, error) {
 	if app == nil {
 		return nil, errors.New("failed to import module")
 	}
-	return &Wsgi{app}, nil
+
+	result := &Wsgi{app, wsgi_pattern}
+	wsgiapp_cache[wsgi_pattern] = result
+	return result, nil
 }
 
 // Cleanup deallocates CGO resources used by Wsgi app
-func (m *Wsgi) Cleanup() {
+func (m *Wsgi) Cleanup() error {
 	if m.app != nil {
+		wsgi_lock.Lock()
+		if _, ok := wsgiapp_cache[m.wsgi_pattern]; !ok {
+			wsgi_lock.Unlock()
+			return nil
+		}
+		delete(wsgiapp_cache, m.wsgi_pattern)
+		wsgi_lock.Unlock()
+
 		runtime.LockOSThread()
 		defer runtime.UnlockOSThread()
 		C.WsgiApp_cleanup(m.app)
 	}
+	return nil
 }
 
 // from golang cgi
@@ -414,12 +443,22 @@ func wsgi_write_response(request_id C.int64_t, status_code C.int, headers *C.Map
 
 // Asgi stores a reference to a Python Asgi application
 type Asgi struct {
-	app *C.AsgiApp
+	app          *C.AsgiApp
+	asgi_pattern string
 }
 
+var asgiapp_cache map[string]*Asgi = map[string]*Asgi{}
+
 // NewAsgi imports a Python ASGI app
-func NewAsgi(wsgi_pattern string, venv_path string) (*Asgi, error) {
-	module_app := strings.Split(wsgi_pattern, ":")
+func NewAsgi(asgi_pattern string, venv_path string, lifespan bool) (*Asgi, error) {
+	asgi_lock.Lock()
+	defer asgi_lock.Unlock()
+
+	if app, ok := asgiapp_cache[asgi_pattern]; ok {
+		return app, nil
+	}
+
+	module_app := strings.Split(asgi_pattern, ":")
 	if len(module_app) != 2 {
 		return nil, errors.New("expected pattern $(MODULE_NAME):$(VARIABLE_NAME)")
 	}
@@ -444,16 +483,43 @@ func NewAsgi(wsgi_pattern string, venv_path string) (*Asgi, error) {
 	if app == nil {
 		return nil, errors.New("failed to import module")
 	}
-	return &Asgi{app}, nil
+
+	var err error
+
+	if lifespan {
+		status := C.AsgiApp_lifespan_startup(app)
+		if uint8(status) == 0 {
+			err = errors.New("startup failed")
+		}
+	}
+
+	result := &Asgi{app, asgi_pattern}
+	asgiapp_cache[asgi_pattern] = result
+	return result, err
 }
 
 // Cleanup deallocates CGO resources used by Asgi app
-func (m *Asgi) Cleanup() {
+func (m *Asgi) Cleanup() (err error) {
 	if m.app != nil {
+		asgi_lock.Lock()
+		if _, ok := asgiapp_cache[m.asgi_pattern]; !ok {
+			asgi_lock.Unlock()
+			return
+		}
+		delete(asgiapp_cache, m.asgi_pattern)
+		asgi_lock.Unlock()
+
 		runtime.LockOSThread()
 		defer runtime.UnlockOSThread()
+
+		status := C.AsgiApp_lifespan_shutdown(m.app)
+		if uint8(status) == 0 {
+			err = errors.New("shutdown failure")
+		}
+
 		C.AsgiApp_cleanup(m.app)
 	}
+	return
 }
 
 // AsgiRequestHandler stores pointers to the request and the response writer

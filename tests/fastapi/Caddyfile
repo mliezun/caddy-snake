@@ -9,6 +9,15 @@ localhost:9080 {
 	route /item/* {
 		python {
 			module_asgi "main:app"
+			lifespan on
+			venv "./venv"
+		}
+	}
+
+	route /other/ {
+		python {
+			module_asgi "main:app"
+			lifespan on
 			venv "./venv"
 		}
 	}
