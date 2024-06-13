@@ -162,9 +162,13 @@ What it does behind the scenes is to append `venv/lib/python3.x/site-packages` t
 Currently the Python app is not reloaded by the plugin if a file changes. But it is possible to setup using [watchmedo](https://github.com/gorakhargosh/watchdog?tab=readme-ov-file#shell-utilities) to restart the Caddy process.
 
 ```bash
+# Install on Debian and Ubuntu.
+sudo apt-get install python3-watchdog
 watchmedo auto-restart -d . -p "*.py" --recursive \
     -- caddy run --config Caddyfile
 ```
+
+Note that this will restart Caddy when new `.py` files are created. If your venv is in the directory watched by watchmedo, installing packages in the venv will also restart Caddy by modifying `.py` files.
 
 ## Dev resources
 
