@@ -781,6 +781,9 @@ func asgi_send_response(request_id C.uint64_t, body *C.char, more_body C.uint8_t
 		body_bytes := []byte(C.GoString(body))
 		arh.accumulated_response_size += len(body_bytes)
 		_, err := arh.w.Write(body_bytes)
+		if f, ok := arh.w.(http.Flusher); ok {
+			f.Flush()
+		}
 		if err != nil {
 			arh.done <- err
 		} else if int(more_body) == 0 {
