@@ -524,9 +524,12 @@ func (m *Asgi) Cleanup() (err error) {
 
 // AsgiRequestHandler stores pointers to the request and the response writer
 type AsgiRequestHandler struct {
-	w    http.ResponseWriter
-	r    *http.Request
-	done chan error
+	w                         http.ResponseWriter
+	r                         *http.Request
+	completed_body            bool
+	completed_response        bool
+	accumulated_response_size int
+	done                      chan error
 
 	operations chan AsgiOperations
 
@@ -671,6 +674,7 @@ func (m *Asgi) HandleRequest(w http.ResponseWriter, r *http.Request) error {
 	asgi_handlers[request_id] = arh
 	asgi_lock.Unlock()
 	defer func() {
+		arh.completed_response = true
 		arh.operations <- AsgiOperations{stop: true}
 		asgi_lock.Lock()
 		delete(asgi_handlers, request_id)
@@ -698,24 +702,41 @@ func (m *Asgi) HandleRequest(w http.ResponseWriter, r *http.Request) error {
 }
 
 //export asgi_receive_start
-func asgi_receive_start(request_id C.uint64_t, event *C.AsgiEvent) {
+func asgi_receive_start(request_id C.uint64_t, event *C.AsgiEvent) C.uint8_t {
 	asgi_lock.Lock()
 	defer asgi_lock.Unlock()
 	arh := asgi_handlers[uint64(request_id)]
+	if arh == nil || arh.completed_response {
+		return C.uint8_t(0)
+	}
 
 	arh.operations <- AsgiOperations{op: func() {
-		body, err := io.ReadAll(arh.r.Body)
-		if err != nil {
-			arh.done <- err
-			return
+		var body_str *C.char
+		var more_body C.uint8_t
+		if !arh.completed_body {
+			buffer := make([]byte, 4096)
+			_, err := arh.r.Body.Read(buffer)
+			if err != nil && err != io.EOF {
+				arh.done <- err
+				return
+			}
+			arh.completed_body = (err == io.EOF)
+			body_str = C.CString(string(buffer))
+			defer C.free(unsafe.Pointer(body_str))
 		}
-		body_str := C.CString(string(body))
-		defer C.free(unsafe.Pointer(body_str))
+
+		if arh.completed_body {
+			more_body = C.uint8_t(0)
+		} else {
+			more_body = C.uint8_t(1)
+		}
 
 		runtime.LockOSThread()
-		C.AsgiEvent_set(event, body_str)
+		C.AsgiEvent_set(event, body_str, more_body)
 		runtime.UnlockOSThread()
 	}}
+
+	return C.uint8_t(1)
 }
 
 //export asgi_set_headers
@@ -745,7 +766,7 @@ func asgi_set_headers(request_id C.uint64_t, status_code C.int, headers *C.MapKe
 		arh.w.WriteHeader(int(status_code))
 
 		runtime.LockOSThread()
-		C.AsgiEvent_set(event, nil)
+		C.AsgiEvent_set(event, nil, C.uint8_t(0))
 		runtime.UnlockOSThread()
 	}}
 }
@@ -758,6 +779,7 @@ func asgi_send_response(request_id C.uint64_t, body *C.char, more_body C.uint8_t
 
 	arh.operations <- AsgiOperations{op: func() {
 		body_bytes := []byte(C.GoString(body))
+		arh.accumulated_response_size += len(body_bytes)
 		_, err := arh.w.Write(body_bytes)
 		if err != nil {
 			arh.done <- err
@@ -766,7 +788,7 @@ func asgi_send_response(request_id C.uint64_t, body *C.char, more_body C.uint8_t
 		}
 
 		runtime.LockOSThread()
-		C.AsgiEvent_set(event, nil)
+		C.AsgiEvent_set(event, nil, C.uint8_t(0))
 		runtime.UnlockOSThread()
 	}}
 }

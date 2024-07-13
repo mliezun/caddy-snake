@@ -32,10 +32,13 @@ def caddysnake_setup_asgi(loop):
 
     def build_receive(asgi_event):
         async def receive():
-            asgi_event.receive_start()
-            await asgi_event.wait()
-            asgi_event.clear()
-            return asgi_event.receive_end()
+            if asgi_event.receive_start():
+                await asgi_event.wait()
+                asgi_event.clear()
+                result = asgi_event.receive_end()
+                return result
+            else:
+                return {"type": "http.disconnect"}
 
         return receive
 

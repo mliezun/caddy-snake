@@ -505,6 +505,7 @@ struct AsgiEvent {
   PyObject *event_ts;
   PyObject *future;
   PyObject *request_body;
+  uint8_t more_body;
 };
 
 static PyObject *AsgiEvent_new(PyTypeObject *type, PyObject *args,
@@ -529,11 +530,12 @@ static void AsgiEvent_dealloc(AsgiEvent *self) {
   Py_TYPE(self)->tp_free((PyObject *)self);
 }
 
-void AsgiEvent_set(AsgiEvent *self, const char *body) {
+void AsgiEvent_set(AsgiEvent *self, const char *body, uint8_t more_body) {
   PyGILState_STATE gstate = PyGILState_Ensure();
   if (body) {
     self->request_body = PyBytes_FromString(body);
   }
+  self->more_body = more_body;
   PyObject *set_fn = PyObject_GetAttrString((PyObject *)self->event_ts, "set");
   PyObject_CallNoArgs(set_fn);
   Py_DECREF(set_fn);
@@ -557,8 +559,11 @@ static PyObject *AsgiEvent_clear(AsgiEvent *self, PyObject *args) {
 }
 
 static PyObject *AsgiEvent_receive_start(AsgiEvent *self, PyObject *args) {
-  asgi_receive_start(self->request_id, self);
-  Py_RETURN_NONE;
+  PyObject *result = Py_False;
+  if (asgi_receive_start(self->request_id, self) == 1) {
+    result = Py_True;
+  }
+  return result;
 }
 
 static PyObject *AsgiEvent_receive_end(AsgiEvent *self, PyObject *args) {
@@ -566,7 +571,11 @@ static PyObject *AsgiEvent_receive_end(AsgiEvent *self, PyObject *args) {
   PyObject *data_type = PyUnicode_FromString("http.request");
   PyDict_SetItemString(data, "type", data_type);
   PyDict_SetItemString(data, "body", self->request_body);
-  PyDict_SetItemString(data, "more_body", Py_False);
+  if (self->more_body) {
+    PyDict_SetItemString(data, "more_body", Py_True);
+  } else {
+    PyDict_SetItemString(data, "more_body", Py_False);
+  }
   Py_DECREF(data_type);
   Py_DECREF(self->request_body);
   return data;
