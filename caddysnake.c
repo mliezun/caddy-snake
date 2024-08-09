@@ -505,6 +505,7 @@ struct AsgiEvent {
   PyObject *event_ts;
   PyObject *future;
   PyObject *request_body;
+  uint8_t more_body;
 };
 
 static PyObject *AsgiEvent_new(PyTypeObject *type, PyObject *args,
@@ -516,6 +517,7 @@ static PyObject *AsgiEvent_new(PyTypeObject *type, PyObject *args,
     self->event_ts = NULL;
     self->future = NULL;
     self->request_body = NULL;
+    self->more_body = 0;
   }
   return (PyObject *)self;
 }
@@ -524,16 +526,26 @@ static void AsgiEvent_dealloc(AsgiEvent *self) {
   Py_XDECREF(self->event_ts);
   // Future is freed in AsgiEvent_result
   // Py_XDECREF(self->future);
-  // Request body is freed in AsgiEvent_receive_end
-  // Py_XDECREF(self->request_body);
+  // Request body is also freed in AsgiEvent_set
+  Py_XDECREF(self->request_body);
   Py_TYPE(self)->tp_free((PyObject *)self);
 }
 
-void AsgiEvent_set(AsgiEvent *self, const char *body) {
+void AsgiEvent_cleanup(AsgiEvent *event) {
+  PyGILState_STATE gstate = PyGILState_Ensure();
+  Py_DECREF(event);
+  PyGILState_Release(gstate);
+}
+
+void AsgiEvent_set(AsgiEvent *self, const char *body, uint8_t more_body) {
   PyGILState_STATE gstate = PyGILState_Ensure();
   if (body) {
+    if (self->request_body) {
+      Py_DECREF(self->request_body);
+    }
     self->request_body = PyBytes_FromString(body);
   }
+  self->more_body = more_body;
   PyObject *set_fn = PyObject_GetAttrString((PyObject *)self->event_ts, "set");
   PyObject_CallNoArgs(set_fn);
   Py_DECREF(set_fn);
@@ -557,8 +569,14 @@ static PyObject *AsgiEvent_clear(AsgiEvent *self, PyObject *args) {
 }
 
 static PyObject *AsgiEvent_receive_start(AsgiEvent *self, PyObject *args) {
-  asgi_receive_start(self->request_id, self);
-  Py_RETURN_NONE;
+  PyObject *result = Py_False;
+  if (asgi_receive_start(self->request_id, self) == 1) {
+    result = Py_True;
+  }
+#if PY_MINOR_VERSION < 12
+  Py_INCREF(result);
+#endif
+  return result;
 }
 
 static PyObject *AsgiEvent_receive_end(AsgiEvent *self, PyObject *args) {
@@ -566,9 +584,12 @@ static PyObject *AsgiEvent_receive_end(AsgiEvent *self, PyObject *args) {
   PyObject *data_type = PyUnicode_FromString("http.request");
   PyDict_SetItemString(data, "type", data_type);
   PyDict_SetItemString(data, "body", self->request_body);
-  PyDict_SetItemString(data, "more_body", Py_False);
+  PyObject *more_body = Py_False;
+  if (self->more_body) {
+    more_body = Py_True;
+  }
+  PyDict_SetItemString(data, "more_body", more_body);
   Py_DECREF(data_type);
-  Py_DECREF(self->request_body);
   return data;
 }
 
@@ -647,9 +668,9 @@ static PyObject *AsgiEvent_send(AsgiEvent *self, PyObject *args) {
         PyObject_RichCompareBool(more_body, Py_False, Py_EQ) == 1) {
       send_more_body = 0;
     }
-    PyObject *body = PyDict_GetItemString(data, "body");
-    asgi_send_response(self->request_id, PyBytes_AsString(body), send_more_body,
-                       self);
+    PyObject *pybody = PyDict_GetItemString(data, "body");
+    char *body = copy_pybytes(pybody);
+    asgi_send_response(self->request_id, body, send_more_body, self);
   }
   Py_RETURN_NONE;
 }
@@ -773,8 +794,6 @@ void AsgiApp_handle_request(AsgiApp *app, uint64_t request_id, MapKeyVal *scope,
   PyObject_CallOneArg(add_done_callback, asgi_event_result);
   Py_DECREF(add_done_callback);
   Py_DECREF(asgi_event_result);
-
-  Py_DECREF(asgi_event);
 
   PyGILState_Release(gstate);
 }
