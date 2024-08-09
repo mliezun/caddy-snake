@@ -31,10 +31,10 @@ uint8_t AsgiApp_lifespan_startup(AsgiApp *);
 uint8_t AsgiApp_lifespan_shutdown(AsgiApp *);
 void AsgiApp_handle_request(AsgiApp *, uint64_t, MapKeyVal *, MapKeyVal *,
                             const char *, int, const char *, int);
-void AsgiEvent_set(AsgiEvent *, const char *);
+void AsgiEvent_set(AsgiEvent *, const char *, uint8_t);
 void AsgiApp_cleanup(AsgiApp *);
 
-extern void asgi_receive_start(uint64_t, AsgiEvent *);
+extern uint8_t asgi_receive_start(uint64_t, AsgiEvent *);
 extern void asgi_send_response(uint64_t, char *, uint8_t, AsgiEvent *);
 extern void asgi_set_headers(uint64_t, int, MapKeyVal *, AsgiEvent *);
 extern void asgi_cancel_request(uint64_t);

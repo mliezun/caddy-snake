@@ -37,12 +37,20 @@ def delete_item(id: str):
     response = requests.delete(f"{BASE_URL}/item/{id}")
     return response.status_code == 200 and b"Deleted" in response.content
 
+def stream_content(id: str, item: dict):
+    response = requests.get(f"{BASE_URL}/stream-item/{id}", stream=True)
+    if not response.ok:
+        return False
+    blob = b"".join(response.iter_content(chunk_size=2**20))
+    return blob.decode() == item["blob"]
 
 def item_lifecycle():
     id = str(uuid.uuid4())
     item = get_dummy_item()
     assert store_item(id, item), "Store item failed"
     assert get_item(id, item), "Get item failed"
+    if item["blob"]:
+        assert stream_content(id, item), "Failed to stream content"
     assert delete_item(id), "Delete item failed"
     assert not delete_item(id), "Delete item should fail"
 

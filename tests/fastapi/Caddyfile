@@ -22,6 +22,14 @@ localhost:9080 {
 		}
 	}
 
+	route /stream-item/* {
+		python {
+			module_asgi "main:app"
+			lifespan on
+			venv "./venv"
+		}
+	}
+
 	route / {
 		respond 404
 	}
