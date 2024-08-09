@@ -656,9 +656,9 @@ static PyObject *AsgiEvent_send(AsgiEvent *self, PyObject *args) {
         PyObject_RichCompareBool(more_body, Py_False, Py_EQ) == 1) {
       send_more_body = 0;
     }
-    PyObject *body = PyDict_GetItemString(data, "body");
-    asgi_send_response(self->request_id, PyBytes_AsString(body), send_more_body,
-                       self);
+    PyObject *pybody = PyDict_GetItemString(data, "body");
+    char *body = copy_pybytes(pybody);
+    asgi_send_response(self->request_id, body, send_more_body, self);
   }
   Py_RETURN_NONE;
 }

@@ -562,7 +562,7 @@ func NewAsgiRequestHandler(w http.ResponseWriter, r *http.Request) *AsgiRequestH
 		r:    r,
 		done: make(chan error, 2),
 
-		operations: make(chan AsgiOperations, 4),
+		operations: make(chan AsgiOperations, 16),
 	}
 	go h.consume()
 	return h
@@ -778,6 +778,7 @@ func asgi_send_response(request_id C.uint64_t, body *C.char, more_body C.uint8_t
 	arh := asgi_handlers[uint64(request_id)]
 
 	arh.operations <- AsgiOperations{op: func() {
+		defer C.free(unsafe.Pointer(body))
 		body_bytes := []byte(C.GoString(body))
 		arh.accumulated_response_size += len(body_bytes)
 		_, err := arh.w.Write(body_bytes)
