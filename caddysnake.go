@@ -524,6 +524,7 @@ func (m *Asgi) Cleanup() (err error) {
 
 // AsgiRequestHandler stores pointers to the request and the response writer
 type AsgiRequestHandler struct {
+	event                     *C.AsgiEvent
 	w                         http.ResponseWriter
 	r                         *http.Request
 	completed_body            bool
@@ -549,6 +550,12 @@ func (h *AsgiRequestHandler) consume() {
 			o.op()
 		}
 		if o.stop {
+			if h.event != nil {
+				runtime.LockOSThread()
+				C.AsgiEvent_cleanup(h.event)
+				runtime.UnlockOSThread()
+			}
+			close(h.operations)
 			break
 		}
 	}
@@ -710,6 +717,8 @@ func asgi_receive_start(request_id C.uint64_t, event *C.AsgiEvent) C.uint8_t {
 		return C.uint8_t(0)
 	}
 
+	arh.event = event
+
 	arh.operations <- AsgiOperations{op: func() {
 		var body_str *C.char
 		var more_body C.uint8_t
@@ -745,6 +754,8 @@ func asgi_set_headers(request_id C.uint64_t, status_code C.int, headers *C.MapKe
 	defer asgi_lock.Unlock()
 	arh := asgi_handlers[uint64(request_id)]
 
+	arh.event = event
+
 	arh.operations <- AsgiOperations{op: func() {
 		if headers != nil {
 			size_of_pointer := unsafe.Sizeof(headers.keys)
@@ -776,6 +787,8 @@ func asgi_send_response(request_id C.uint64_t, body *C.char, more_body C.uint8_t
 	asgi_lock.Lock()
 	defer asgi_lock.Unlock()
 	arh := asgi_handlers[uint64(request_id)]
+
+	arh.event = event
 
 	arh.operations <- AsgiOperations{op: func() {
 		defer C.free(unsafe.Pointer(body))

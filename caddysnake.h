@@ -32,6 +32,7 @@ uint8_t AsgiApp_lifespan_shutdown(AsgiApp *);
 void AsgiApp_handle_request(AsgiApp *, uint64_t, MapKeyVal *, MapKeyVal *,
                             const char *, int, const char *, int);
 void AsgiEvent_set(AsgiEvent *, const char *, uint8_t);
+void AsgiEvent_cleanup(AsgiEvent *);
 void AsgiApp_cleanup(AsgiApp *);
 
 extern uint8_t asgi_receive_start(uint64_t, AsgiEvent *);
