@@ -30,6 +30,14 @@ localhost:9080 {
 		}
 	}
 
+	route /websockets/* {
+		python {
+			module_asgi "main:app"
+			lifespan on
+			venv "./venv"
+		}
+	}
+
 	route / {
 		respond 404
 	}
