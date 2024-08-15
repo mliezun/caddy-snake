@@ -25,6 +25,7 @@ static PyObject *asyncio_run_coroutine_threadsafe;
 static PyObject *build_receive;
 static PyObject *build_send;
 static PyObject *build_lifespan;
+static PyObject *websocket_closed;
 
 char *concatenate_strings(const char *str1, const char *str2) {
   size_t new_str_len = strlen(str1) + strlen(str2) + 1;
@@ -657,8 +658,30 @@ static PyObject *AsgiEvent_receive_end(AsgiEvent *self, PyObject *args) {
     }
     break;
   }
+
+  case WEBSOCKET_DISCONNECTED: {
+    PyObject *exc_instance = PyObject_CallObject(websocket_closed, NULL);
+    PyErr_SetObject(websocket_closed, exc_instance);
+    Py_DECREF(exc_instance);
+    break;
+  }
   }
   return data;
+}
+
+uint8_t is_weboscket_closed(PyObject *exc) {
+  if (PyErr_GivenExceptionMatches(exc, websocket_closed)) {
+    return 1;
+  }
+  PyObject *cause = PyObject_GetAttrString(exc, "__cause__");
+  if (cause) {
+    if (PyErr_GivenExceptionMatches(cause, websocket_closed)) {
+      Py_DECREF(cause);
+      return 1;
+    }
+    Py_DECREF(cause);
+  }
+  return 0;
 }
 
 /*
@@ -669,14 +692,20 @@ static PyObject *AsgiEvent_result(AsgiEvent *self, PyObject *args) {
       PyObject_GetAttrString(self->future, "exception");
   PyObject *exc = PyObject_CallNoArgs(future_exception);
   if (exc != Py_None) {
+    if (!is_weboscket_closed(exc)) {
 #if PY_MINOR_VERSION >= 12
-    // PyErr_DisplayException was introduced in Python 3.12
-    PyErr_DisplayException(exc);
+      // PyErr_DisplayException was introduced in Python 3.12
+      PyErr_DisplayException(exc);
 #else
-    PyErr_Display(NULL, exc, NULL);
+      PyErr_Display(NULL, exc, NULL);
 #endif
+      if (self->websockets_state == WEBSOCKET_NONE) {
+        asgi_cancel_request(self->request_id);
+      } else {
+        asgi_cancel_request_websocket(self->request_id, NULL, 1000);
+      }
+    }
     Py_DECREF(exc);
-    asgi_cancel_request(self->request_id);
   }
   Py_DECREF(future_exception);
 
@@ -1009,6 +1038,7 @@ void Py_init_and_release_gil(const char *setup_py) {
   build_receive = PyTuple_GetItem(asgi_setup_result, 1);
   build_send = PyTuple_GetItem(asgi_setup_result, 2);
   build_lifespan = PyTuple_GetItem(asgi_setup_result, 3);
+  websocket_closed = PyTuple_GetItem(asgi_setup_result, 4);
   PyRun_SimpleString("del caddysnake_setup_asgi");
   // Setup ASGI version
   asgi_version = PyDict_New();

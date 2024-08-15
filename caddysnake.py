@@ -121,4 +121,13 @@ def caddysnake_setup_asgi(loop):
 
     Thread(target=loop.run_forever).start()
 
-    return Event_ts, build_receive, build_send, build_lifespan
+    class WebsocketClosed(IOError):
+        pass
+
+    return (
+        Event_ts,
+        build_receive,
+        build_send,
+        build_lifespan,
+        WebsocketClosed,
+    )

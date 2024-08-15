@@ -42,15 +42,18 @@ async def delete_item(id: str):
     del db[id]
     return "Deleted"
 
+
 def chunked_blob(blob: str):
     chunk_size = 2**20
     for i in range(0, len(blob), chunk_size):
-        chunk = blob[i:i+chunk_size]
+        chunk = blob[i : i + chunk_size]
         yield chunk
+
 
 @app.get("/stream-item/{id}")
 async def item_stream(id: str) -> StreamingResponse:
-    return StreamingResponse(chunked_blob(db[id].blob), media_type='text/event-stream')
+    return StreamingResponse(chunked_blob(db[id].blob), media_type="text/event-stream")
+
 
 html = """
 <!DOCTYPE html>
@@ -86,9 +89,11 @@ html = """
 </html>
 """
 
+
 @app.get("/websockets/")
 async def get():
     return HTMLResponse(html)
+
 
 @app.websocket("/websockets/ws")
 async def websocket_endpoint(websocket: WebSocket):

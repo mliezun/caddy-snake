@@ -760,13 +760,19 @@ func asgi_receive_start(request_id C.uint64_t, event *C.AsgiEvent) C.uint8_t {
 		switch arh.websocket_state {
 		case WS_STARTING:
 			// TODO: this shouldn't happen, what do I do here?
-			fmt.Println("SHOULD NOT SEE THIS")
+			fmt.Println("SHOULD NOT SEE THIS - PLEASE REPORT")
 		case WS_CONNECTED:
 			arh.operations <- AsgiOperations{op: func() {
 				mt, message, err := arh.websocket_conn.ReadMessage()
 				if err != nil {
-					//TODO: handle error
-					fmt.Println("read:", err)
+					arh.websocket_state = WS_DISCONNECTED
+					arh.websocket_conn.Close()
+					runtime.LockOSThread()
+					C.AsgiEvent_disconnect_websocket(event)
+					C.AsgiEvent_set(event, nil, C.uint8_t(0))
+					runtime.UnlockOSThread()
+					arh.done <- errors.New("websocket closed")
+					return
 				}
 				body_str := C.CString(string(message))
 				defer C.free(unsafe.Pointer(body_str))
@@ -781,7 +787,13 @@ func asgi_receive_start(request_id C.uint64_t, event *C.AsgiEvent) C.uint8_t {
 				runtime.UnlockOSThread()
 			}}
 		case WS_DISCONNECTED:
-			fmt.Println("Not implemented yet")
+			arh.operations <- AsgiOperations{op: func() {
+				runtime.LockOSThread()
+				C.AsgiEvent_disconnect_websocket(event)
+				C.AsgiEvent_set(event, nil, C.uint8_t(0))
+				runtime.UnlockOSThread()
+				arh.done <- errors.New("websocket closed")
+			}}
 		default:
 			arh.websocket_state = WS_STARTING
 			runtime.LockOSThread()
