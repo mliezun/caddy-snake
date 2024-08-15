@@ -572,11 +572,6 @@ func (h *AsgiRequestHandler) consume() {
 				C.AsgiEvent_cleanup(h.event)
 				runtime.UnlockOSThread()
 			}
-			if h.websocket_conn != nil {
-				h.websocket_state = WS_DISCONNECTED
-				h.websocket_conn.Close()
-				h.websocket_conn = nil
-			}
 			close(h.operations)
 			break
 		}
@@ -725,6 +720,12 @@ func (m *Asgi) HandleRequest(w http.ResponseWriter, r *http.Request) error {
 		asgi_lock.Unlock()
 	}()
 
+	var subprotocols *C.char = nil
+	if is_websocket {
+		subprotocols = C.CString(r.Header.Get("sec-websocket-protocol"))
+		defer C.free(unsafe.Pointer(subprotocols))
+	}
+
 	runtime.LockOSThread()
 	C.AsgiApp_handle_request(
 		m.app,
@@ -735,6 +736,7 @@ func (m *Asgi) HandleRequest(w http.ResponseWriter, r *http.Request) error {
 		C.int(client_port),
 		server_host_str,
 		C.int(server_port),
+		subprotocols,
 	)
 	runtime.UnlockOSThread()
 
@@ -765,13 +767,20 @@ func asgi_receive_start(request_id C.uint64_t, event *C.AsgiEvent) C.uint8_t {
 			arh.operations <- AsgiOperations{op: func() {
 				mt, message, err := arh.websocket_conn.ReadMessage()
 				if err != nil {
+					closeError, isClose := err.(*websocket.CloseError)
+					closeCode := 1005
+					if isClose {
+						closeCode = closeError.Code
+					}
+					body_str := C.CString(fmt.Sprintf("%d", closeCode))
+					defer C.free(unsafe.Pointer(body_str))
 					arh.websocket_state = WS_DISCONNECTED
 					arh.websocket_conn.Close()
 					runtime.LockOSThread()
 					C.AsgiEvent_disconnect_websocket(event)
-					C.AsgiEvent_set(event, nil, C.uint8_t(0))
+					C.AsgiEvent_set_websocket(event, body_str, C.uint8_t(0))
 					runtime.UnlockOSThread()
-					arh.done <- errors.New("websocket closed")
+					arh.done <- fmt.Errorf("websocket closed: %d", closeCode)
 					return
 				}
 				body_str := C.CString(string(message))
@@ -792,7 +801,7 @@ func asgi_receive_start(request_id C.uint64_t, event *C.AsgiEvent) C.uint8_t {
 				C.AsgiEvent_disconnect_websocket(event)
 				C.AsgiEvent_set(event, nil, C.uint8_t(0))
 				runtime.UnlockOSThread()
-				arh.done <- errors.New("websocket closed")
+				arh.done <- errors.New("websocket closed - receive start")
 			}}
 		default:
 			arh.websocket_state = WS_STARTING
@@ -863,14 +872,23 @@ func asgi_set_headers(request_id C.uint64_t, status_code C.int, headers *C.MapKe
 		case WS_STARTING:
 			ws_conn, err := upgrader.Upgrade(arh.w, arh.r, ws_headers)
 			if err != nil {
-				// TODO: handle connection error
-				fmt.Println("Error", err)
+				arh.websocket_state = WS_DISCONNECTED
+				arh.websocket_conn.Close()
+				runtime.LockOSThread()
+				C.AsgiEvent_disconnect_websocket(event)
+				C.AsgiEvent_set(event, nil, C.uint8_t(0))
+				runtime.UnlockOSThread()
 				return
 			}
 			arh.websocket_state = WS_CONNECTED
 			arh.websocket_conn = ws_conn
 
 			runtime.LockOSThread()
+			C.AsgiEvent_set(event, nil, C.uint8_t(0))
+			runtime.UnlockOSThread()
+		case WS_DISCONNECTED:
+			runtime.LockOSThread()
+			C.AsgiEvent_disconnect_websocket(event)
 			C.AsgiEvent_set(event, nil, C.uint8_t(0))
 			runtime.UnlockOSThread()
 		}
@@ -951,8 +969,13 @@ func asgi_send_response_websocket(request_id C.uint64_t, body *C.char, message_t
 
 		err := arh.websocket_conn.WriteMessage(ws_message_type, body_bytes)
 		if err != nil {
-			// TODO: handle error
-			fmt.Println("reply:", err)
+			arh.websocket_state = WS_DISCONNECTED
+			arh.websocket_conn.Close()
+			runtime.LockOSThread()
+			C.AsgiEvent_disconnect_websocket(event)
+			C.AsgiEvent_set(event, nil, C.uint8_t(0))
+			runtime.UnlockOSThread()
+			return
 		}
 
 		runtime.LockOSThread()
@@ -992,6 +1015,7 @@ func asgi_cancel_request_websocket(request_id C.uint64_t, reason *C.char, code C
 			go func() {
 				if arh.websocket_conn != nil {
 					arh.websocket_conn.WriteControl(websocket.CloseMessage, closeMessage, time.Now().Add(5*time.Second))
+					arh.websocket_conn.Close()
 					arh.done <- fmt.Errorf("websocket closed: %d '%s'", closeCode, reasonText)
 				}
 			}()
