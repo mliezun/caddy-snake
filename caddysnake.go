@@ -817,7 +817,7 @@ func asgi_receive_start(request_id C.uint64_t, event *C.AsgiEvent) C.uint8_t {
 		var body_str *C.char
 		var more_body C.uint8_t
 		if !arh.completed_body {
-			buffer := make([]byte, 4096)
+			buffer := make([]byte, 1<<16)
 			_, err := arh.r.Body.Read(buffer)
 			if err != nil && err != io.EOF {
 				arh.done <- err
@@ -922,7 +922,7 @@ func asgi_set_headers(request_id C.uint64_t, status_code C.int, headers *C.MapKe
 }
 
 //export asgi_send_response
-func asgi_send_response(request_id C.uint64_t, body *C.char, more_body C.uint8_t, event *C.AsgiEvent) {
+func asgi_send_response(request_id C.uint64_t, body *C.char, body_len C.size_t, more_body C.uint8_t, event *C.AsgiEvent) {
 	asgi_lock.Lock()
 	defer asgi_lock.Unlock()
 	arh := asgi_handlers[uint64(request_id)]
@@ -931,7 +931,7 @@ func asgi_send_response(request_id C.uint64_t, body *C.char, more_body C.uint8_t
 
 	arh.operations <- AsgiOperations{op: func() {
 		defer C.free(unsafe.Pointer(body))
-		body_bytes := []byte(C.GoString(body))
+		body_bytes := C.GoBytes(unsafe.Pointer(body), C.int(body_len))
 		arh.accumulated_response_size += len(body_bytes)
 		_, err := arh.w.Write(body_bytes)
 		if f, ok := arh.w.(http.Flusher); ok {
@@ -950,7 +950,7 @@ func asgi_send_response(request_id C.uint64_t, body *C.char, more_body C.uint8_t
 }
 
 //export asgi_send_response_websocket
-func asgi_send_response_websocket(request_id C.uint64_t, body *C.char, message_type C.uint8_t, event *C.AsgiEvent) {
+func asgi_send_response_websocket(request_id C.uint64_t, body *C.char, body_len C.size_t, message_type C.uint8_t, event *C.AsgiEvent) {
 	asgi_lock.Lock()
 	defer asgi_lock.Unlock()
 	arh := asgi_handlers[uint64(request_id)]
@@ -959,12 +959,14 @@ func asgi_send_response_websocket(request_id C.uint64_t, body *C.char, message_t
 
 	arh.operations <- AsgiOperations{op: func() {
 		defer C.free(unsafe.Pointer(body))
-		body_bytes := []byte(C.GoString(body))
+		var body_bytes []byte
 		var ws_message_type int
 		if message_type == C.uint8_t(0) {
 			ws_message_type = websocket.TextMessage
+			body_bytes = []byte(C.GoString(body))
 		} else {
 			ws_message_type = websocket.BinaryMessage
+			body_bytes = C.GoBytes(unsafe.Pointer(body), C.int(body_len))
 		}
 		err := arh.websocket_conn.WriteMessage(ws_message_type, body_bytes)
 		if err != nil {

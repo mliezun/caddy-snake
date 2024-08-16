@@ -10,6 +10,10 @@ Supports both WSGI and ASGI, which means you can run all types of frameworks lik
 
 ## Quickstart
 
+```
+CGO_ENABLED=1 xcaddy build --with github.com/mliezun/caddy-snake
+```
+
 #### Requirements
 
 - Python >= 3.9 + dev files

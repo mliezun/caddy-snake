@@ -46,12 +46,13 @@ char *copy_pystring(PyObject *pystr) {
   if (result == NULL) {
     return NULL;
   }
-  strcpy(result, og_str);
+  memcpy(result, og_str, og_size);
   return result;
 }
 
-char *copy_pybytes(PyObject *pybytes) {
+char *copy_pybytes(PyObject *pybytes, size_t *size) {
   Py_ssize_t og_size = 0;
+  *size = 0;
   char *og_str;
   if (PyBytes_AsStringAndSize(pybytes, &og_str, &og_size) < 0) {
     return NULL;
@@ -61,7 +62,8 @@ char *copy_pybytes(PyObject *pybytes) {
   if (result == NULL) {
     return NULL;
   }
-  strcpy(result, og_str);
+  memcpy(result, og_str, og_size);
+  *size = (size_t)og_size;
   return result;
 }
 
@@ -762,6 +764,7 @@ static PyObject *AsgiEvent_send(AsgiEvent *self, PyObject *args) {
 
     PyObject *key, *value, *item;
     size_t pos = 0;
+    size_t len = 0;
     while ((item = PyIter_Next(iterator))) {
       // if (!PyTuple_Check(item) || PyTuple_Size(item) != 2) {
       //   PyErr_SetString(PyExc_RuntimeError,
@@ -775,8 +778,8 @@ static PyObject *AsgiEvent_send(AsgiEvent *self, PyObject *args) {
       // }
       key = PyTuple_GetItem(item, 0);
       value = PyTuple_GetItem(item, 1);
-      http_headers->keys[pos] = copy_pybytes(key);
-      http_headers->values[pos] = copy_pybytes(value);
+      http_headers->keys[pos] = copy_pybytes(key, &len);
+      http_headers->values[pos] = copy_pybytes(value, &len);
       Py_DECREF(item);
       pos++;
     }
@@ -793,8 +796,9 @@ static PyObject *AsgiEvent_send(AsgiEvent *self, PyObject *args) {
       send_more_body = 0;
     }
     PyObject *pybody = PyDict_GetItemString(data, "body");
-    char *body = copy_pybytes(pybody);
-    asgi_send_response(self->request_id, body, send_more_body, self);
+    size_t body_len = 0;
+    char *body = copy_pybytes(pybody, &body_len);
+    asgi_send_response(self->request_id, body, body_len, send_more_body, self);
   } else if (PyUnicode_CompareWithASCIIString(data_type, "websocket.accept") ==
              0) {
     if (self->websockets_state == WS_DISCONNECTED) {
@@ -820,10 +824,10 @@ static PyObject *AsgiEvent_send(AsgiEvent *self, PyObject *args) {
 
     MapKeyVal *http_headers = MapKeyVal_new(headers_count);
     size_t pos = 0;
+    size_t len = 0;
 
     if (iterator) {
       PyObject *key, *value, *item;
-      size_t pos = 0;
       while ((item = PyIter_Next(iterator))) {
         // if (!PyTuple_Check(item) || PyTuple_Size(item) != 2) {
         //   PyErr_SetString(PyExc_RuntimeError,
@@ -837,8 +841,8 @@ static PyObject *AsgiEvent_send(AsgiEvent *self, PyObject *args) {
         // }
         key = PyTuple_GetItem(item, 0);
         value = PyTuple_GetItem(item, 1);
-        http_headers->keys[pos] = copy_pybytes(key);
-        http_headers->values[pos] = copy_pybytes(value);
+        http_headers->keys[pos] = copy_pybytes(key, &len);
+        http_headers->values[pos] = copy_pybytes(value, &len);
         Py_DECREF(item);
         pos++;
       }
@@ -848,7 +852,7 @@ static PyObject *AsgiEvent_send(AsgiEvent *self, PyObject *args) {
     if (subprotocol && subprotocol != Py_None) {
       http_headers->keys[pos] =
           concatenate_strings("sec-websocket-protocol", "");
-      http_headers->values[pos] = copy_pybytes(subprotocol);
+      http_headers->values[pos] = copy_pybytes(subprotocol, &len);
       pos++;
     }
 
@@ -866,15 +870,17 @@ static PyObject *AsgiEvent_send(AsgiEvent *self, PyObject *args) {
 
     PyObject *data_text = PyDict_GetItemString(data, "text");
     char *body = NULL;
+    size_t body_len = 0;
     uint8_t message_type = 0;
     if (data_text) {
       body = copy_pystring(data_text);
       message_type = 0;
     } else {
-      body = copy_pybytes(PyDict_GetItemString(data, "bytes"));
+      body = copy_pybytes(PyDict_GetItemString(data, "bytes"), &body_len);
       message_type = 1;
     }
-    asgi_send_response_websocket(self->request_id, body, message_type, self);
+    asgi_send_response_websocket(self->request_id, body, body_len, message_type,
+                                 self);
 
     if (self->websockets_state == WS_DISCONNECTED) {
       goto websocket_error;
