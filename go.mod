@@ -4,6 +4,7 @@ go 1.21.6
 
 require (
 	github.com/caddyserver/caddy/v2 v2.7.6
+	github.com/gorilla/websocket v0.0.0-20170926233335-4201258b820c
 	go.uber.org/zap v1.26.0
 )
 

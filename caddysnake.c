@@ -25,6 +25,7 @@ static PyObject *asyncio_run_coroutine_threadsafe;
 static PyObject *build_receive;
 static PyObject *build_send;
 static PyObject *build_lifespan;
+static PyObject *websocket_closed;
 
 char *concatenate_strings(const char *str1, const char *str2) {
   size_t new_str_len = strlen(str1) + strlen(str2) + 1;
@@ -49,18 +50,19 @@ char *copy_pystring(PyObject *pystr) {
   return result;
 }
 
-char *copy_pybytes(PyObject *pybytes) {
+char *copy_pybytes(PyObject *pybytes, size_t *size) {
   Py_ssize_t og_size = 0;
+  *size = 0;
   char *og_str;
   if (PyBytes_AsStringAndSize(pybytes, &og_str, &og_size) < 0) {
     return NULL;
   }
-  size_t new_str_len = og_size + 1;
-  char *result = malloc(new_str_len * sizeof(char));
+  char *result = malloc(og_size * sizeof(char));
   if (result == NULL) {
     return NULL;
   }
-  strcpy(result, og_str);
+  memcpy(result, og_str, og_size);
+  *size = (size_t)og_size;
   return result;
 }
 
@@ -502,11 +504,17 @@ uint8_t AsgiApp_lifespan_shutdown(AsgiApp *app) {
 struct AsgiEvent {
   PyObject_HEAD AsgiApp *app;
   uint64_t request_id;
-  PyObject *event_ts;
+  PyObject *event_ts_send;
+  PyObject *event_ts_receive;
   PyObject *future;
   PyObject *request_body;
   uint8_t more_body;
+  uint8_t websockets_state;
 };
+
+#define WS_NONE 0
+#define WS_CONNECTED 1
+#define WS_DISCONNECTED 2
 
 static PyObject *AsgiEvent_new(PyTypeObject *type, PyObject *args,
                                PyObject *kwds) {
@@ -514,16 +522,19 @@ static PyObject *AsgiEvent_new(PyTypeObject *type, PyObject *args,
   self = (AsgiEvent *)type->tp_alloc(type, 0);
   if (self != NULL) {
     self->request_id = 0;
-    self->event_ts = NULL;
+    self->event_ts_send = NULL;
+    self->event_ts_receive = NULL;
     self->future = NULL;
     self->request_body = NULL;
     self->more_body = 0;
+    self->websockets_state = WS_NONE;
   }
   return (PyObject *)self;
 }
 
 static void AsgiEvent_dealloc(AsgiEvent *self) {
-  Py_XDECREF(self->event_ts);
+  Py_XDECREF(self->event_ts_send);
+  Py_XDECREF(self->event_ts_receive);
   // Future is freed in AsgiEvent_result
   // Py_XDECREF(self->future);
   // Request body is also freed in AsgiEvent_set
@@ -537,7 +548,8 @@ void AsgiEvent_cleanup(AsgiEvent *event) {
   PyGILState_Release(gstate);
 }
 
-void AsgiEvent_set(AsgiEvent *self, const char *body, uint8_t more_body) {
+void AsgiEvent_set(AsgiEvent *self, const char *body, uint8_t more_body,
+                   uint8_t is_send) {
   PyGILState_STATE gstate = PyGILState_Ensure();
   if (body) {
     if (self->request_body) {
@@ -546,51 +558,158 @@ void AsgiEvent_set(AsgiEvent *self, const char *body, uint8_t more_body) {
     self->request_body = PyBytes_FromString(body);
   }
   self->more_body = more_body;
-  PyObject *set_fn = PyObject_GetAttrString((PyObject *)self->event_ts, "set");
+  PyObject *set_fn = NULL;
+  if (is_send) {
+    set_fn = PyObject_GetAttrString((PyObject *)self->event_ts_send, "set");
+  } else {
+    set_fn = PyObject_GetAttrString((PyObject *)self->event_ts_receive, "set");
+  }
   PyObject_CallNoArgs(set_fn);
   Py_DECREF(set_fn);
   PyGILState_Release(gstate);
 }
 
-static PyObject *AsgiEvent_wait(AsgiEvent *self, PyObject *args) {
-  PyObject *wait_fn =
-      PyObject_GetAttrString((PyObject *)self->event_ts, "wait");
-  PyObject *coro = PyObject_CallNoArgs(wait_fn);
-  Py_DECREF(wait_fn);
-  return coro;
+void AsgiEvent_set_websocket(AsgiEvent *self, const char *body,
+                             uint8_t message_type, uint8_t is_send) {
+  PyGILState_STATE gstate = PyGILState_Ensure();
+  if (body) {
+    if (!self->request_body) {
+      self->request_body = PyList_New(0);
+    }
+    PyObject *tuple = PyTuple_New(2);
+    if (message_type == 0) {
+      PyTuple_SetItem(tuple, 0, PyUnicode_FromString(body));
+    } else {
+      PyTuple_SetItem(tuple, 0, PyBytes_FromString(body));
+    }
+    PyTuple_SetItem(tuple, 1, PyLong_FromLong(message_type));
+    PyList_Append(self->request_body, tuple);
+    Py_DECREF(tuple); // WARNING: not sure if this should go here
+  }
+  PyObject *set_fn = NULL;
+  if (is_send) {
+    set_fn = PyObject_GetAttrString((PyObject *)self->event_ts_send, "set");
+  } else {
+    set_fn = PyObject_GetAttrString((PyObject *)self->event_ts_receive, "set");
+  }
+  PyObject_CallNoArgs(set_fn);
+  Py_DECREF(set_fn);
+  PyGILState_Release(gstate);
 }
 
-static PyObject *AsgiEvent_clear(AsgiEvent *self, PyObject *args) {
-  PyObject *clear_fn =
-      PyObject_GetAttrString((PyObject *)self->event_ts, "clear");
-  PyObject_CallNoArgs(clear_fn);
-  Py_DECREF(clear_fn);
-  Py_RETURN_NONE;
+void AsgiEvent_connect_websocket(AsgiEvent *self) {
+  self->websockets_state = WS_CONNECTED;
+}
+
+void AsgiEvent_disconnect_websocket(AsgiEvent *self) {
+  self->websockets_state = WS_DISCONNECTED;
 }
 
 static PyObject *AsgiEvent_receive_start(AsgiEvent *self, PyObject *args) {
   PyObject *result = Py_False;
   if (asgi_receive_start(self->request_id, self) == 1) {
-    result = Py_True;
+    // WARNING: should I incref here?
+    Py_INCREF(self->event_ts_receive);
+    result = self->event_ts_receive;
   }
 #if PY_MINOR_VERSION < 12
-  Py_INCREF(result);
+  if (result == Py_False)
+    Py_INCREF(result);
 #endif
   return result;
 }
 
 static PyObject *AsgiEvent_receive_end(AsgiEvent *self, PyObject *args) {
   PyObject *data = PyDict_New();
-  PyObject *data_type = PyUnicode_FromString("http.request");
-  PyDict_SetItemString(data, "type", data_type);
-  PyDict_SetItemString(data, "body", self->request_body);
-  PyObject *more_body = Py_False;
-  if (self->more_body) {
-    more_body = Py_True;
+  switch (self->websockets_state) {
+  case WS_NONE: {
+    PyObject *data_type = PyUnicode_FromString("http.request");
+    PyDict_SetItemString(data, "type", data_type);
+    PyDict_SetItemString(data, "body", self->request_body);
+    PyObject *more_body = Py_False;
+    if (self->more_body) {
+      more_body = Py_True;
+    }
+    PyDict_SetItemString(data, "more_body", more_body);
+    Py_DECREF(data_type);
+    break;
   }
-  PyDict_SetItemString(data, "more_body", more_body);
-  Py_DECREF(data_type);
+
+  case WS_CONNECTED: {
+    if (!self->request_body) {
+      PyObject *data_type = PyUnicode_FromString("websocket.connect");
+      PyDict_SetItemString(data, "type", data_type);
+      Py_DECREF(data_type);
+    } else {
+      PyObject *data_type = PyUnicode_FromString("websocket.receive");
+      PyDict_SetItemString(data, "type", data_type);
+      PyObject *pop_fn = PyObject_GetAttrString(self->request_body, "pop");
+      PyObject *ix = PyLong_FromLong(0);
+      PyObject *message = PyObject_CallOneArg(pop_fn, ix);
+      PyObject *message_data = PyTuple_GetItem(message, 0);
+      PyObject *message_type = PyTuple_GetItem(message, 1);
+      if (message_type == ix) {
+        PyDict_SetItemString(data, "text", message_data);
+      } else {
+        PyDict_SetItemString(data, "bytes", message_data);
+      }
+      Py_DECREF(message); // WARNING: not sure if this should be here
+      Py_DECREF(ix);      // WARNING: not sure if this should be here
+      Py_DECREF(pop_fn);
+      Py_DECREF(data_type);
+    }
+    break;
+  }
+
+  case WS_DISCONNECTED: {
+    PyObject *data_type = PyUnicode_FromString("websocket.disconnect");
+    PyDict_SetItemString(data, "type", data_type);
+    Py_DECREF(data_type);
+    PyObject *default_code = PyLong_FromLong(1005);
+    PyObject *close_code = default_code;
+    if (self->request_body && PyList_Size(self->request_body) > 0) {
+      PyObject *pop_fn = PyObject_GetAttrString(self->request_body, "pop");
+      PyObject *ix = PyLong_FromLong(0);
+      PyObject *message = PyObject_CallOneArg(pop_fn, ix);
+      PyObject *message_data = PyTuple_GetItem(message, 0);
+      PyObject *message_type = PyTuple_GetItem(message, 1);
+      if (message_type == ix) {
+        close_code = PyLong_FromUnicodeObject(message_data, 10);
+        if (!close_code) {
+          if (PyErr_Occurred()) {
+            PyErr_Clear();
+          }
+          close_code = default_code;
+        }
+      }
+      Py_DECREF(message); // WARNING: not sure if this should be here
+      Py_DECREF(ix);      // WARNING: not sure if this should be here
+      Py_DECREF(pop_fn);
+    }
+    PyDict_SetItemString(data, "code", close_code);
+    if (close_code != default_code) {
+      Py_DECREF(close_code); // WARNING: not sure if this should be here
+    }
+    Py_DECREF(default_code); // WARNING: not sure if this should be here
+    break;
+  }
+  }
   return data;
+}
+
+uint8_t is_weboscket_closed(PyObject *exc) {
+  if (PyErr_GivenExceptionMatches(exc, websocket_closed)) {
+    return 1;
+  }
+  PyObject *cause = PyObject_GetAttrString(exc, "__cause__");
+  if (cause) {
+    if (PyErr_GivenExceptionMatches(cause, websocket_closed)) {
+      Py_DECREF(cause);
+      return 1;
+    }
+    Py_DECREF(cause);
+  }
+  return 0;
 }
 
 /*
@@ -601,14 +720,20 @@ static PyObject *AsgiEvent_result(AsgiEvent *self, PyObject *args) {
       PyObject_GetAttrString(self->future, "exception");
   PyObject *exc = PyObject_CallNoArgs(future_exception);
   if (exc != Py_None) {
+    if (!is_weboscket_closed(exc)) {
 #if PY_MINOR_VERSION >= 12
-    // PyErr_DisplayException was introduced in Python 3.12
-    PyErr_DisplayException(exc);
+      // PyErr_DisplayException was introduced in Python 3.12
+      PyErr_DisplayException(exc);
 #else
-    PyErr_Display(NULL, exc, NULL);
+      PyErr_Display(NULL, exc, NULL);
 #endif
+      if (self->websockets_state == WS_NONE) {
+        asgi_cancel_request(self->request_id);
+      } else {
+        asgi_cancel_request_websocket(self->request_id, NULL, 1000);
+      }
+    }
     Py_DECREF(exc);
-    asgi_cancel_request(self->request_id);
   }
   Py_DECREF(future_exception);
 
@@ -638,6 +763,7 @@ static PyObject *AsgiEvent_send(AsgiEvent *self, PyObject *args) {
 
     PyObject *key, *value, *item;
     size_t pos = 0;
+    size_t len = 0;
     while ((item = PyIter_Next(iterator))) {
       // if (!PyTuple_Check(item) || PyTuple_Size(item) != 2) {
       //   PyErr_SetString(PyExc_RuntimeError,
@@ -651,8 +777,8 @@ static PyObject *AsgiEvent_send(AsgiEvent *self, PyObject *args) {
       // }
       key = PyTuple_GetItem(item, 0);
       value = PyTuple_GetItem(item, 1);
-      http_headers->keys[pos] = copy_pybytes(key);
-      http_headers->values[pos] = copy_pybytes(value);
+      http_headers->keys[pos] = copy_pybytes(key, &len);
+      http_headers->values[pos] = copy_pybytes(value, &len);
       Py_DECREF(item);
       pos++;
     }
@@ -669,18 +795,135 @@ static PyObject *AsgiEvent_send(AsgiEvent *self, PyObject *args) {
       send_more_body = 0;
     }
     PyObject *pybody = PyDict_GetItemString(data, "body");
-    char *body = copy_pybytes(pybody);
-    asgi_send_response(self->request_id, body, send_more_body, self);
+    size_t body_len = 0;
+    char *body = copy_pybytes(pybody, &body_len);
+    asgi_send_response(self->request_id, body, body_len, send_more_body, self);
+  } else if (PyUnicode_CompareWithASCIIString(data_type, "websocket.accept") ==
+             0) {
+    if (self->websockets_state == WS_DISCONNECTED) {
+      goto websocket_error;
+    }
+
+    PyObject *headers = PyDict_GetItemString(data, "headers");
+    PyObject *subprotocol = PyDict_GetItemString(data, "subprotocol");
+
+    Py_ssize_t headers_count = 0;
+    PyObject *iterator = NULL;
+    if (headers) {
+      iterator = PyObject_GetIter(headers);
+      if (PyTuple_Check(headers)) {
+        headers_count = PyTuple_Size(headers);
+      } else if (PyList_Check(headers)) {
+        headers_count = PyList_Size(headers);
+      }
+    }
+    if (subprotocol && subprotocol != Py_None) {
+      headers_count += 1;
+    }
+
+    MapKeyVal *http_headers = MapKeyVal_new(headers_count);
+    size_t pos = 0;
+    size_t len = 0;
+
+    if (iterator) {
+      PyObject *key, *value, *item;
+      while ((item = PyIter_Next(iterator))) {
+        // if (!PyTuple_Check(item) || PyTuple_Size(item) != 2) {
+        //   PyErr_SetString(PyExc_RuntimeError,
+        //                   "expected response headers to be tuples with 2
+        //                   items");
+        //   PyErr_Print();
+        //   Py_DECREF(item);
+        //   Py_DECREF(iterator);
+        //   MapKeyVal_free(http_headers, pos);
+        //   goto finalize_error;
+        // }
+        key = PyTuple_GetItem(item, 0);
+        value = PyTuple_GetItem(item, 1);
+        http_headers->keys[pos] = copy_pybytes(key, &len);
+        http_headers->values[pos] = copy_pybytes(value, &len);
+        Py_DECREF(item);
+        pos++;
+      }
+      Py_DECREF(iterator);
+    }
+
+    if (subprotocol && subprotocol != Py_None) {
+      http_headers->keys[pos] =
+          concatenate_strings("sec-websocket-protocol", "");
+      http_headers->values[pos] = copy_pybytes(subprotocol, &len);
+      pos++;
+    }
+
+    asgi_set_headers(self->request_id, 101, http_headers, self);
+
+    if (self->websockets_state == WS_DISCONNECTED) {
+      goto websocket_error;
+    }
+  } else if (PyUnicode_CompareWithASCIIString(data_type, "websocket.send") ==
+             0) {
+
+    if (self->websockets_state == WS_DISCONNECTED) {
+      goto websocket_error;
+    }
+
+    PyObject *data_text = PyDict_GetItemString(data, "text");
+    char *body = NULL;
+    size_t body_len = 0;
+    uint8_t message_type = 0;
+    if (data_text) {
+      body = copy_pystring(data_text);
+      message_type = 0;
+    } else {
+      body = copy_pybytes(PyDict_GetItemString(data, "bytes"), &body_len);
+      message_type = 1;
+    }
+    asgi_send_response_websocket(self->request_id, body, body_len, message_type,
+                                 self);
+
+    if (self->websockets_state == WS_DISCONNECTED) {
+      goto websocket_error;
+    }
+  } else if (PyUnicode_CompareWithASCIIString(data_type, "websocket.close") ==
+             0) {
+
+    if (self->websockets_state == WS_DISCONNECTED) {
+      goto websocket_error;
+    }
+
+    PyObject *close_code = PyDict_GetItemString(data, "code");
+    PyObject *close_reason = PyDict_GetItemString(data, "reason");
+    int code = 1000;
+    if (close_code) {
+      code = PyLong_AsLong(close_code);
+    }
+    char *reason = NULL;
+    if (close_reason) {
+      reason = copy_pystring(close_reason);
+    }
+
+    asgi_cancel_request_websocket(self->request_id, reason, code);
+
+    if (self->websockets_state == WS_DISCONNECTED) {
+      goto websocket_error;
+    }
   }
+  goto finalize_send;
+
+  PyObject *exc_instance;
+websocket_error:
+  exc_instance = PyObject_CallObject(websocket_closed, NULL);
+  PyErr_SetObject(websocket_closed, exc_instance);
+  Py_DECREF(exc_instance);
   Py_RETURN_NONE;
+
+finalize_send:
+  // WARNING: should I incref here?
+  Py_INCREF(self->event_ts_send);
+  return self->event_ts_send;
 }
 
 static PyMethodDef AsgiEvent_methods[] = {
-    {"wait", (PyCFunction)AsgiEvent_wait, METH_VARARGS,
-     "Wait until ASGI Event is set, calls the underlying asnycio.Event set() "
-     "method."},
-    {"clear", (PyCFunction)AsgiEvent_clear, METH_VARARGS,
-     "Clear ASGI Event, calls the underlying asnycio.Event clear() method."},
     {"receive_start", (PyCFunction)AsgiEvent_receive_start, METH_VARARGS,
      "Start reading receive data."},
     {"receive_end", (PyCFunction)AsgiEvent_receive_end, METH_VARARGS,
@@ -706,7 +949,7 @@ static PyTypeObject AsgiEventType = {
 void AsgiApp_handle_request(AsgiApp *app, uint64_t request_id, MapKeyVal *scope,
                             MapKeyVal *headers, const char *client_host,
                             int client_port, const char *server_host,
-                            int server_port) {
+                            int server_port, const char *subprotocols) {
   PyGILState_STATE gstate = PyGILState_Ensure();
 
   PyObject *scope_dict = PyDict_New();
@@ -753,6 +996,21 @@ void AsgiApp_handle_request(AsgiApp *app, uint64_t request_id, MapKeyVal *scope,
   PyDict_SetItemString(scope_dict, "state", state);
   Py_DECREF(state);
 
+  if (subprotocols) {
+    PyObject *py_subprotocols = PyUnicode_FromString(subprotocols);
+    PyObject *split_list =
+        PyObject_CallMethod(py_subprotocols, "split", "s", ",");
+    if (!split_list) {
+      if (PyErr_Occurred()) {
+        PyErr_Clear();
+      }
+    } else {
+      PyDict_SetItemString(scope_dict, "subprotocols", split_list);
+      Py_DECREF(split_list);
+    }
+    Py_DECREF(py_subprotocols);
+  }
+
   AsgiEvent *asgi_event =
       (AsgiEvent *)PyObject_CallObject((PyObject *)&AsgiEventType, NULL);
   asgi_event->app = app;
@@ -761,11 +1019,14 @@ void AsgiApp_handle_request(AsgiApp *app, uint64_t request_id, MapKeyVal *scope,
   PyObject *noargs = PyTuple_New(0);
   PyObject *kwargs = PyDict_New();
   PyDict_SetItemString(kwargs, "loop", asyncio_Loop);
-  asgi_event->event_ts = PyObject_Call(asyncio_Event_ts, noargs, kwargs);
+  asgi_event->event_ts_send = PyObject_Call(asyncio_Event_ts, noargs, kwargs);
+  asgi_event->event_ts_receive =
+      PyObject_Call(asyncio_Event_ts, noargs, kwargs);
   Py_DECREF(kwargs);
   Py_DECREF(noargs);
 #else
-  asgi_event->event_ts = PyObject_CallNoArgs(asyncio_Event_ts);
+  asgi_event->event_ts_send = PyObject_CallNoArgs(asyncio_Event_ts);
+  asgi_event->event_ts_receive = PyObject_CallNoArgs(asyncio_Event_ts);
 #endif
 
   PyObject *receive =
@@ -876,6 +1137,7 @@ void Py_init_and_release_gil(const char *setup_py) {
   build_receive = PyTuple_GetItem(asgi_setup_result, 1);
   build_send = PyTuple_GetItem(asgi_setup_result, 2);
   build_lifespan = PyTuple_GetItem(asgi_setup_result, 3);
+  websocket_closed = PyTuple_GetItem(asgi_setup_result, 4);
   PyRun_SimpleString("del caddysnake_setup_asgi");
   // Setup ASGI version
   asgi_version = PyDict_New();
