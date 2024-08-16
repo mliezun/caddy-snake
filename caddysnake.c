@@ -46,7 +46,7 @@ char *copy_pystring(PyObject *pystr) {
   if (result == NULL) {
     return NULL;
   }
-  memcpy(result, og_str, og_size);
+  strcpy(result, og_str);
   return result;
 }
 
@@ -57,8 +57,7 @@ char *copy_pybytes(PyObject *pybytes, size_t *size) {
   if (PyBytes_AsStringAndSize(pybytes, &og_str, &og_size) < 0) {
     return NULL;
   }
-  size_t new_str_len = og_size + 1;
-  char *result = malloc(new_str_len * sizeof(char));
+  char *result = malloc(og_size * sizeof(char));
   if (result == NULL) {
     return NULL;
   }
