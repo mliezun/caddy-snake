@@ -124,7 +124,7 @@ func (m *CaddySnake) Validate() error {
 
 // Cleanup frees resources uses by module
 func (m *CaddySnake) Cleanup() error {
-	if m.app != nil {
+	if m != nil && m.app != nil {
 		m.logger.Info("cleaning up module")
 		return m.app.Cleanup()
 	}
@@ -502,7 +502,7 @@ func NewAsgi(asgi_pattern string, venv_path string, lifespan bool) (*Asgi, error
 
 // Cleanup deallocates CGO resources used by Asgi app
 func (m *Asgi) Cleanup() (err error) {
-	if m.app != nil {
+	if m != nil && m.app != nil {
 		asgi_lock.Lock()
 		if _, ok := asgiapp_cache[m.asgi_pattern]; !ok {
 			asgi_lock.Unlock()

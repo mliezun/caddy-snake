@@ -897,8 +897,9 @@ static PyObject *AsgiEvent_send(AsgiEvent *self, PyObject *args) {
   }
   goto finalize_send;
 
+  PyObject *exc_instance;
 websocket_error:
-  PyObject *exc_instance = PyObject_CallObject(websocket_closed, NULL);
+  exc_instance = PyObject_CallObject(websocket_closed, NULL);
   PyErr_SetObject(websocket_closed, exc_instance);
   Py_DECREF(exc_instance);
 
