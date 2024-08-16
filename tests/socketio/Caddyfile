@@ -1,0 +1,19 @@
+{
+	http_port 9080
+	https_port 9443
+	log {
+		level info
+	}
+}
+localhost:9080 {
+	route /socket.io/* {
+		python {
+			module_asgi "main:app"
+			venv "./venv"
+		}
+	}
+
+	route / {
+		respond 404
+	}
+}

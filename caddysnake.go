@@ -764,7 +764,7 @@ func asgi_receive_start(request_id C.uint64_t, event *C.AsgiEvent) C.uint8_t {
 			// TODO: this shouldn't happen, what do I do here?
 			fmt.Println("SHOULD NOT SEE THIS - PLEASE REPORT")
 		case WS_CONNECTED:
-			arh.operations <- AsgiOperations{op: func() {
+			go func() {
 				mt, message, err := arh.websocket_conn.ReadMessage()
 				if err != nil {
 					closeError, isClose := err.(*websocket.CloseError)
@@ -778,7 +778,7 @@ func asgi_receive_start(request_id C.uint64_t, event *C.AsgiEvent) C.uint8_t {
 					arh.websocket_conn.Close()
 					runtime.LockOSThread()
 					C.AsgiEvent_disconnect_websocket(event)
-					C.AsgiEvent_set_websocket(event, body_str, C.uint8_t(0))
+					C.AsgiEvent_set_websocket(event, body_str, C.uint8_t(0), C.uint8_t(0))
 					runtime.UnlockOSThread()
 					arh.done <- fmt.Errorf("websocket closed: %d", closeCode)
 					return
@@ -792,22 +792,22 @@ func asgi_receive_start(request_id C.uint64_t, event *C.AsgiEvent) C.uint8_t {
 				}
 
 				runtime.LockOSThread()
-				C.AsgiEvent_set_websocket(event, body_str, message_type)
+				C.AsgiEvent_set_websocket(event, body_str, message_type, C.uint8_t(0))
 				runtime.UnlockOSThread()
-			}}
+			}()
 		case WS_DISCONNECTED:
-			arh.operations <- AsgiOperations{op: func() {
+			go func() {
 				runtime.LockOSThread()
 				C.AsgiEvent_disconnect_websocket(event)
-				C.AsgiEvent_set(event, nil, C.uint8_t(0))
+				C.AsgiEvent_set(event, nil, C.uint8_t(0), C.uint8_t(0))
 				runtime.UnlockOSThread()
 				arh.done <- errors.New("websocket closed - receive start")
-			}}
+			}()
 		default:
 			arh.websocket_state = WS_STARTING
 			runtime.LockOSThread()
 			C.AsgiEvent_connect_websocket(event)
-			C.AsgiEvent_set(event, nil, C.uint8_t(0))
+			C.AsgiEvent_set(event, nil, C.uint8_t(0), C.uint8_t(0))
 			runtime.UnlockOSThread()
 		}
 		return C.uint8_t(1)
@@ -835,7 +835,7 @@ func asgi_receive_start(request_id C.uint64_t, event *C.AsgiEvent) C.uint8_t {
 		}
 
 		runtime.LockOSThread()
-		C.AsgiEvent_set(event, body_str, more_body)
+		C.AsgiEvent_set(event, body_str, more_body, C.uint8_t(0))
 		runtime.UnlockOSThread()
 	}}
 
@@ -876,7 +876,7 @@ func asgi_set_headers(request_id C.uint64_t, status_code C.int, headers *C.MapKe
 				arh.websocket_conn.Close()
 				runtime.LockOSThread()
 				C.AsgiEvent_disconnect_websocket(event)
-				C.AsgiEvent_set(event, nil, C.uint8_t(0))
+				C.AsgiEvent_set(event, nil, C.uint8_t(0), C.uint8_t(1))
 				runtime.UnlockOSThread()
 				return
 			}
@@ -884,12 +884,12 @@ func asgi_set_headers(request_id C.uint64_t, status_code C.int, headers *C.MapKe
 			arh.websocket_conn = ws_conn
 
 			runtime.LockOSThread()
-			C.AsgiEvent_set(event, nil, C.uint8_t(0))
+			C.AsgiEvent_set(event, nil, C.uint8_t(0), C.uint8_t(1))
 			runtime.UnlockOSThread()
 		case WS_DISCONNECTED:
 			runtime.LockOSThread()
 			C.AsgiEvent_disconnect_websocket(event)
-			C.AsgiEvent_set(event, nil, C.uint8_t(0))
+			C.AsgiEvent_set(event, nil, C.uint8_t(0), C.uint8_t(1))
 			runtime.UnlockOSThread()
 		}
 		return
@@ -916,7 +916,7 @@ func asgi_set_headers(request_id C.uint64_t, status_code C.int, headers *C.MapKe
 		arh.w.WriteHeader(int(status_code))
 
 		runtime.LockOSThread()
-		C.AsgiEvent_set(event, nil, C.uint8_t(0))
+		C.AsgiEvent_set(event, nil, C.uint8_t(0), C.uint8_t(1))
 		runtime.UnlockOSThread()
 	}}
 }
@@ -944,7 +944,7 @@ func asgi_send_response(request_id C.uint64_t, body *C.char, more_body C.uint8_t
 		}
 
 		runtime.LockOSThread()
-		C.AsgiEvent_set(event, nil, C.uint8_t(0))
+		C.AsgiEvent_set(event, nil, C.uint8_t(0), C.uint8_t(1))
 		runtime.UnlockOSThread()
 	}}
 }
@@ -966,20 +966,19 @@ func asgi_send_response_websocket(request_id C.uint64_t, body *C.char, message_t
 		} else {
 			ws_message_type = websocket.BinaryMessage
 		}
-
 		err := arh.websocket_conn.WriteMessage(ws_message_type, body_bytes)
 		if err != nil {
 			arh.websocket_state = WS_DISCONNECTED
 			arh.websocket_conn.Close()
 			runtime.LockOSThread()
 			C.AsgiEvent_disconnect_websocket(event)
-			C.AsgiEvent_set(event, nil, C.uint8_t(0))
+			C.AsgiEvent_set(event, nil, C.uint8_t(0), C.uint8_t(1))
 			runtime.UnlockOSThread()
 			return
 		}
 
 		runtime.LockOSThread()
-		C.AsgiEvent_set(event, nil, C.uint8_t(0))
+		C.AsgiEvent_set(event, nil, C.uint8_t(0), C.uint8_t(1))
 		runtime.UnlockOSThread()
 	}}
 }

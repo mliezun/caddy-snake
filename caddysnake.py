@@ -32,9 +32,10 @@ def caddysnake_setup_asgi(loop):
 
     def build_receive(asgi_event):
         async def receive():
-            if asgi_event.receive_start():
-                await asgi_event.wait()
-                asgi_event.clear()
+            ev = asgi_event.receive_start()
+            if ev:
+                await ev.wait()
+                ev.clear()
                 result = asgi_event.receive_end()
                 return result
             else:
@@ -44,9 +45,9 @@ def caddysnake_setup_asgi(loop):
 
     def build_send(asgi_event):
         async def send(data):
-            asgi_event.send(data)
-            await asgi_event.wait()
-            asgi_event.clear()
+            ev = asgi_event.send(data)
+            await ev.wait()
+            ev.clear()
 
         return send
 

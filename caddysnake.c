@@ -503,7 +503,8 @@ uint8_t AsgiApp_lifespan_shutdown(AsgiApp *app) {
 struct AsgiEvent {
   PyObject_HEAD AsgiApp *app;
   uint64_t request_id;
-  PyObject *event_ts;
+  PyObject *event_ts_send;
+  PyObject *event_ts_receive;
   PyObject *future;
   PyObject *request_body;
   uint8_t more_body;
@@ -520,7 +521,8 @@ static PyObject *AsgiEvent_new(PyTypeObject *type, PyObject *args,
   self = (AsgiEvent *)type->tp_alloc(type, 0);
   if (self != NULL) {
     self->request_id = 0;
-    self->event_ts = NULL;
+    self->event_ts_send = NULL;
+    self->event_ts_receive = NULL;
     self->future = NULL;
     self->request_body = NULL;
     self->more_body = 0;
@@ -530,7 +532,8 @@ static PyObject *AsgiEvent_new(PyTypeObject *type, PyObject *args,
 }
 
 static void AsgiEvent_dealloc(AsgiEvent *self) {
-  Py_XDECREF(self->event_ts);
+  Py_XDECREF(self->event_ts_send);
+  Py_XDECREF(self->event_ts_receive);
   // Future is freed in AsgiEvent_result
   // Py_XDECREF(self->future);
   // Request body is also freed in AsgiEvent_set
@@ -544,7 +547,8 @@ void AsgiEvent_cleanup(AsgiEvent *event) {
   PyGILState_Release(gstate);
 }
 
-void AsgiEvent_set(AsgiEvent *self, const char *body, uint8_t more_body) {
+void AsgiEvent_set(AsgiEvent *self, const char *body, uint8_t more_body,
+                   uint8_t is_send) {
   PyGILState_STATE gstate = PyGILState_Ensure();
   if (body) {
     if (self->request_body) {
@@ -553,14 +557,19 @@ void AsgiEvent_set(AsgiEvent *self, const char *body, uint8_t more_body) {
     self->request_body = PyBytes_FromString(body);
   }
   self->more_body = more_body;
-  PyObject *set_fn = PyObject_GetAttrString((PyObject *)self->event_ts, "set");
+  PyObject *set_fn = NULL;
+  if (is_send) {
+    set_fn = PyObject_GetAttrString((PyObject *)self->event_ts_send, "set");
+  } else {
+    set_fn = PyObject_GetAttrString((PyObject *)self->event_ts_receive, "set");
+  }
   PyObject_CallNoArgs(set_fn);
   Py_DECREF(set_fn);
   PyGILState_Release(gstate);
 }
 
 void AsgiEvent_set_websocket(AsgiEvent *self, const char *body,
-                             uint8_t message_type) {
+                             uint8_t message_type, uint8_t is_send) {
   PyGILState_STATE gstate = PyGILState_Ensure();
   if (body) {
     if (!self->request_body) {
@@ -576,7 +585,12 @@ void AsgiEvent_set_websocket(AsgiEvent *self, const char *body,
     PyList_Append(self->request_body, tuple);
     Py_DECREF(tuple); // WARNING: not sure if this should go here
   }
-  PyObject *set_fn = PyObject_GetAttrString((PyObject *)self->event_ts, "set");
+  PyObject *set_fn = NULL;
+  if (is_send) {
+    set_fn = PyObject_GetAttrString((PyObject *)self->event_ts_send, "set");
+  } else {
+    set_fn = PyObject_GetAttrString((PyObject *)self->event_ts_receive, "set");
+  }
   PyObject_CallNoArgs(set_fn);
   Py_DECREF(set_fn);
   PyGILState_Release(gstate);
@@ -590,29 +604,16 @@ void AsgiEvent_disconnect_websocket(AsgiEvent *self) {
   self->websockets_state = WS_DISCONNECTED;
 }
 
-static PyObject *AsgiEvent_wait(AsgiEvent *self, PyObject *args) {
-  PyObject *wait_fn =
-      PyObject_GetAttrString((PyObject *)self->event_ts, "wait");
-  PyObject *coro = PyObject_CallNoArgs(wait_fn);
-  Py_DECREF(wait_fn);
-  return coro;
-}
-
-static PyObject *AsgiEvent_clear(AsgiEvent *self, PyObject *args) {
-  PyObject *clear_fn =
-      PyObject_GetAttrString((PyObject *)self->event_ts, "clear");
-  PyObject_CallNoArgs(clear_fn);
-  Py_DECREF(clear_fn);
-  Py_RETURN_NONE;
-}
-
 static PyObject *AsgiEvent_receive_start(AsgiEvent *self, PyObject *args) {
   PyObject *result = Py_False;
   if (asgi_receive_start(self->request_id, self) == 1) {
-    result = Py_True;
+    // WARNING: should I incref here?
+    Py_INCREF(self->event_ts_receive);
+    result = self->event_ts_receive;
   }
 #if PY_MINOR_VERSION < 12
-  Py_INCREF(result);
+  if (result == Py_False)
+    Py_INCREF(result);
 #endif
   return result;
 }
@@ -803,39 +804,46 @@ static PyObject *AsgiEvent_send(AsgiEvent *self, PyObject *args) {
     PyObject *headers = PyDict_GetItemString(data, "headers");
     PyObject *subprotocol = PyDict_GetItemString(data, "subprotocol");
 
-    PyObject *iterator = PyObject_GetIter(headers);
     Py_ssize_t headers_count = 0;
-    if (PyTuple_Check(headers)) {
-      headers_count = PyTuple_Size(headers);
-    } else if (PyList_Check(headers)) {
-      headers_count = PyList_Size(headers);
+    PyObject *iterator = NULL;
+    if (headers) {
+      iterator = PyObject_GetIter(headers);
+      if (PyTuple_Check(headers)) {
+        headers_count = PyTuple_Size(headers);
+      } else if (PyList_Check(headers)) {
+        headers_count = PyList_Size(headers);
+      }
     }
     if (subprotocol && subprotocol != Py_None) {
       headers_count += 1;
     }
-    MapKeyVal *http_headers = MapKeyVal_new(headers_count);
 
-    PyObject *key, *value, *item;
+    MapKeyVal *http_headers = MapKeyVal_new(headers_count);
     size_t pos = 0;
-    while ((item = PyIter_Next(iterator))) {
-      // if (!PyTuple_Check(item) || PyTuple_Size(item) != 2) {
-      //   PyErr_SetString(PyExc_RuntimeError,
-      //                   "expected response headers to be tuples with 2
-      //                   items");
-      //   PyErr_Print();
-      //   Py_DECREF(item);
-      //   Py_DECREF(iterator);
-      //   MapKeyVal_free(http_headers, pos);
-      //   goto finalize_error;
-      // }
-      key = PyTuple_GetItem(item, 0);
-      value = PyTuple_GetItem(item, 1);
-      http_headers->keys[pos] = copy_pybytes(key);
-      http_headers->values[pos] = copy_pybytes(value);
-      Py_DECREF(item);
-      pos++;
+
+    if (iterator) {
+      PyObject *key, *value, *item;
+      size_t pos = 0;
+      while ((item = PyIter_Next(iterator))) {
+        // if (!PyTuple_Check(item) || PyTuple_Size(item) != 2) {
+        //   PyErr_SetString(PyExc_RuntimeError,
+        //                   "expected response headers to be tuples with 2
+        //                   items");
+        //   PyErr_Print();
+        //   Py_DECREF(item);
+        //   Py_DECREF(iterator);
+        //   MapKeyVal_free(http_headers, pos);
+        //   goto finalize_error;
+        // }
+        key = PyTuple_GetItem(item, 0);
+        value = PyTuple_GetItem(item, 1);
+        http_headers->keys[pos] = copy_pybytes(key);
+        http_headers->values[pos] = copy_pybytes(value);
+        Py_DECREF(item);
+        pos++;
+      }
+      Py_DECREF(iterator);
     }
-    Py_DECREF(iterator);
 
     if (subprotocol && subprotocol != Py_None) {
       http_headers->keys[pos] =
@@ -902,17 +910,15 @@ websocket_error:
   exc_instance = PyObject_CallObject(websocket_closed, NULL);
   PyErr_SetObject(websocket_closed, exc_instance);
   Py_DECREF(exc_instance);
+  Py_RETURN_NONE;
 
 finalize_send:
-  Py_RETURN_NONE;
+  // WARNING: should I incref here?
+  Py_INCREF(self->event_ts_send);
+  return self->event_ts_send;
 }
 
 static PyMethodDef AsgiEvent_methods[] = {
-    {"wait", (PyCFunction)AsgiEvent_wait, METH_VARARGS,
-     "Wait until ASGI Event is set, calls the underlying asnycio.Event set() "
-     "method."},
-    {"clear", (PyCFunction)AsgiEvent_clear, METH_VARARGS,
-     "Clear ASGI Event, calls the underlying asnycio.Event clear() method."},
     {"receive_start", (PyCFunction)AsgiEvent_receive_start, METH_VARARGS,
      "Start reading receive data."},
     {"receive_end", (PyCFunction)AsgiEvent_receive_end, METH_VARARGS,
@@ -1008,11 +1014,14 @@ void AsgiApp_handle_request(AsgiApp *app, uint64_t request_id, MapKeyVal *scope,
   PyObject *noargs = PyTuple_New(0);
   PyObject *kwargs = PyDict_New();
   PyDict_SetItemString(kwargs, "loop", asyncio_Loop);
-  asgi_event->event_ts = PyObject_Call(asyncio_Event_ts, noargs, kwargs);
+  asgi_event->event_ts_send = PyObject_Call(asyncio_Event_ts, noargs, kwargs);
+  asgi_event->event_ts_receive =
+      PyObject_Call(asyncio_Event_ts, noargs, kwargs);
   Py_DECREF(kwargs);
   Py_DECREF(noargs);
 #else
-  asgi_event->event_ts = PyObject_CallNoArgs(asyncio_Event_ts);
+  asgi_event->event_ts_send = PyObject_CallNoArgs(asyncio_Event_ts);
+  asgi_event->event_ts_receive = PyObject_CallNoArgs(asyncio_Event_ts);
 #endif
 
   PyObject *receive =
