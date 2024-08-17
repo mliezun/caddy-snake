@@ -57,11 +57,12 @@ char *copy_pybytes(PyObject *pybytes, size_t *size) {
   if (PyBytes_AsStringAndSize(pybytes, &og_str, &og_size) < 0) {
     return NULL;
   }
-  char *result = malloc(og_size * sizeof(char));
+  char *result = malloc((og_size + 1) * sizeof(char));
   if (result == NULL) {
     return NULL;
   }
   memcpy(result, og_str, og_size);
+  result[og_size] = '\0';
   *size = (size_t)og_size;
   return result;
 }
