@@ -161,6 +161,7 @@ type WsgiRequestHandler struct {
 	status_code C.int
 	headers     *C.MapKeyVal
 	body        *C.char
+	body_size   C.size_t
 }
 
 var wsgi_lock sync.RWMutex = sync.RWMutex{}
@@ -420,7 +421,8 @@ func (m *Wsgi) HandleRequest(w http.ResponseWriter, r *http.Request) error {
 
 	if h.body != nil {
 		defer C.free(unsafe.Pointer(h.body))
-		w.Write([]byte(C.GoString(h.body)))
+		body_bytes := C.GoBytes(unsafe.Pointer(h.body), C.int(h.body_size))
+		w.Write(body_bytes)
 	} else if h.status_code == 500 {
 		w.Write([]byte("Interal Server Error"))
 	}
@@ -429,13 +431,14 @@ func (m *Wsgi) HandleRequest(w http.ResponseWriter, r *http.Request) error {
 }
 
 //export wsgi_write_response
-func wsgi_write_response(request_id C.int64_t, status_code C.int, headers *C.MapKeyVal, body *C.char) {
+func wsgi_write_response(request_id C.int64_t, status_code C.int, headers *C.MapKeyVal, body *C.char, body_size C.size_t) {
 	wsgi_lock.Lock()
 	defer wsgi_lock.Unlock()
 	ch := wsgi_handlers[int64(request_id)]
 	ch <- WsgiRequestHandler{
 		status_code: status_code,
 		body:        body,
+		body_size:   body_size,
 		headers:     headers,
 	}
 	delete(wsgi_handlers, int64(request_id))
