@@ -38,22 +38,6 @@ char *concatenate_strings(const char *str1, const char *str2) {
   return result;
 }
 
-char *concatenate_bytes(const char *buffer1, size_t size1, const char *buffer2,
-                        size_t size2, size_t *out_size) {
-  if (buffer1 == NULL || buffer2 == NULL || out_size == NULL) {
-    return NULL;
-  }
-  size_t total_size = size1 + size2;
-  char *result = (char *)malloc(total_size);
-  if (result == NULL) {
-    return NULL;
-  }
-  memcpy(result, buffer1, size1);
-  memcpy(result + size1, buffer2, size2);
-  *out_size = total_size;
-  return result;
-}
-
 char *copy_pystring(PyObject *pystr) {
   Py_ssize_t og_size = 0;
   const char *og_str = PyUnicode_AsUTF8AndSize(pystr, &og_size);
@@ -305,7 +289,6 @@ static PyObject *response_callback(PyObject *self, PyObject *args) {
   }
 
   char *response_body = NULL;
-  size_t response_body_size = 0;
   if (response->response_body) {
     PyObject *iterator = PyObject_GetIter(response->response_body);
     if (iterator) {
@@ -327,18 +310,10 @@ static PyObject *response_callback(PyObject *self, PyObject *args) {
         }
         char *previous_body = response_body;
         if (previous_body == NULL) {
-          char *og_str;
-          Py_ssize_t og_size;
-          PyBytes_AsStringAndSize(item, &og_str, &og_size);
-          response_body =
-              concatenate_bytes("", 0, og_str, og_size, &response_body_size);
+          response_body = concatenate_strings("", PyBytes_AsString(item));
         } else {
-          char *og_str;
-          Py_ssize_t og_size;
-          PyBytes_AsStringAndSize(item, &og_str, &og_size);
           response_body =
-              concatenate_bytes(previous_body, response_body_size, og_str,
-                                og_size, &response_body_size);
+              concatenate_strings(previous_body, PyBytes_AsString(item));
           free(previous_body);
         }
         Py_DECREF(item);
@@ -421,14 +396,14 @@ static PyObject *response_callback(PyObject *self, PyObject *args) {
   }
   Py_DECREF(iterator);
 
-  Py_BEGIN_ALLOW_THREADS wsgi_write_response(
-      response->request_id, response->response_status, http_headers,
-      response_body, response_body_size);
+  Py_BEGIN_ALLOW_THREADS wsgi_write_response(response->request_id,
+                                             response->response_status,
+                                             http_headers, response_body);
   Py_END_ALLOW_THREADS goto end;
 
 finalize_error:
   Py_BEGIN_ALLOW_THREADS wsgi_write_response(response->request_id, 500, NULL,
-                                             NULL, 0);
+                                             NULL);
   Py_END_ALLOW_THREADS
 
       end : Py_RETURN_NONE;

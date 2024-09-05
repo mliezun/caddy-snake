@@ -20,7 +20,7 @@ WsgiApp *WsgiApp_import(const char *, const char *, const char *);
 void WsgiApp_handle_request(WsgiApp *, int64_t, MapKeyVal *, const char *);
 void WsgiApp_cleanup(WsgiApp *);
 
-extern void wsgi_write_response(int64_t, int, MapKeyVal *, char *, size_t);
+extern void wsgi_write_response(int64_t, int, MapKeyVal *, char *);
 
 // ASGI 3.0 protocol
 
