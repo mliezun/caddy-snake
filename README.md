@@ -1,7 +1,5 @@
 # Caddy Snake 🐍
 
-[![Integration Tests](https://github.com/mliezun/caddy-snake/actions/workflows/integration_tests.yaml/badge.svg)](https://github.com/mliezun/caddy-snake/actions/workflows/integration_tests.yaml)
-
 > [Caddy](https://github.com/caddyserver/caddy) is a powerful, enterprise-ready, open source web server with automatic HTTPS written in Go.
 
 This plugin provides native support for Python apps.
