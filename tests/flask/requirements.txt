@@ -5,7 +5,7 @@ importlib_metadata==7.1.0
 itsdangerous==2.2.0
 Jinja2==3.1.4
 MarkupSafe==2.1.5
-Werkzeug==3.0.3
+Werkzeug==3.0.6
 zipp==3.19.1
 requests==2.31.0
 certifi==2024.7.4
