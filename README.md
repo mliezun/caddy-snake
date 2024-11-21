@@ -120,7 +120,7 @@ There are docker images available with the following Python versions: `3.9`, `3.
 Example usage:
 
 ```Dockerfile
-FROM ghcr.io/mliezun/caddy-snake:latest-py3.12
+FROM mliezun/caddy-snake:latest-py3.12
 
 WORKDIR /app
 
@@ -130,6 +130,11 @@ COPY . /app
 # Caddy snake is already installed and has support for Python 3.12
 CMD ["caddy", "run", "--config", "/app/Caddyfile"]
 ```
+
+Images are available both in Docker Hub and Github Container Registry:
+
+- [https://hub.docker.com/r/mliezun/caddy-snake](https://hub.docker.com/r/mliezun/caddy-snake)
+- [https://github.com/mliezun/caddy-snake/pkgs/container/caddy-snake](https://github.com/mliezun/caddy-snake/pkgs/container/caddy-snake)
 
 ### Build with Docker
 
