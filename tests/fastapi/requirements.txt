@@ -1,7 +1,7 @@
 annotated-types==0.6.0
 anyio==4.3.0
 exceptiongroup==1.2.1
-fastapi==0.110.3
+fastapi==0.115.4
 idna==3.7
 pydantic==2.7.1
 pydantic_core==2.18.2
