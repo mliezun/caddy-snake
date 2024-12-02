@@ -36,6 +36,9 @@
             run: sudo pip install requests
           - name: Run module tests
             run: go test -race -v ./...
+          - name: Update coverage report
+            uses: ncruces/go-coverage-report@v0
+            continue-on-error: true
           - name: Build the server
             run: CGO_ENABLED=1 xcaddy build --with github.com/mliezun/caddy-snake=.
           
