@@ -38,6 +38,8 @@
             run: go test -race -v ./...
           - name: Update coverage report
             uses: ncruces/go-coverage-report@v0
+            env:
+              GH_PAT: ${{ secrets.GH_PAT }}
             continue-on-error: true
           - name: Build the server
             run: CGO_ENABLED=1 xcaddy build --with github.com/mliezun/caddy-snake=.
