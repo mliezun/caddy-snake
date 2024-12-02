@@ -19,7 +19,7 @@ CGO_ENABLED=1 xcaddy build --with github.com/mliezun/caddy-snake
 
 #### Requirements
 
-- Python >= 3.9 + dev files
+- Python >= 3.10 + dev files
 - C compiler and build tools
 - Go >= 1.21 and [Xcaddy](https://github.com/caddyserver/xcaddy)
 
@@ -116,7 +116,7 @@ See how to setup [Hot Reloading](#hot-reloading)
 
 ## Use docker image
 
-There are docker images available with the following Python versions: `3.9`, `3.10`, `3.11`, `3.12`
+There are docker images available with the following Python versions: `3.10`, `3.11`, `3.12`, `3.13`.
 
 Example usage:
 
@@ -146,7 +146,7 @@ Make sure to use the same Python version as you have installed in your system.
 You can copy the contents of the builder Dockerfile and execute the following commands to get your Caddy binary: 
 
 ```bash
-docker build -f builder.Dockerfile --build-arg PY_VERSION=3.9 -t caddy-snake .
+docker build -f builder.Dockerfile --build-arg PY_VERSION=3.11 -t caddy-snake .
 ```
 
 ```bash

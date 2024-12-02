@@ -10,7 +10,7 @@ import (
 func TestFindSitePackagesInVenv(t *testing.T) {
 	// Set up a temporary directory for the virtual environment simulation
 	tempDir := t.TempDir()
-	venvLibPath := filepath.Join(tempDir, "lib", "python3.9", "site-packages")
+	venvLibPath := filepath.Join(tempDir, "lib", "python3.12", "site-packages")
 
 	// Create the directory structure
 	err := os.MkdirAll(venvLibPath, 0755)
@@ -53,9 +53,9 @@ func TestFindSitePackagesInVenv_NoPythonDirectory(t *testing.T) {
 func TestFindSitePackagesInVenv_NoSitePackages(t *testing.T) {
 	// Set up a temporary directory for the virtual environment simulation
 	tempDir := t.TempDir()
-	libPath := filepath.Join(tempDir, "lib", "python3.9")
+	libPath := filepath.Join(tempDir, "lib", "python3.12")
 
-	// Create the lib/python3.9 directory, but omit site-packages
+	// Create the lib/python3.12 directory, but omit site-packages
 	err := os.MkdirAll(libPath, 0755)
 	if err != nil {
 		t.Fatalf("failed to create test directory structure: %v", err)
