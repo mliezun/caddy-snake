@@ -27,6 +27,8 @@ DEBUG = True
 
 ALLOWED_HOSTS = []
 
+# Adjust upload size for tests
+DATA_UPLOAD_MAX_MEMORY_SIZE = 256*2**20 # 256MB
 
 # Application definition
 
