@@ -47,3 +47,5 @@ jobs:
           sleep 2
           source venv/bin/activate
           python main_test.py
+          echo "CADDY LOG START"
+          cat caddy.log
