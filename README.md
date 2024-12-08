@@ -1,6 +1,7 @@
 # Caddy Snake 🐍
 
 [![Integration Tests](https://github.com/mliezun/caddy-snake/actions/workflows/integration_tests.yaml/badge.svg)](https://github.com/mliezun/caddy-snake/actions/workflows/integration_tests.yaml)
+[![Go Coverage](https://github.com/mliezun/caddy-snake/wiki/coverage.svg)](https://raw.githack.com/wiki/mliezun/caddy-snake/coverage.html)
 
 > [Caddy](https://github.com/caddyserver/caddy) is a powerful, enterprise-ready, open source web server with automatic HTTPS written in Go.
 
@@ -18,7 +19,7 @@ CGO_ENABLED=1 xcaddy build --with github.com/mliezun/caddy-snake
 
 #### Requirements
 
-- Python >= 3.9 + dev files
+- Python >= 3.10 + dev files
 - C compiler and build tools
 - Go >= 1.21 and [Xcaddy](https://github.com/caddyserver/xcaddy)
 
@@ -115,12 +116,12 @@ See how to setup [Hot Reloading](#hot-reloading)
 
 ## Use docker image
 
-There are docker images available with the following Python versions: `3.9`, `3.10`, `3.11`, `3.12`
+There are docker images available with the following Python versions: `3.10`, `3.11`, `3.12`, `3.13`.
 
 Example usage:
 
 ```Dockerfile
-FROM ghcr.io/mliezun/caddy-snake:latest-py3.12
+FROM mliezun/caddy-snake:latest-py3.12
 
 WORKDIR /app
 
@@ -131,6 +132,11 @@ COPY . /app
 CMD ["caddy", "run", "--config", "/app/Caddyfile"]
 ```
 
+Images are available both in Docker Hub and Github Container Registry:
+
+- [https://hub.docker.com/r/mliezun/caddy-snake](https://hub.docker.com/r/mliezun/caddy-snake)
+- [https://github.com/mliezun/caddy-snake/pkgs/container/caddy-snake](https://github.com/mliezun/caddy-snake/pkgs/container/caddy-snake)
+
 ### Build with Docker
 
 There's a template file in the project: [builder.Dockerfile](/builder.Dockerfile). It supports build arguments to configure which Python or Go version is desired for the build.
@@ -140,7 +146,7 @@ Make sure to use the same Python version as you have installed in your system.
 You can copy the contents of the builder Dockerfile and execute the following commands to get your Caddy binary: 
 
 ```bash
-docker build -f builder.Dockerfile --build-arg PY_VERSION=3.9 -t caddy-snake .
+docker build -f builder.Dockerfile --build-arg PY_VERSION=3.11 -t caddy-snake .
 ```
 
 ```bash

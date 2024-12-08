@@ -1,9 +1,7 @@
-name: Docker
+name: Docker Latest
 
 on:
   push:
-    tags: [ 'v*.*.*' ]
-  pull_request:
     branches: [ "main" ]
 
 env:
@@ -17,7 +15,7 @@ jobs:
   build:
     strategy:
       matrix:
-        python-version: ['3.10', '3.11', '3.12', '3.13']
+        python-version: ['3.12']
 
     runs-on: ubuntu-22.04
     permissions:
@@ -72,10 +70,8 @@ jobs:
           push: ${{ github.event_name != 'pull_request' }}
           build-args: PY_VERSION=${{ matrix.python-version }}
           tags: |
-            ${{ env.REGISTRY_GHCR }}/${{ env.IMAGE_NAME }}:${{ endsWith(github.ref_name, '/merge') && 'dev' || github.ref_name }}-py${{ matrix.python-version }}
-            ${{ env.REGISTRY_GHCR }}/${{ env.IMAGE_NAME }}:latest-py${{ matrix.python-version }}
-            ${{ env.REGISTRY_DOCKER_HUB }}/${{ env.IMAGE_NAME }}:${{ endsWith(github.ref_name, '/merge') && 'dev' || github.ref_name }}-py${{ matrix.python-version }}
-            ${{ env.REGISTRY_DOCKER_HUB }}/${{ env.IMAGE_NAME }}:latest-py${{ matrix.python-version }}
+            ${{ env.REGISTRY_GHCR }}/${{ env.IMAGE_NAME }}:latest
+            ${{ env.REGISTRY_DOCKER_HUB }}/${{ env.IMAGE_NAME }}:latest
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
