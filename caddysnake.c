@@ -1112,25 +1112,6 @@ void Py_init_and_release_gil(const char *setup_py) {
   if (PyStatus_Exception(status)) {
     goto exception;
   }
-
-  // Setting write_bytecode to False. Otherwise it causes unexpected
-  // behavior when importing modules.
-  // This was fixed at some point and wasn't necessary, but at some point
-  // something got broken again and we need it again. History:
-  //    - First introduced:
-  //    https://github.com/mliezun/caddy-snake/commit/b9a32189d2a7c38d5a2cef178288a4b33035ad76
-  //    - Then removed:
-  //    https://github.com/mliezun/caddy-snake/commit/07b1ef06123a824c09995c8b9aead773a232b8c8
-  //    - Now re-introduced because of failing fastapi tests randomly
-  //        https://github.com/mliezun/caddy-snake/actions/runs/12223073045/job/34094147721
-  //        https://github.com/mliezun/caddy-snake/actions/runs/12223073045/job/34094148155
-  // By running test locally I noticed that when I ran the tests again after
-  // re-initializing caddy but the __pycache__ was already generated the test
-  // never fail. To reproduce the failing tests I cleaned up python compiled
-  // objects with command:
-  //    find . | grep -E "(/__pycache__$|\.pyc$|\.pyo$)" | xargs rm -rf
-  config.write_bytecode = 0;
-
   status = Py_InitializeFromConfig(&config);
   if (PyStatus_Exception(status)) {
     goto exception;
