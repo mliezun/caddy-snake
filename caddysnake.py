@@ -77,14 +77,7 @@ def caddysnake_setup_asgi(loop):
             if "shutdown" in data["type"]:
                 shutdown_ok.set_result(ok)
 
-        if sys.version_info[1] < 10:
-            # Ignore loop arg deprecation warning
-            with warnings.catch_warnings():
-                warnings.simplefilter("ignore")
-                receive_queue = asyncio.Queue(loop=loop)
-        else:
-            # Loop is not needed on Python 3.10 and onwards
-            receive_queue = asyncio.Queue()
+        receive_queue = asyncio.Queue()
 
         async def receive():
             return await receive_queue.get()

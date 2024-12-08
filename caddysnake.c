@@ -309,7 +309,10 @@ static PyObject *response_callback(PyObject *self, PyObject *args) {
   if (response->response_body) {
     PyObject *iterator = PyObject_GetIter(response->response_body);
     if (iterator) {
-      PyObject *close_iterator = PyObject_GetAttrString(iterator, "close");
+      PyObject *close_iterator = NULL;
+      if (PyObject_HasAttrString(iterator, "close")) {
+        close_iterator = PyObject_GetAttrString(iterator, "close");
+      }
       PyObject *item;
       while ((item = PyIter_Next(iterator))) {
         if (!PyBytes_Check(item)) {
@@ -317,8 +320,10 @@ static PyObject *response_callback(PyObject *self, PyObject *args) {
                           "expected response body items to be bytes");
           PyErr_Print();
           Py_DECREF(item);
-          PyObject_CallNoArgs(close_iterator);
-          Py_DECREF(close_iterator);
+          if (close_iterator) {
+            PyObject_CallNoArgs(close_iterator);
+            Py_DECREF(close_iterator);
+          }
           Py_DECREF(iterator);
           if (response_body != NULL) {
             free(response_body);
@@ -343,8 +348,10 @@ static PyObject *response_callback(PyObject *self, PyObject *args) {
         }
         Py_DECREF(item);
       }
-      PyObject_CallNoArgs(close_iterator);
-      Py_DECREF(close_iterator);
+      if (close_iterator) {
+        PyObject_CallNoArgs(close_iterator);
+        Py_DECREF(close_iterator);
+      }
       Py_DECREF(iterator);
     } else {
       PyErr_Print();
