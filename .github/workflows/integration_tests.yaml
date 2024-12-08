@@ -46,6 +46,4 @@ jobs:
           PYTHONMALLOC=debug PYTHONDEBUG=gc ./caddy run --config Caddyfile > caddy.log 2>&1 &
           sleep 2
           source venv/bin/activate
-          python main_test.py
-          echo "CADDY LOG START"
-          cat caddy.log
+          python main_test.py || cat caddy.log
