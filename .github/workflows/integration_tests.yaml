@@ -13,7 +13,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        tool-name: ['fastapi', 'fastapi', 'fastapi', 'fastapi', 'fastapi', 'fastapi']
+        tool-name: ['django', 'flask', 'fastapi', 'simple', 'simple_async', 'socketio']
         python-version: ['3.10', '3.11', '3.12', '3.13']
     env:
       GOEXPERIMENT: cgocheck2
