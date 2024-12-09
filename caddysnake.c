@@ -502,7 +502,7 @@ uint8_t AsgiApp_lifespan_startup(AsgiApp *app) {
   PyTuple_SetItem(args, 0, app->handler);
   PyTuple_SetItem(args, 1, app->state);
   PyObject *result = PyObject_Call(build_lifespan, args, NULL);
-  // Py_DECREF(args);
+  Py_DECREF(args);
 
   PyObject *lifespan_startup = PyTuple_GetItem(result, 0);
   app->lifespan_shutdown = PyTuple_GetItem(result, 1);
