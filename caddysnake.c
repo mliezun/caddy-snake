@@ -456,6 +456,7 @@ struct AsgiApp {
   PyObject *handler;
   PyObject *state;
 
+  PyObject *lifespan_startup;
   PyObject *lifespan_shutdown;
 };
 
@@ -465,6 +466,7 @@ AsgiApp *AsgiApp_import(const char *module_name, const char *app_name,
   if (app == NULL) {
     return NULL;
   }
+  app->lifespan_startup = NULL;
   app->lifespan_shutdown = NULL;
   PyGILState_STATE gstate = PyGILState_Ensure();
 
@@ -504,14 +506,12 @@ uint8_t AsgiApp_lifespan_startup(AsgiApp *app) {
   PyObject *result = PyObject_Call(build_lifespan, args, NULL);
   Py_DECREF(args);
 
-  PyObject *lifespan_startup = PyTuple_GetItem(result, 0);
+  app->lifespan_startup = PyTuple_GetItem(result, 0);
   app->lifespan_shutdown = PyTuple_GetItem(result, 1);
 
   result = PyObject_CallNoArgs(lifespan_startup);
 
   uint8_t status = result == Py_True;
-
-  Py_DECREF(lifespan_startup);
 
   PyGILState_Release(gstate);
 
@@ -1096,7 +1096,8 @@ void AsgiApp_cleanup(AsgiApp *app) {
   PyGILState_STATE gstate = PyGILState_Ensure();
   Py_XDECREF(app->handler);
   Py_XDECREF(app->state);
-  // Py_XDECREF(app->lifespan_shutdown);
+  Py_XDECREF(app->lifespan_startup);
+  Py_XDECREF(app->lifespan_shutdown);
   PyGILState_Release(gstate);
   free(app);
 }
