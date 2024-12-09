@@ -17,3 +17,6 @@ Python-3.12*
 
 # macOS
 .DS_Store
+
+# Django
+db.sqlite3
