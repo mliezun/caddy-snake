@@ -509,7 +509,7 @@ uint8_t AsgiApp_lifespan_startup(AsgiApp *app) {
   app->lifespan_startup = PyTuple_GetItem(result, 0);
   app->lifespan_shutdown = PyTuple_GetItem(result, 1);
 
-  result = PyObject_CallNoArgs(lifespan_startup);
+  result = PyObject_CallNoArgs(app->lifespan_startup);
 
   uint8_t status = result == Py_True;
 
