@@ -511,7 +511,7 @@ uint8_t AsgiApp_lifespan_startup(AsgiApp *app) {
 
   uint8_t status = result == Py_True;
 
-  // Py_DECREF(lifespan_startup);
+  Py_DECREF(lifespan_startup);
 
   PyGILState_Release(gstate);
 
