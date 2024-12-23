@@ -32,6 +32,9 @@ Repository = "https://github.com/mliezun/caddy-snake.git"
 [tool.setuptools]
 packages = ["caddysnake"]
 include-package-data = true
+ext-modules = [
+    {name = "caddysnake.dummy", sources = ["dummy.c"]}
+]
 
 [tool.setuptools.package-dir]
 caddysnake = "."
