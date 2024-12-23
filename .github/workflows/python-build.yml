@@ -43,4 +43,4 @@
               cd cmd/cli
               CGO_ENABLED=1 go build -o caddysnake-cli main.go
               export CIBW_BUILD=cp$(echo ${{ matrix.python-version }} | tr -d .)-manylinux_x86_64
-              cibuildwheel
+              CIBW_BUILD_VERBOSITY=1 cibuildwheel
