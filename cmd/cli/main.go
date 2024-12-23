@@ -27,10 +27,10 @@ import (
 func main() {
 	caddycmd.RegisterCommand(caddycmd.Command{
 		Name:  "wsgi-server",
-		Usage: "[--domain <example.com>] [--app <module>] [--listen <addr>]",
+		Usage: "[--domain <example.com>] [--app <module>] [--listen <addr>] [--debug] [--access-logs]",
 		Short: "Spins up a Python wsgi server",
 		Long: `
-A Python WSGI server designed for development, demonstrations, and lightweight production use.
+A Python WSGI server designed for synchronous apps and frameworks (no async/await).
 
 You can specify a custom socket address using the '--listen' option.
 
@@ -46,11 +46,41 @@ Ensure DNS A/AAAA records are correctly set up if using a public domain for secu
 			cmd.RunE = caddycmd.WrapCommandFuncForCobra(cmdWsgiServer)
 		},
 	})
+
+	caddycmd.RegisterCommand(caddycmd.Command{
+		Name:  "asgi-server",
+		Usage: "[--domain <example.com>] [--app <module>] [--listen <addr>] [--debug] [--access-logs]",
+		Short: "Spins up a Python asgi server",
+		Long: `
+A Python ASGI server designed for asynchronous apps and frameworks (use of async/await).
+
+You can specify a custom socket address using the '--listen' option.
+
+Providing a domain name with the '--domain' flag enables HTTPS and sets the listener to the appropriate secure port.
+Ensure DNS A/AAAA records are correctly set up if using a public domain for secure connections.
+`,
+		CobraFunc: func(cmd *cobra.Command) {
+			cmd.Flags().StringP("domain", "d", "", "Domain name at which to serve the files")
+			cmd.Flags().StringP("app", "a", "", "App module to be imported")
+			cmd.Flags().StringP("listen", "l", "", "The address to which to bind the listener")
+			cmd.Flags().Bool("debug", false, "Enable debug logs")
+			cmd.Flags().Bool("access-logs", false, "Enable access logs")
+			cmd.RunE = caddycmd.WrapCommandFuncForCobra(cmdAsgiServer)
+		},
+	})
 	caddycmd.Main()
 }
 
-// cmdWsgiServer is freely inspired from the php-server command of the Frankenphp project (MIT License)
 func cmdWsgiServer(fs caddycmd.Flags) (int, error) {
+	return pythonServer("wsgi", fs)
+}
+
+func cmdAsgiServer(fs caddycmd.Flags) (int, error) {
+	return pythonServer("asgi", fs)
+}
+
+// pythonServer is inspired on the php-server command of the Frankenphp project (MIT License)
+func pythonServer(server_type string, fs caddycmd.Flags) (int, error) {
 	caddy.TrapSignals()
 
 	domain := fs.String("domain")
@@ -79,8 +109,11 @@ func cmdWsgiServer(fs caddycmd.Flags) (int, error) {
 	}
 	prefer := []string{"zstd", "gzip"}
 
-	pythonHandler := caddysnake.CaddySnake{
-		ModuleWsgi: app,
+	pythonHandler := caddysnake.CaddySnake{}
+	if server_type == "wsgi" {
+		pythonHandler.ModuleWsgi = app
+	} else {
+		pythonHandler.ModuleAsgi = app
 	}
 	if venv := os.Getenv("VIRTUAL_ENV"); venv != "" {
 		pythonHandler.VenvPath = venv
