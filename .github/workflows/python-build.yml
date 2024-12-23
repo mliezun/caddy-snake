@@ -42,5 +42,6 @@
             run: |
               cd cmd/cli
               CGO_ENABLED=1 go build -o caddysnake-cli main.go
+              touch dummy.c
               export CIBW_BUILD=cp$(echo ${{ matrix.python-version }} | tr -d .)-manylinux_x86_64
               CIBW_BUILD_VERBOSITY=1 cibuildwheel

@@ -16,6 +16,7 @@ Python-3.12*
 cmd/cli/*.egg-info
 cmd/cli/dist
 cmd/cli/caddysnake-cli
+cmd/cli/dummy.*
 
 
 # macOS
