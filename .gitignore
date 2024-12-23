@@ -13,6 +13,9 @@ __pycache__
 
 # Local python builds
 Python-3.12*
+cmd/cli/*.egg-info
+cmd/cli/dist
+cmd/cli/caddysnake-cli
 
 
 # macOS

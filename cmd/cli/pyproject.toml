@@ -1,0 +1,46 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "caddysnake"
+version = "0.1.4"
+description = "Python WSGI/ASGI server powered by Caddy"
+authors = [
+    {name = "Miguel Liezun", email = "liezun.js@gmail.com"},
+]
+readme = "README.md"
+requires-python = ">=3.10"
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Go",
+]
+
+[project.urls]
+Homepage = "https://github.com/mliezun/caddy-snake"
+Repository = "https://github.com/mliezun/caddy-snake.git"
+# Documentation = "https://caddy-snake.readthedocs.io/"
+
+[tool.setuptools]
+packages = ["caddysnake"]
+include-package-data = true
+
+[tool.setuptools.package-dir]
+caddysnake = "."
+
+[tool.setuptools.package-data]
+caddysnake = ["caddysnake-cli"]
+
+[project.scripts]
+caddysnake = "caddysnake.cli:main"
+
+[tool.cibuildwheel]
+before-all = "uname -a"
