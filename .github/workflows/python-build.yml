@@ -58,7 +58,7 @@
             run: |
               cd repo
               export PKG_CONFIG_PATH=/opt/_internal/cpython-${{ matrix.python-version }}.*/lib/pkgconfig/
-              echo $PKG_CONFIG_PATH
+              export PKG_CONFIG_PATH=$(echo $PKG_CONFIG_PATH | awk '{gsub(" ",ORS)} 1')
               pkg-config --libs python3-embed
               export PATH=$PATH:/usr/local/go/bin
               go test -race -v ./...
@@ -69,6 +69,7 @@
               cd repo
               cd cmd/cli
               export PKG_CONFIG_PATH=/opt/_internal/cpython-${{ matrix.python-version }}.*/lib/pkgconfig/
+              export PKG_CONFIG_PATH=$(echo $PKG_CONFIG_PATH | awk '{gsub(" ",ORS)} 1')
               CGO_ENABLED=1 go build -o caddysnake-cli main.go
               touch dummy.c
               python -m pip install cibuildwheel
