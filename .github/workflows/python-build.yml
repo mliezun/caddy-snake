@@ -25,7 +25,7 @@
             run: |
               yum -y update
               yum -y install go git gcc make
-              bash < <(curl -s -S -L https://raw.githubusercontent.com/moovweb/gvm/master/binscripts/gvm-installer)
+              curl -s -S -L https://raw.githubusercontent.com/moovweb/gvm/master/binscripts/gvm-installer | bash
               source /root/.gvm/scripts/gvm
               gvm install 1.21.6
               gvm use 1.21.6
