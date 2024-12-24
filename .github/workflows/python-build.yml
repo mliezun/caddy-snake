@@ -38,16 +38,28 @@
             run: |
               git clone https://github.com/${{ github.repository }} repo
               cd repo
+          - name: Setup Environment (PR)  
+            if: ${{ github.event_name == 'pull_request' }}  
+            shell: bash  
+            run: |  
+              echo "LAST_COMMIT_SHA=${{ github.event.pull_request.head.sha }}" >> ${GITHUB_ENV}  
+          - name: Setup Environment (Push)  
+            if: ${{ github.event_name == 'push' }}  
+            shell: bash  
+            run: |  
+              echo "LAST_COMMIT_SHA=${GITHUB_SHA}" >> ${GITHUB_ENV}
           - name: Verify Checkout
             run: |
+              echo $LAST_COMMIT_SHA
               cd repo
-              git fetch --depth=1 origin ${{ github.sha }}
-              git checkout ${{ github.sha }}
+              git checkout $LAST_COMMIT_SHA
               git log -1
           - name: Run module tests
             run: |
               cd repo
               export PKG_CONFIG_PATH=/opt/_internal/cpython-${{ matrix.python-version }}.*/lib/pkgconfig/
+              echo $PKG_CONFIG_PATH
+              pkg-config --libs python3-embed
               export PATH=$PATH:/usr/local/go/bin
               go test -race -v ./...
           - name: Build the CLI
