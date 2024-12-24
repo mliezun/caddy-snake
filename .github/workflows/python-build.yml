@@ -41,14 +41,18 @@
           - name: Verify Checkout
             run: |
               cd repo
+              git fetch --depth=1 origin ${{ github.sha }}
+              git checkout ${{ github.sha }}
               git log -1
           - name: Run module tests
             run: |
               cd repo
+              export PATH=$PATH:/usr/local/go/bin
               go test -race -v ./...
           - name: Build the CLI
             shell: bash
             run: |
+              export PATH=$PATH:/usr/local/go/bin
               cd repo
               cd cmd/cli
               export PKG_CONFIG_PATH=/opt/_internal/cpython-${{ matrix.python-version }}.*/lib/pkgconfig/
