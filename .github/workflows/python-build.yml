@@ -47,6 +47,7 @@
           - name: Run module tests
             run: |
               cd repo
+              export PKG_CONFIG_PATH=/opt/_internal/cpython-${{ matrix.python-version }}.*/lib/pkgconfig/
               export PATH=$PATH:/usr/local/go/bin
               go test -race -v ./...
           - name: Build the CLI
