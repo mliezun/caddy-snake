@@ -43,3 +43,9 @@
               touch dummy.c
               python -m pip install build
               python -m build
+          - name: Publish package
+            uses: pypa/gh-action-pypi-publish@release/v1
+            with:
+              packages-dir: cmd/cli/dist
+              user: __token__
+              password: ${{ secrets.PYPI_API_TOKEN }}
