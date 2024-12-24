@@ -47,3 +47,4 @@ caddysnake = "caddysnake.cli:main"
 
 [tool.cibuildwheel]
 before-all = "uname -a"
+manylinux-x86_64-image = "manylinux_2_34"
