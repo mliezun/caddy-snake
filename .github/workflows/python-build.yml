@@ -57,7 +57,7 @@
           - name: Run module tests
             run: |
               cd repo
-              export PY_VERSION=cp$(echo ${{ matrix.python-version }} | tr -d .)
+              export PY_VERSION=$(echo ${{ matrix.python-version }} | tr -d .)
               export PKG_CONFIG_PATH=/opt/python/cp$PY_VERSION-cp$PY_VERSION/lib/pkgconfig/
               pkg-config --libs python3-embed
               export PATH=$PATH:/usr/local/go/bin
@@ -68,7 +68,7 @@
               export PATH=$PATH:/usr/local/go/bin
               cd repo
               cd cmd/cli
-              export PY_VERSION=cp$(echo ${{ matrix.python-version }} | tr -d .)
+              export PY_VERSION=$(echo ${{ matrix.python-version }} | tr -d .)
               export PKG_CONFIG_PATH=/opt/python/cp$PY_VERSION-cp$PY_VERSION/lib/pkgconfig/
               CGO_ENABLED=1 go build -o caddysnake-cli main.go
               touch dummy.c
