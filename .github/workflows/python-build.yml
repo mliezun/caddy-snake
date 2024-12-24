@@ -29,6 +29,7 @@
               curl -s -S -L https://raw.githubusercontent.com/moovweb/gvm/master/binscripts/gvm-installer | bash
               echo '[[ -s "$HOME/.gvm/scripts/gvm" ]] && source "$HOME/.gvm/scripts/gvm"' >> $HOME/.bashrc
               tail $HOME/.bashrc
+              ls -la $HOME/.gvm/scripts/
               source "$HOME/.gvm/scripts/gvm"
               gvm install 1.21.6
               gvm use 1.21.6
