@@ -113,6 +113,8 @@ func (f *CaddySnake) Provision(ctx caddy.Context) error {
 		if err != nil {
 			return err
 		}
+	} else {
+		return errors.New("asgi or wsgi app needs to be specified")
 	}
 	return nil
 }
