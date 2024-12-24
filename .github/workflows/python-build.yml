@@ -57,8 +57,8 @@
           - name: Run module tests
             run: |
               cd repo
-              export PKG_CONFIG_PATH=/opt/_internal/cpython-${{ matrix.python-version }}.*/lib/pkgconfig/
-              export PKG_CONFIG_PATH=$(echo $PKG_CONFIG_PATH | awk '{gsub(" ",ORS)} 1' | head -1)
+              export PY_VERSION=cp$(echo ${{ matrix.python-version }} | tr -d .)
+              export PKG_CONFIG_PATH=/opt/python/cp$PY_VERSION-cp$PY_VERSION/lib/pkgconfig/
               pkg-config --libs python3-embed
               export PATH=$PATH:/usr/local/go/bin
               go test -race -v ./...
@@ -68,8 +68,8 @@
               export PATH=$PATH:/usr/local/go/bin
               cd repo
               cd cmd/cli
-              export PKG_CONFIG_PATH=/opt/_internal/cpython-${{ matrix.python-version }}.*/lib/pkgconfig/
-              export PKG_CONFIG_PATH=$(echo $PKG_CONFIG_PATH | awk '{gsub(" ",ORS)} 1' | head -1)
+              export PY_VERSION=cp$(echo ${{ matrix.python-version }} | tr -d .)
+              export PKG_CONFIG_PATH=/opt/python/cp$PY_VERSION-cp$PY_VERSION/lib/pkgconfig/
               CGO_ENABLED=1 go build -o caddysnake-cli main.go
               touch dummy.c
               python -m pip install cibuildwheel
