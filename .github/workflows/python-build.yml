@@ -48,6 +48,6 @@
         - name: Publish package
           uses: pypa/gh-action-pypi-publish@release/v1
           with:
-            packages-dir: cmd/cli/dist
+            packages-dir: cmd/cli/wheelhouse
             user: __token__
             password: ${{ secrets.PYPI_API_TOKEN }}
