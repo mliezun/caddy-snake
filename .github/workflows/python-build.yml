@@ -25,14 +25,9 @@
             shell: bash
             run: |
               yum -y update
-              yum -y install go git gcc make
-              curl -s -S -L https://raw.githubusercontent.com/moovweb/gvm/master/binscripts/gvm-installer | bash
-              echo '[[ -s "$HOME/.gvm/scripts/gvm" ]] && source "$HOME/.gvm/scripts/gvm"' >> $HOME/.bashrc
-              tail $HOME/.bashrc
-              ls -la $HOME/.gvm/scripts/
-              source "$HOME/.gvm/scripts/gvm"
-              gvm install 1.21.6
-              gvm use 1.21.6
+              yum -y install git gcc make wget
+              wget https://go.dev/dl/go1.21.6.linux-amd64.tar.gz
+              rm -rf /usr/local/go && tar -C /usr/local -xzf go1.21.6.linux-amd64.tar.gz
           - uses: actions/checkout@v4
           - name: Run module tests
             run: go test -race -v ./...
