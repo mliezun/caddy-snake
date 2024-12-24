@@ -41,8 +41,8 @@
               cd cmd/cli
               CGO_ENABLED=1 go build -o caddysnake-cli main.go
               touch dummy.c
-              python -m pip install build
-              python -m build
+              python -m pip install cibuildwheel
+              CIBW_BUILD_VERBOSITY=1 python -m cibuildwheel
           - name: Publish package
             uses: pypa/gh-action-pypi-publish@release/v1
             with:
