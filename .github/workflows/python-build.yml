@@ -41,4 +41,5 @@
               cd cmd/cli
               CGO_ENABLED=1 go build -o caddysnake-cli main.go
               touch dummy.c
+              python -m pip install build
               python -m build
