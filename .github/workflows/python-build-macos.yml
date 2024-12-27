@@ -35,6 +35,7 @@ jobs:
           touch dummy.c
           python -m pip install cibuildwheel==2.22.0
           export CIBW_BUILD=cp$(echo ${{ matrix.python-version }} | tr -d .)-macosx_x86_64
+          export MACOSX_DEPLOYMENT_TARGET=13.0
           echo $CIBW_BUILD
           CIBW_BUILD_VERBOSITY=1 python -m cibuildwheel
       # - name: Publish package
