@@ -59,9 +59,8 @@ jobs:
           name: caddysnake-${{ matrix.os }}-py${{ matrix.python-version }}
       - name: Check Wheel
         run: ls -la .
-      # - name: Publish package
-      #   uses: pypa/gh-action-pypi-publish@release/v1
-      #   with:
-      #     packages-dir: cmd/cli/wheelhouse
-      #     user: __token__
-      #     password: ${{ secrets.PYPI_API_TOKEN }}
+      - name: Publish package
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          user: __token__
+          password: ${{ secrets.PYPI_API_TOKEN }}
