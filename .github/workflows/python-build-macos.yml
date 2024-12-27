@@ -31,6 +31,7 @@ jobs:
       - name: Build the CLI
         run: |
           cd cmd/cli
+          pkg-config --cflags python3-embed
           CGO_ENABLED=1 go build -o caddysnake-cli main.go
           touch dummy.c
           python -m pip install cibuildwheel==2.22.0
