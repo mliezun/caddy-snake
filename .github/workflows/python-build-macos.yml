@@ -36,9 +36,30 @@ jobs:
           export MACOSX_DEPLOYMENT_TARGET=${{ endsWith(matrix.os, '-13') && '13.0' || '15.0' }}
           echo $CIBW_BUILD
           CIBW_BUILD_VERBOSITY=1 python -m cibuildwheel
-      - name: Publish package
-        uses: pypa/gh-action-pypi-publish@release/v1
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
         with:
-          packages-dir: cmd/cli/wheelhouse
-          user: __token__
-          password: ${{ secrets.PYPI_API_TOKEN }}
+          name: caddysnake-${{ matrix.os }}-${{ matrix.python-version }}
+          path: caddysnake-*.whl
+
+  make_release:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-13, macos-15]
+        python-version: ['3.10', '3.11', '3.12', '3.13']
+    needs: build
+    steps:
+      - name: Download artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: caddysnake-${{ matrix.os }}-${{ matrix.python-version }}
+      - name: Check Wheel
+        run: ls -la .
+      # - name: Publish package
+      #   uses: pypa/gh-action-pypi-publish@release/v1
+      #   with:
+      #     packages-dir: cmd/cli/wheelhouse
+      #     user: __token__
+      #     password: ${{ secrets.PYPI_API_TOKEN }}
