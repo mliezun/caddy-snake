@@ -1,0 +1,67 @@
+name: Python Build Package - macOS
+on:
+  push:
+    tags: [ 'v*.*.*' ]
+
+jobs:
+  build:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-13, macos-15]
+        python-version: ['3.10', '3.11', '3.12', '3.13']
+    env:
+      GOEXPERIMENT: cgocheck2
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.21'
+          cache: false
+      - name: Set up Python 3
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          allow-prereleases: true
+      - name: Run module tests
+        run: go test -race -v ./...
+      - name: Build the CLI
+        run: |
+          cd cmd/cli
+          CGO_ENABLED=1 go build -o caddysnake-cli main.go
+          touch dummy.c
+          python -m pip install cibuildwheel==2.22.0
+          export CIBW_BUILD=cp$(echo ${{ matrix.python-version }} | tr -d .)-macosx_${{ endsWith(matrix.os, '-13') && 'x86_64' || 'arm64' }}
+          export MACOSX_DEPLOYMENT_TARGET=${{ endsWith(matrix.os, '-13') && '13.0' || '15.0' }}
+          echo $CIBW_BUILD
+          CIBW_BUILD_VERBOSITY=1 python -m cibuildwheel
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: caddysnake-${{ matrix.os }}-py${{ matrix.python-version }}
+          path: cmd/cli/wheelhouse/caddysnake-*.whl
+
+  make_release:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-13, macos-15]
+        python-version: ['3.10', '3.11', '3.12', '3.13']
+    needs: build
+    steps:
+      - name: Download artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: caddysnake-${{ matrix.os }}-py${{ matrix.python-version }}
+          path: dist/
+      - name: Check Wheel
+        run: |
+          ls -la .
+          ls -la dist/
+      - name: Publish package
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          user: __token__
+          password: ${{ secrets.PYPI_API_TOKEN }}
