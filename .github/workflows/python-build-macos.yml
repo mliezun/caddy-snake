@@ -2,8 +2,6 @@ name: Python Build Package - macOS
 on:
   push:
     tags: [ 'v*.*.*' ]
-  pull_request:
-    branches: [ "main" ]
 
 jobs:
   build:
