@@ -8,10 +8,11 @@ on:
 
 jobs:
   build:
-    runs-on: macos-13
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
+        os: [macos-13, macos-15]
         python-version: ['3.10', '3.11', '3.12', '3.13']
     env:
       GOEXPERIMENT: cgocheck2
@@ -31,11 +32,10 @@ jobs:
       - name: Build the CLI
         run: |
           cd cmd/cli
-          pkg-config --cflags python3-embed
           CGO_ENABLED=1 go build -o caddysnake-cli main.go
           touch dummy.c
           python -m pip install cibuildwheel==2.22.0
-          export CIBW_BUILD=cp$(echo ${{ matrix.python-version }} | tr -d .)-macosx_x86_64
+          export CIBW_BUILD=cp$(echo ${{ matrix.python-version }} | tr -d .)-macosx_${{ endsWith(matrix.os, '-13') && 'x86_64' || 'arm64' }}
           export MACOSX_DEPLOYMENT_TARGET=13.0
           echo $CIBW_BUILD
           CIBW_BUILD_VERBOSITY=1 python -m cibuildwheel
