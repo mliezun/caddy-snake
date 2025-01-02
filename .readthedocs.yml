@@ -1,0 +1,24 @@
+
+
+# Read the Docs configuration file
+# See https://docs.readthedocs.io/en/stable/config-file/v2.html for details
+
+# Required
+version: 2
+
+# Set the OS, Python version, and other tools you might need
+build:
+  os: ubuntu-24.04
+  tools:
+    nodejs: "22"
+
+  commands:
+    # Install Docusaurus dependencies
+    - cd docs/ && npm install
+    # Build the site
+    - cd docs/ && npm run build
+    # Copy generated files into Read the Docs directory
+    - mkdir --parents $READTHEDOCS_OUTPUT/html/
+    - cp --recursive docs/build/* $READTHEDOCS_OUTPUT/html/
+        
+
