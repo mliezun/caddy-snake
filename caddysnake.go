@@ -45,6 +45,7 @@ type CaddySnake struct {
 	ModuleWsgi string `json:"module_wsgi,omitempty"`
 	ModuleAsgi string `json:"module_asgi,omitempty"`
 	Lifespan   string `json:"lifespan,omitempty"`
+	WorkingDir string `json:"working_dir,omitempty"`
 	VenvPath   string `json:"venv_path,omitempty"`
 	logger     *zap.Logger
 	app        AppServer
@@ -70,6 +71,10 @@ func (f *CaddySnake) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 				case "lifespan":
 					if !d.Args(&f.Lifespan) || (f.Lifespan != "on" && f.Lifespan != "off") {
 						return d.Errf("expected exactly one argument for lifespan: on|off")
+					}
+				case "working_dir":
+					if !d.Args(&f.WorkingDir) {
+						return d.Errf("expected exactly one argument for working_dir")
 					}
 				case "venv":
 					if !d.Args(&f.VenvPath) {
@@ -98,21 +103,22 @@ func (CaddySnake) CaddyModule() caddy.ModuleInfo {
 func (f *CaddySnake) Provision(ctx caddy.Context) error {
 	f.logger = ctx.Logger(f)
 	if f.ModuleWsgi != "" {
-		w, err := NewWsgi(f.ModuleWsgi, f.VenvPath)
+		w, err := NewWsgi(f.ModuleWsgi, f.WorkingDir, f.VenvPath)
 		if err != nil {
 			return err
 		}
 		if f.Lifespan != "" {
 			f.logger.Warn("lifespan is only used in ASGI mode", zap.String("lifespan", f.Lifespan))
 		}
-		f.logger.Info("imported wsgi app", zap.String("module_wsgi", f.ModuleWsgi), zap.String("venv_path", f.VenvPath))
+		f.logger.Info("imported wsgi app", zap.String("module_wsgi", f.ModuleWsgi), zap.String("working_dir", f.WorkingDir), zap.String("venv_path", f.VenvPath))
 		f.app = w
 	} else if f.ModuleAsgi != "" {
 		var err error
-		f.app, err = NewAsgi(f.ModuleAsgi, f.VenvPath, f.Lifespan == "on")
+		f.app, err = NewAsgi(f.ModuleAsgi, f.WorkingDir, f.VenvPath, f.Lifespan == "on")
 		if err != nil {
 			return err
 		}
+		f.logger.Info("imported asgi app", zap.String("module_asgi", f.ModuleAsgi), zap.String("working_dir", f.WorkingDir), zap.String("venv_path", f.VenvPath))
 	} else {
 		return errors.New("asgi or wsgi app needs to be specified")
 	}
@@ -200,6 +206,25 @@ func findSitePackagesInVenv(venvPath string) (string, error) {
 	return sitePackagesPath, nil
 }
 
+// findWorkingDirectory checks if the directory exists and returns the absolute path
+func findWorkingDirectory(working_dir string) (string, error) {
+	working_dir_abs, err := filepath.Abs(working_dir)
+	if err != nil {
+		return "", err
+	}
+	fileInfo, err := os.Stat(working_dir_abs)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", fmt.Errorf("working_dir directory does not exist in: %s", working_dir_abs)
+		}
+		return "", err
+	}
+	if !fileInfo.IsDir() {
+		return "", fmt.Errorf("working_dir is not a directory: %s", working_dir_abs)
+	}
+	return working_dir_abs, nil
+}
+
 // findPythonDirectory searches for a directory that matches "python3.*" inside the given libPath.
 func findPythonDirectory(libPath string) (string, error) {
 	var pythonDir string
@@ -235,7 +260,7 @@ type Wsgi struct {
 var wsgiapp_cache map[string]*Wsgi = map[string]*Wsgi{}
 
 // NewWsgi imports a WSGI app
-func NewWsgi(wsgi_pattern string, venv_path string) (*Wsgi, error) {
+func NewWsgi(wsgi_pattern, working_dir, venv_path string) (*Wsgi, error) {
 	wsgi_lock.Lock()
 	defer wsgi_lock.Unlock()
 
@@ -262,9 +287,19 @@ func NewWsgi(wsgi_pattern string, venv_path string) (*Wsgi, error) {
 		defer C.free(unsafe.Pointer(packages_path))
 	}
 
+	var working_dir_path *C.char = nil
+	if working_dir != "" {
+		working_dir_abs, err := findWorkingDirectory(working_dir)
+		if err != nil {
+			return nil, err
+		}
+		working_dir_path = C.CString(working_dir_abs)
+		defer C.free(unsafe.Pointer(working_dir_path))
+	}
+
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
-	app := C.WsgiApp_import(module_name, app_name, packages_path)
+	app := C.WsgiApp_import(module_name, app_name, working_dir_path, packages_path)
 	if app == nil {
 		return nil, errors.New("failed to import module")
 	}
@@ -457,7 +492,7 @@ type Asgi struct {
 var asgiapp_cache map[string]*Asgi = map[string]*Asgi{}
 
 // NewAsgi imports a Python ASGI app
-func NewAsgi(asgi_pattern string, venv_path string, lifespan bool) (*Asgi, error) {
+func NewAsgi(asgi_pattern, working_dir, venv_path string, lifespan bool) (*Asgi, error) {
 	asgi_lock.Lock()
 	defer asgi_lock.Unlock()
 
@@ -484,9 +519,19 @@ func NewAsgi(asgi_pattern string, venv_path string, lifespan bool) (*Asgi, error
 		defer C.free(unsafe.Pointer(packages_path))
 	}
 
+	var working_dir_path *C.char = nil
+	if working_dir != "" {
+		working_dir_abs, err := findWorkingDirectory(working_dir)
+		if err != nil {
+			return nil, err
+		}
+		working_dir_path = C.CString(working_dir_abs)
+		defer C.free(unsafe.Pointer(working_dir_path))
+	}
+
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
-	app := C.AsgiApp_import(module_name, app_name, packages_path)
+	app := C.AsgiApp_import(module_name, app_name, working_dir_path, packages_path)
 	if app == nil {
 		return nil, errors.New("failed to import module")
 	}

@@ -206,12 +206,18 @@ static PyTypeObject ResponseType = {
 };
 
 WsgiApp *WsgiApp_import(const char *module_name, const char *app_name,
-                        const char *venv_path) {
+                        const char *working_dir, const char *venv_path) {
   WsgiApp *app = malloc(sizeof(WsgiApp));
   if (app == NULL) {
     return NULL;
   }
   PyGILState_STATE gstate = PyGILState_Ensure();
+
+  // Add working_dir into sys.path list
+  if (working_dir) {
+    PyObject *sysPath = PySys_GetObject("path");
+    PyList_Append(sysPath, PyUnicode_FromString(working_dir));
+  }
 
   // Add venv_path into sys.path list
   if (venv_path) {
@@ -461,7 +467,7 @@ struct AsgiApp {
 };
 
 AsgiApp *AsgiApp_import(const char *module_name, const char *app_name,
-                        const char *venv_path) {
+                        const char *working_dir, const char *venv_path) {
   AsgiApp *app = malloc(sizeof(AsgiApp));
   if (app == NULL) {
     return NULL;
@@ -469,6 +475,12 @@ AsgiApp *AsgiApp_import(const char *module_name, const char *app_name,
   app->lifespan_startup = NULL;
   app->lifespan_shutdown = NULL;
   PyGILState_STATE gstate = PyGILState_Ensure();
+
+  // Add working_dir into sys.path list
+  if (working_dir) {
+    PyObject *sysPath = PySys_GetObject("path");
+    PyList_Append(sysPath, PyUnicode_FromString(working_dir));
+  }
 
   // Add venv_path into sys.path list
   if (venv_path) {
