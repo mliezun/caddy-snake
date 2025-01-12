@@ -114,7 +114,7 @@ func (f *CaddySnake) Provision(ctx caddy.Context) error {
 		f.app = w
 	} else if f.ModuleAsgi != "" {
 		var err error
-		f.app, err = NewAsgi(f.ModuleAsgi, f.WorkingDir, f.VenvPath, f.Lifespan == "on")
+		f.app, err = NewAsgi(f.ModuleAsgi, f.WorkingDir, f.VenvPath, f.Lifespan == "on", f.logger)
 		if err != nil {
 			return err
 		}
@@ -461,7 +461,7 @@ func (m *Wsgi) HandleRequest(w http.ResponseWriter, r *http.Request) error {
 		body_bytes := C.GoBytes(unsafe.Pointer(h.body), C.int(h.body_size))
 		w.Write(body_bytes)
 	} else if h.status_code == 500 {
-		w.Write([]byte("Interal Server Error"))
+		w.Write([]byte("Internal Server Error"))
 	}
 
 	return nil
@@ -487,12 +487,13 @@ func wsgi_write_response(request_id C.int64_t, status_code C.int, headers *C.Map
 type Asgi struct {
 	app          *C.AsgiApp
 	asgi_pattern string
+	logger       *zap.Logger
 }
 
 var asgiapp_cache map[string]*Asgi = map[string]*Asgi{}
 
 // NewAsgi imports a Python ASGI app
-func NewAsgi(asgi_pattern, working_dir, venv_path string, lifespan bool) (*Asgi, error) {
+func NewAsgi(asgi_pattern, working_dir, venv_path string, lifespan bool, logger *zap.Logger) (*Asgi, error) {
 	asgi_lock.Lock()
 	defer asgi_lock.Unlock()
 
@@ -545,7 +546,7 @@ func NewAsgi(asgi_pattern, working_dir, venv_path string, lifespan bool) (*Asgi,
 		}
 	}
 
-	result := &Asgi{app, asgi_pattern}
+	result := &Asgi{app, asgi_pattern, logger}
 	asgiapp_cache[asgi_pattern] = result
 	return result, err
 }
@@ -791,7 +792,8 @@ func (m *Asgi) HandleRequest(w http.ResponseWriter, r *http.Request) error {
 	runtime.UnlockOSThread()
 
 	if err := <-arh.done; err != nil {
-		return err
+		w.WriteHeader(500)
+		m.logger.Debug(err.Error())
 	}
 
 	return nil
