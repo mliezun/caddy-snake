@@ -43,7 +43,9 @@ jobs:
       - name: Run integration tests
         working-directory: tests/${{ matrix.tool-name }}/
         run: |
-          valgrind --leak-check=full --show-leak-kinds=all --error-exitcode=1 ./caddy run --config Caddyfile > caddy.log 2>&1 &
+          echo "./caddy run --config Caddyfile > caddy.log 2>&1" > caddy-script.sh
+          chmod +x caddy-script.sh
+          valgrind --leak-check=full --show-leak-kinds=all --error-exitcode=1 caddy-script.sh > vagrant.log 2>&1 &
           sleep 2
           source venv/bin/activate
           python main_test.py
@@ -52,5 +54,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: caddy-log-${{ matrix.tool-name }}-${{ matrix.python-version }}
-          path: tests/${{ matrix.tool-name }}/caddy.log
+          path: tests/${{ matrix.tool-name }}/*.log
           retention-days: 7
