@@ -52,6 +52,14 @@ func NewMapKeyVal(count int) *MapKeyVal {
 	}
 }
 
+func NewMapKeyValFromSource(m *C.MapKeyVal) *MapKeyVal {
+	return &MapKeyVal{
+		m:            m,
+		base_headers: uintptr(unsafe.Pointer(m.keys)),
+		base_values:  uintptr(unsafe.Pointer(m.values)),
+	}
+}
+
 func (m *MapKeyVal) Cleanup() {
 	if m.m != nil {
 		C.MapKeyVal_free(m.m, m.m.count)
@@ -64,6 +72,24 @@ func (m *MapKeyVal) Set(k, v string, pos int) {
 	}
 	*(**C.char)(unsafe.Pointer(m.base_headers + uintptr(pos)*SIZE_OF_CHAR_POINTER)) = C.CString(k)
 	*(**C.char)(unsafe.Pointer(m.base_values + uintptr(pos)*SIZE_OF_CHAR_POINTER)) = C.CString(v)
+}
+
+func (m *MapKeyVal) Get(pos int) (string, string) {
+	if pos < 0 || pos > int(m.m.count) {
+		panic("Expected pos to be within limits")
+	}
+	header_name_ptr := unsafe.Pointer(uintptr(unsafe.Pointer(m.m.keys)) + uintptr(pos)*SIZE_OF_CHAR_POINTER)
+	header_value_ptr := unsafe.Pointer(uintptr(unsafe.Pointer(m.m.values)) + uintptr(pos)*SIZE_OF_CHAR_POINTER)
+	header_name := *(**C.char)(header_name_ptr)
+	header_value := *(**C.char)(header_value_ptr)
+	return C.GoString(header_name), C.GoString(header_value)
+}
+
+func (m *MapKeyVal) Len() int {
+	if m.m == nil {
+		return 0
+	}
+	return int(m.m.count)
 }
 
 // AppServer defines the interface to interacting with a WSGI or ASGI server
@@ -454,21 +480,12 @@ func (m *Wsgi) HandleRequest(w http.ResponseWriter, r *http.Request) error {
 	runtime.UnlockOSThread()
 
 	h := <-ch
+	result_headers := NewMapKeyValFromSource(h.headers)
+	defer result_headers.Cleanup()
 
-	if h.headers != nil {
-		defer C.free(unsafe.Pointer(h.headers))
-		defer C.free(unsafe.Pointer(h.headers.keys))
-		defer C.free(unsafe.Pointer(h.headers.values))
-
-		for i := 0; i < int(h.headers.count); i++ {
-			header_name_ptr := unsafe.Pointer(uintptr(unsafe.Pointer(h.headers.keys)) + uintptr(i)*SIZE_OF_CHAR_POINTER)
-			header_value_ptr := unsafe.Pointer(uintptr(unsafe.Pointer(h.headers.values)) + uintptr(i)*SIZE_OF_CHAR_POINTER)
-			header_name := *(**C.char)(header_name_ptr)
-			defer C.free(unsafe.Pointer(header_name))
-			header_value := *(**C.char)(header_value_ptr)
-			defer C.free(unsafe.Pointer(header_value))
-			w.Header().Add(C.GoString(header_name), C.GoString(header_value))
-		}
+	for i := 0; i < result_headers.Len(); i++ {
+		k, v := result_headers.Get(i)
+		w.Header().Add(k, v)
 	}
 
 	w.WriteHeader(int(h.status_code))
