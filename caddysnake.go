@@ -480,12 +480,14 @@ func (m *Wsgi) HandleRequest(w http.ResponseWriter, r *http.Request) error {
 	runtime.UnlockOSThread()
 
 	h := <-ch
-	result_headers := NewMapKeyValFromSource(h.headers)
-	defer result_headers.Cleanup()
+	if h.headers != nil {
+		result_headers := NewMapKeyValFromSource(h.headers)
+		defer result_headers.Cleanup()
 
-	for i := 0; i < result_headers.Len(); i++ {
-		k, v := result_headers.Get(i)
-		w.Header().Add(k, v)
+		for i := 0; i < result_headers.Len(); i++ {
+			k, v := result_headers.Get(i)
+			w.Header().Add(k, v)
+		}
 	}
 
 	w.WriteHeader(int(h.status_code))

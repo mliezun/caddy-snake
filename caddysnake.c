@@ -99,6 +99,8 @@ void MapKeyVal_free(MapKeyVal *map, size_t pos) {
     free(map->keys[i]);
     free(map->values[i]);
   }
+  free(map->keys);
+  free(map->values);
   free(map);
 }
 
