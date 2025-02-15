@@ -43,7 +43,9 @@ jobs:
       - name: Run integration tests
         working-directory: tests/${{ matrix.tool-name }}/
         run: |
-          valgrind --leak-check=full --show-leak-kinds=all --error-exitcode=1 --log-file=valgrind.log ./caddy run --config Caddyfile > caddy.log 2>&1 &
+          echo "./caddy run --config Caddyfile > caddy.log 2>&1" > caddy-script.sh
+          chmod +x caddy-script.sh
+          valgrind --leak-check=full --show-leak-kinds=all --error-exitcode=1 --trace-children=yes ./caddy-script.sh > vagrant.log 2>&1 &
           sleep 2
           source venv/bin/activate
           python main_test.py
