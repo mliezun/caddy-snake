@@ -450,7 +450,7 @@ func (m *Wsgi) HandleRequest(w http.ResponseWriter, r *http.Request) error {
 	wsgi_lock.Unlock()
 
 	runtime.LockOSThread()
-	C.WsgiApp_handle_request(m.app, C.int64_t(request_id), rh, body_str)
+	C.WsgiApp_handle_request(m.app, C.int64_t(request_id), rh.m, body_str)
 	runtime.UnlockOSThread()
 
 	h := <-ch
@@ -461,8 +461,8 @@ func (m *Wsgi) HandleRequest(w http.ResponseWriter, r *http.Request) error {
 		defer C.free(unsafe.Pointer(h.headers.values))
 
 		for i := 0; i < int(h.headers.count); i++ {
-			header_name_ptr := unsafe.Pointer(uintptr(unsafe.Pointer(h.headers.keys)) + uintptr(i)*size_of_char_pointer)
-			header_value_ptr := unsafe.Pointer(uintptr(unsafe.Pointer(h.headers.values)) + uintptr(i)*size_of_char_pointer)
+			header_name_ptr := unsafe.Pointer(uintptr(unsafe.Pointer(h.headers.keys)) + uintptr(i)*SIZE_OF_CHAR_POINTER)
+			header_value_ptr := unsafe.Pointer(uintptr(unsafe.Pointer(h.headers.values)) + uintptr(i)*SIZE_OF_CHAR_POINTER)
 			header_name := *(**C.char)(header_name_ptr)
 			defer C.free(unsafe.Pointer(header_name))
 			header_value := *(**C.char)(header_value_ptr)
