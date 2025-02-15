@@ -13,6 +13,7 @@ typedef struct {
   char **values;
 } MapKeyVal;
 MapKeyVal *MapKeyVal_new(size_t);
+void MapKeyVal_free(MapKeyVal *map, size_t pos);
 
 // WSGI Protocol
 typedef struct WsgiApp WsgiApp;

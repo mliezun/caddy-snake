@@ -34,6 +34,38 @@ import (
 //go:embed caddysnake.py
 var caddysnake_py string
 
+var SIZE_OF_CHAR_POINTER = unsafe.Sizeof((*C.char)(nil))
+
+// MapKeyVal wraps the same structure defined in the C layer
+type MapKeyVal struct {
+	m            *C.MapKeyVal
+	base_headers uintptr
+	base_values  uintptr
+}
+
+func NewMapKeyVal(count int) *MapKeyVal {
+	m := C.MapKeyVal_new(C.size_t(count))
+	return &MapKeyVal{
+		m:            m,
+		base_headers: uintptr(unsafe.Pointer(m.keys)),
+		base_values:  uintptr(unsafe.Pointer(m.values)),
+	}
+}
+
+func (m *MapKeyVal) Cleanup() {
+	if m.m != nil {
+		C.MapKeyVal_free(m.m, m.m.count)
+	}
+}
+
+func (m *MapKeyVal) Set(k, v string, pos int) {
+	if pos < 0 || pos > int(m.m.count) {
+		panic("Expected pos to be within limits")
+	}
+	*(**C.char)(unsafe.Pointer(m.base_headers + uintptr(pos)*SIZE_OF_CHAR_POINTER)) = C.CString(k)
+	*(**C.char)(unsafe.Pointer(m.base_values + uintptr(pos)*SIZE_OF_CHAR_POINTER)) = C.CString(v)
+}
+
 // AppServer defines the interface to interacting with a WSGI or ASGI server
 type AppServer interface {
 	Cleanup() error
@@ -373,14 +405,9 @@ func (m *Wsgi) HandleRequest(w http.ResponseWriter, r *http.Request) error {
 	if _, ok := r.Header[textproto.CanonicalMIMEHeaderKey("Content-Length")]; ok {
 		headers_length -= 1
 	}
-	rh := C.MapKeyVal_new(C.size_t(headers_length + len(extra_headers)))
-	defer C.free(unsafe.Pointer(rh))
-	defer C.free(unsafe.Pointer(rh.keys))
-	defer C.free(unsafe.Pointer(rh.values))
+	rh := NewMapKeyVal(headers_length + len(extra_headers))
+	defer rh.Cleanup()
 	i := 0
-	size_of_char_pointer := unsafe.Sizeof(rh.keys)
-	base_headers := uintptr(unsafe.Pointer(rh.keys))
-	base_values := uintptr(unsafe.Pointer(rh.values))
 	for k, items := range r.Header {
 		key := strings.Map(upperCaseAndUnderscore, k)
 		if key == "PROXY" {
@@ -400,21 +427,11 @@ func (m *Wsgi) HandleRequest(w http.ResponseWriter, r *http.Request) error {
 			joinStr = "; "
 		}
 
-		key_str := C.CString("HTTP_" + key)
-		defer C.free(unsafe.Pointer(key_str))
-		value_str := C.CString(strings.Join(items, joinStr))
-		defer C.free(unsafe.Pointer(value_str))
-		*(**C.char)(unsafe.Pointer(base_headers + uintptr(i)*size_of_char_pointer)) = key_str
-		*(**C.char)(unsafe.Pointer(base_values + uintptr(i)*size_of_char_pointer)) = value_str
+		rh.Set("HTTP_"+key, strings.Join(items, joinStr), i)
 		i++
 	}
 	for k, v := range extra_headers {
-		key_str := C.CString(k)
-		defer C.free(unsafe.Pointer(key_str))
-		value_str := C.CString(v)
-		defer C.free(unsafe.Pointer(value_str))
-		*(**C.char)(unsafe.Pointer(base_headers + uintptr(i)*size_of_char_pointer)) = key_str
-		*(**C.char)(unsafe.Pointer(base_values + uintptr(i)*size_of_char_pointer)) = value_str
+		rh.Set(k, v, i)
 		i++
 	}
 

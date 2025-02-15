@@ -91,6 +91,17 @@ MapKeyVal *MapKeyVal_new(size_t count) {
   return new_map;
 }
 
+void MapKeyVal_free(MapKeyVal *map, size_t pos) {
+  if (pos > map->count) {
+    pos = map->count;
+  }
+  for (size_t i = 0; i < pos; i++) {
+    free(map->keys[i]);
+    free(map->values[i]);
+  }
+  free(map);
+}
+
 typedef struct {
   PyObject_HEAD WsgiApp *app;
   int64_t request_id;
@@ -289,17 +300,6 @@ void WsgiApp_handle_request(WsgiApp *app, int64_t request_id,
   PyObject_CallOneArg(task_queue_put, (PyObject *)r);
 
   PyGILState_Release(gstate);
-}
-
-static void MapKeyVal_free(MapKeyVal *map, size_t pos) {
-  if (pos > map->count) {
-    pos = map->count;
-  }
-  for (size_t i = 0; i < pos; i++) {
-    free(map->keys[i]);
-    free(map->values[i]);
-  }
-  free(map);
 }
 
 static PyObject *response_callback(PyObject *self, PyObject *args) {
