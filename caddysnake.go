@@ -746,31 +746,17 @@ func (m *Asgi) HandleRequest(w http.ResponseWriter, r *http.Request) error {
 		"query_string": r.URL.RawQuery,
 		"root_path":    "",
 	}
-	scope := C.MapKeyVal_new(C.size_t(len(scope_map)))
-	defer C.free(unsafe.Pointer(scope))
-	defer C.free(unsafe.Pointer(scope.keys))
-	defer C.free(unsafe.Pointer(scope.values))
+	scope := NewMapKeyVal(len(scope_map))
+	defer scope.Cleanup()
 	scope_count := 0
-	base_of_keys := uintptr(unsafe.Pointer(scope.keys))
-	base_of_values := uintptr(unsafe.Pointer(scope.values))
-	size_of_pointer := unsafe.Sizeof(scope.keys)
 	for k, v := range scope_map {
-		key_str := C.CString(k)
-		defer C.free(unsafe.Pointer(key_str))
-		value_str := C.CString(v)
-		defer C.free(unsafe.Pointer(value_str))
-		*(**C.char)(unsafe.Pointer(base_of_keys + uintptr(scope_count)*size_of_pointer)) = key_str
-		*(**C.char)(unsafe.Pointer(base_of_values + uintptr(scope_count)*size_of_pointer)) = value_str
+		scope.Set(k, v, scope_count)
 		scope_count++
 	}
 
-	request_headers := C.MapKeyVal_new(C.size_t(len(r.Header)))
-	defer C.free(unsafe.Pointer(request_headers))
-	defer C.free(unsafe.Pointer(request_headers.keys))
-	defer C.free(unsafe.Pointer(request_headers.values))
+	request_headers := NewMapKeyVal(len(r.Header))
+	defer request_headers.Cleanup()
 	header_count := 0
-	base_of_keys = uintptr(unsafe.Pointer(request_headers.keys))
-	base_of_values = uintptr(unsafe.Pointer(request_headers.values))
 	for k, items := range r.Header {
 		if k == "Proxy" {
 			// golang cgi issue 16405
@@ -782,12 +768,7 @@ func (m *Asgi) HandleRequest(w http.ResponseWriter, r *http.Request) error {
 			joinStr = "; "
 		}
 
-		key_str := C.CString(strings.ToLower(k))
-		defer C.free(unsafe.Pointer(key_str))
-		value_str := C.CString(strings.Join(items, joinStr))
-		defer C.free(unsafe.Pointer(value_str))
-		*(**C.char)(unsafe.Pointer(base_of_keys + uintptr(header_count)*size_of_pointer)) = key_str
-		*(**C.char)(unsafe.Pointer(base_of_values + uintptr(header_count)*size_of_pointer)) = value_str
+		request_headers.Set(strings.ToLower(k), strings.Join(items, joinStr), header_count)
 		header_count++
 	}
 
@@ -817,8 +798,8 @@ func (m *Asgi) HandleRequest(w http.ResponseWriter, r *http.Request) error {
 	C.AsgiApp_handle_request(
 		m.app,
 		C.uint64_t(request_id),
-		scope,
-		request_headers,
+		scope.m,
+		request_headers.m,
 		client_host_str,
 		C.int(client_port),
 		server_host_str,
@@ -941,19 +922,12 @@ func asgi_set_headers(request_id C.uint64_t, status_code C.int, headers *C.MapKe
 	if arh.is_websocket {
 		ws_headers := arh.w.Header().Clone()
 		if headers != nil {
-			size_of_pointer := unsafe.Sizeof(headers.keys)
-			defer C.free(unsafe.Pointer(headers))
-			defer C.free(unsafe.Pointer(headers.keys))
-			defer C.free(unsafe.Pointer(headers.values))
+			map_headers := NewMapKeyValFromSource(headers)
+			defer map_headers.Cleanup()
 
-			for i := 0; i < int(headers.count); i++ {
-				header_name_ptr := unsafe.Pointer(uintptr(unsafe.Pointer(headers.keys)) + uintptr(i)*size_of_pointer)
-				header_value_ptr := unsafe.Pointer(uintptr(unsafe.Pointer(headers.values)) + uintptr(i)*size_of_pointer)
-				header_name := *(**C.char)(header_name_ptr)
-				defer C.free(unsafe.Pointer(header_name))
-				header_value := *(**C.char)(header_value_ptr)
-				defer C.free(unsafe.Pointer(header_value))
-				ws_headers.Add(C.GoString(header_name), C.GoString(header_value))
+			for i := 0; i < map_headers.Len(); i++ {
+				header_name, header_value := map_headers.Get(i)
+				ws_headers.Add(header_name, header_value)
 			}
 		}
 		switch arh.websocket_state {
@@ -985,19 +959,12 @@ func asgi_set_headers(request_id C.uint64_t, status_code C.int, headers *C.MapKe
 
 	arh.operations <- AsgiOperations{op: func() {
 		if headers != nil {
-			size_of_pointer := unsafe.Sizeof(headers.keys)
-			defer C.free(unsafe.Pointer(headers))
-			defer C.free(unsafe.Pointer(headers.keys))
-			defer C.free(unsafe.Pointer(headers.values))
+			map_headers := NewMapKeyValFromSource(headers)
+			defer map_headers.Cleanup()
 
-			for i := 0; i < int(headers.count); i++ {
-				header_name_ptr := unsafe.Pointer(uintptr(unsafe.Pointer(headers.keys)) + uintptr(i)*size_of_pointer)
-				header_value_ptr := unsafe.Pointer(uintptr(unsafe.Pointer(headers.values)) + uintptr(i)*size_of_pointer)
-				header_name := *(**C.char)(header_name_ptr)
-				defer C.free(unsafe.Pointer(header_name))
-				header_value := *(**C.char)(header_value_ptr)
-				defer C.free(unsafe.Pointer(header_value))
-				arh.w.Header().Add(C.GoString(header_name), C.GoString(header_value))
+			for i := 0; i < map_headers.Len(); i++ {
+				header_name, header_value := map_headers.Get(i)
+				arh.w.Header().Add(header_name, header_value)
 			}
 		}
 
