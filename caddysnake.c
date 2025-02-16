@@ -91,6 +91,19 @@ MapKeyVal *MapKeyVal_new(size_t count) {
   return new_map;
 }
 
+void MapKeyVal_free(MapKeyVal *map, size_t pos) {
+  if (pos > map->count) {
+    pos = map->count;
+  }
+  for (size_t i = 0; i < pos; i++) {
+    free(map->keys[i]);
+    free(map->values[i]);
+  }
+  free(map->keys);
+  free(map->values);
+  free(map);
+}
+
 typedef struct {
   PyObject_HEAD WsgiApp *app;
   int64_t request_id;
@@ -206,12 +219,18 @@ static PyTypeObject ResponseType = {
 };
 
 WsgiApp *WsgiApp_import(const char *module_name, const char *app_name,
-                        const char *venv_path) {
+                        const char *working_dir, const char *venv_path) {
   WsgiApp *app = malloc(sizeof(WsgiApp));
   if (app == NULL) {
     return NULL;
   }
   PyGILState_STATE gstate = PyGILState_Ensure();
+
+  // Add working_dir into sys.path list
+  if (working_dir) {
+    PyObject *sysPath = PySys_GetObject("path");
+    PyList_Append(sysPath, PyUnicode_FromString(working_dir));
+  }
 
   // Add venv_path into sys.path list
   if (venv_path) {
@@ -283,17 +302,6 @@ void WsgiApp_handle_request(WsgiApp *app, int64_t request_id,
   PyObject_CallOneArg(task_queue_put, (PyObject *)r);
 
   PyGILState_Release(gstate);
-}
-
-static void MapKeyVal_free(MapKeyVal *map, size_t pos) {
-  if (pos > map->count) {
-    pos = map->count;
-  }
-  for (size_t i = 0; i < pos; i++) {
-    free(map->keys[i]);
-    free(map->values[i]);
-  }
-  free(map);
 }
 
 static PyObject *response_callback(PyObject *self, PyObject *args) {
@@ -461,7 +469,7 @@ struct AsgiApp {
 };
 
 AsgiApp *AsgiApp_import(const char *module_name, const char *app_name,
-                        const char *venv_path) {
+                        const char *working_dir, const char *venv_path) {
   AsgiApp *app = malloc(sizeof(AsgiApp));
   if (app == NULL) {
     return NULL;
@@ -469,6 +477,12 @@ AsgiApp *AsgiApp_import(const char *module_name, const char *app_name,
   app->lifespan_startup = NULL;
   app->lifespan_shutdown = NULL;
   PyGILState_STATE gstate = PyGILState_Ensure();
+
+  // Add working_dir into sys.path list
+  if (working_dir) {
+    PyObject *sysPath = PySys_GetObject("path");
+    PyList_Append(sysPath, PyUnicode_FromString(working_dir));
+  }
 
   // Add venv_path into sys.path list
   if (venv_path) {

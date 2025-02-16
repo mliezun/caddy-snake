@@ -34,6 +34,64 @@ import (
 //go:embed caddysnake.py
 var caddysnake_py string
 
+var SIZE_OF_CHAR_POINTER = unsafe.Sizeof((*C.char)(nil))
+
+// MapKeyVal wraps the same structure defined in the C layer
+type MapKeyVal struct {
+	m            *C.MapKeyVal
+	base_headers uintptr
+	base_values  uintptr
+}
+
+func NewMapKeyVal(count int) *MapKeyVal {
+	m := C.MapKeyVal_new(C.size_t(count))
+	return &MapKeyVal{
+		m:            m,
+		base_headers: uintptr(unsafe.Pointer(m.keys)),
+		base_values:  uintptr(unsafe.Pointer(m.values)),
+	}
+}
+
+func NewMapKeyValFromSource(m *C.MapKeyVal) *MapKeyVal {
+	return &MapKeyVal{
+		m:            m,
+		base_headers: uintptr(unsafe.Pointer(m.keys)),
+		base_values:  uintptr(unsafe.Pointer(m.values)),
+	}
+}
+
+func (m *MapKeyVal) Cleanup() {
+	if m.m != nil {
+		C.MapKeyVal_free(m.m, m.m.count)
+	}
+}
+
+func (m *MapKeyVal) Set(k, v string, pos int) {
+	if pos < 0 || pos > int(m.m.count) {
+		panic("Expected pos to be within limits")
+	}
+	*(**C.char)(unsafe.Pointer(m.base_headers + uintptr(pos)*SIZE_OF_CHAR_POINTER)) = C.CString(k)
+	*(**C.char)(unsafe.Pointer(m.base_values + uintptr(pos)*SIZE_OF_CHAR_POINTER)) = C.CString(v)
+}
+
+func (m *MapKeyVal) Get(pos int) (string, string) {
+	if pos < 0 || pos > int(m.m.count) {
+		panic("Expected pos to be within limits")
+	}
+	header_name_ptr := unsafe.Pointer(uintptr(unsafe.Pointer(m.m.keys)) + uintptr(pos)*SIZE_OF_CHAR_POINTER)
+	header_value_ptr := unsafe.Pointer(uintptr(unsafe.Pointer(m.m.values)) + uintptr(pos)*SIZE_OF_CHAR_POINTER)
+	header_name := *(**C.char)(header_name_ptr)
+	header_value := *(**C.char)(header_value_ptr)
+	return C.GoString(header_name), C.GoString(header_value)
+}
+
+func (m *MapKeyVal) Len() int {
+	if m.m == nil {
+		return 0
+	}
+	return int(m.m.count)
+}
+
 // AppServer defines the interface to interacting with a WSGI or ASGI server
 type AppServer interface {
 	Cleanup() error
@@ -45,6 +103,7 @@ type CaddySnake struct {
 	ModuleWsgi string `json:"module_wsgi,omitempty"`
 	ModuleAsgi string `json:"module_asgi,omitempty"`
 	Lifespan   string `json:"lifespan,omitempty"`
+	WorkingDir string `json:"working_dir,omitempty"`
 	VenvPath   string `json:"venv_path,omitempty"`
 	logger     *zap.Logger
 	app        AppServer
@@ -70,6 +129,10 @@ func (f *CaddySnake) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 				case "lifespan":
 					if !d.Args(&f.Lifespan) || (f.Lifespan != "on" && f.Lifespan != "off") {
 						return d.Errf("expected exactly one argument for lifespan: on|off")
+					}
+				case "working_dir":
+					if !d.Args(&f.WorkingDir) {
+						return d.Errf("expected exactly one argument for working_dir")
 					}
 				case "venv":
 					if !d.Args(&f.VenvPath) {
@@ -98,21 +161,22 @@ func (CaddySnake) CaddyModule() caddy.ModuleInfo {
 func (f *CaddySnake) Provision(ctx caddy.Context) error {
 	f.logger = ctx.Logger(f)
 	if f.ModuleWsgi != "" {
-		w, err := NewWsgi(f.ModuleWsgi, f.VenvPath)
+		w, err := NewWsgi(f.ModuleWsgi, f.WorkingDir, f.VenvPath)
 		if err != nil {
 			return err
 		}
 		if f.Lifespan != "" {
 			f.logger.Warn("lifespan is only used in ASGI mode", zap.String("lifespan", f.Lifespan))
 		}
-		f.logger.Info("imported wsgi app", zap.String("module_wsgi", f.ModuleWsgi), zap.String("venv_path", f.VenvPath))
+		f.logger.Info("imported wsgi app", zap.String("module_wsgi", f.ModuleWsgi), zap.String("working_dir", f.WorkingDir), zap.String("venv_path", f.VenvPath))
 		f.app = w
 	} else if f.ModuleAsgi != "" {
 		var err error
-		f.app, err = NewAsgi(f.ModuleAsgi, f.VenvPath, f.Lifespan == "on")
+		f.app, err = NewAsgi(f.ModuleAsgi, f.WorkingDir, f.VenvPath, f.Lifespan == "on", f.logger)
 		if err != nil {
 			return err
 		}
+		f.logger.Info("imported asgi app", zap.String("module_asgi", f.ModuleAsgi), zap.String("working_dir", f.WorkingDir), zap.String("venv_path", f.VenvPath))
 	} else {
 		return errors.New("asgi or wsgi app needs to be specified")
 	}
@@ -200,6 +264,25 @@ func findSitePackagesInVenv(venvPath string) (string, error) {
 	return sitePackagesPath, nil
 }
 
+// findWorkingDirectory checks if the directory exists and returns the absolute path
+func findWorkingDirectory(working_dir string) (string, error) {
+	working_dir_abs, err := filepath.Abs(working_dir)
+	if err != nil {
+		return "", err
+	}
+	fileInfo, err := os.Stat(working_dir_abs)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", fmt.Errorf("working_dir directory does not exist in: %s", working_dir_abs)
+		}
+		return "", err
+	}
+	if !fileInfo.IsDir() {
+		return "", fmt.Errorf("working_dir is not a directory: %s", working_dir_abs)
+	}
+	return working_dir_abs, nil
+}
+
 // findPythonDirectory searches for a directory that matches "python3.*" inside the given libPath.
 func findPythonDirectory(libPath string) (string, error) {
 	var pythonDir string
@@ -235,7 +318,7 @@ type Wsgi struct {
 var wsgiapp_cache map[string]*Wsgi = map[string]*Wsgi{}
 
 // NewWsgi imports a WSGI app
-func NewWsgi(wsgi_pattern string, venv_path string) (*Wsgi, error) {
+func NewWsgi(wsgi_pattern, working_dir, venv_path string) (*Wsgi, error) {
 	wsgi_lock.Lock()
 	defer wsgi_lock.Unlock()
 
@@ -262,9 +345,19 @@ func NewWsgi(wsgi_pattern string, venv_path string) (*Wsgi, error) {
 		defer C.free(unsafe.Pointer(packages_path))
 	}
 
+	var working_dir_path *C.char = nil
+	if working_dir != "" {
+		working_dir_abs, err := findWorkingDirectory(working_dir)
+		if err != nil {
+			return nil, err
+		}
+		working_dir_path = C.CString(working_dir_abs)
+		defer C.free(unsafe.Pointer(working_dir_path))
+	}
+
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
-	app := C.WsgiApp_import(module_name, app_name, packages_path)
+	app := C.WsgiApp_import(module_name, app_name, working_dir_path, packages_path)
 	if app == nil {
 		return nil, errors.New("failed to import module")
 	}
@@ -338,14 +431,9 @@ func (m *Wsgi) HandleRequest(w http.ResponseWriter, r *http.Request) error {
 	if _, ok := r.Header[textproto.CanonicalMIMEHeaderKey("Content-Length")]; ok {
 		headers_length -= 1
 	}
-	rh := C.MapKeyVal_new(C.size_t(headers_length + len(extra_headers)))
-	defer C.free(unsafe.Pointer(rh))
-	defer C.free(unsafe.Pointer(rh.keys))
-	defer C.free(unsafe.Pointer(rh.values))
+	rh := NewMapKeyVal(headers_length + len(extra_headers))
+	defer rh.Cleanup()
 	i := 0
-	size_of_char_pointer := unsafe.Sizeof(rh.keys)
-	base_headers := uintptr(unsafe.Pointer(rh.keys))
-	base_values := uintptr(unsafe.Pointer(rh.values))
 	for k, items := range r.Header {
 		key := strings.Map(upperCaseAndUnderscore, k)
 		if key == "PROXY" {
@@ -365,21 +453,11 @@ func (m *Wsgi) HandleRequest(w http.ResponseWriter, r *http.Request) error {
 			joinStr = "; "
 		}
 
-		key_str := C.CString("HTTP_" + key)
-		defer C.free(unsafe.Pointer(key_str))
-		value_str := C.CString(strings.Join(items, joinStr))
-		defer C.free(unsafe.Pointer(value_str))
-		*(**C.char)(unsafe.Pointer(base_headers + uintptr(i)*size_of_char_pointer)) = key_str
-		*(**C.char)(unsafe.Pointer(base_values + uintptr(i)*size_of_char_pointer)) = value_str
+		rh.Set("HTTP_"+key, strings.Join(items, joinStr), i)
 		i++
 	}
 	for k, v := range extra_headers {
-		key_str := C.CString(k)
-		defer C.free(unsafe.Pointer(key_str))
-		value_str := C.CString(v)
-		defer C.free(unsafe.Pointer(value_str))
-		*(**C.char)(unsafe.Pointer(base_headers + uintptr(i)*size_of_char_pointer)) = key_str
-		*(**C.char)(unsafe.Pointer(base_values + uintptr(i)*size_of_char_pointer)) = value_str
+		rh.Set(k, v, i)
 		i++
 	}
 
@@ -398,24 +476,17 @@ func (m *Wsgi) HandleRequest(w http.ResponseWriter, r *http.Request) error {
 	wsgi_lock.Unlock()
 
 	runtime.LockOSThread()
-	C.WsgiApp_handle_request(m.app, C.int64_t(request_id), rh, body_str)
+	C.WsgiApp_handle_request(m.app, C.int64_t(request_id), rh.m, body_str)
 	runtime.UnlockOSThread()
 
 	h := <-ch
-
 	if h.headers != nil {
-		defer C.free(unsafe.Pointer(h.headers))
-		defer C.free(unsafe.Pointer(h.headers.keys))
-		defer C.free(unsafe.Pointer(h.headers.values))
+		result_headers := NewMapKeyValFromSource(h.headers)
+		defer result_headers.Cleanup()
 
-		for i := 0; i < int(h.headers.count); i++ {
-			header_name_ptr := unsafe.Pointer(uintptr(unsafe.Pointer(h.headers.keys)) + uintptr(i)*size_of_char_pointer)
-			header_value_ptr := unsafe.Pointer(uintptr(unsafe.Pointer(h.headers.values)) + uintptr(i)*size_of_char_pointer)
-			header_name := *(**C.char)(header_name_ptr)
-			defer C.free(unsafe.Pointer(header_name))
-			header_value := *(**C.char)(header_value_ptr)
-			defer C.free(unsafe.Pointer(header_value))
-			w.Header().Add(C.GoString(header_name), C.GoString(header_value))
+		for i := 0; i < result_headers.Len(); i++ {
+			k, v := result_headers.Get(i)
+			w.Header().Add(k, v)
 		}
 	}
 
@@ -426,7 +497,7 @@ func (m *Wsgi) HandleRequest(w http.ResponseWriter, r *http.Request) error {
 		body_bytes := C.GoBytes(unsafe.Pointer(h.body), C.int(h.body_size))
 		w.Write(body_bytes)
 	} else if h.status_code == 500 {
-		w.Write([]byte("Interal Server Error"))
+		w.Write([]byte("Internal Server Error"))
 	}
 
 	return nil
@@ -452,12 +523,13 @@ func wsgi_write_response(request_id C.int64_t, status_code C.int, headers *C.Map
 type Asgi struct {
 	app          *C.AsgiApp
 	asgi_pattern string
+	logger       *zap.Logger
 }
 
 var asgiapp_cache map[string]*Asgi = map[string]*Asgi{}
 
 // NewAsgi imports a Python ASGI app
-func NewAsgi(asgi_pattern string, venv_path string, lifespan bool) (*Asgi, error) {
+func NewAsgi(asgi_pattern, working_dir, venv_path string, lifespan bool, logger *zap.Logger) (*Asgi, error) {
 	asgi_lock.Lock()
 	defer asgi_lock.Unlock()
 
@@ -484,9 +556,19 @@ func NewAsgi(asgi_pattern string, venv_path string, lifespan bool) (*Asgi, error
 		defer C.free(unsafe.Pointer(packages_path))
 	}
 
+	var working_dir_path *C.char = nil
+	if working_dir != "" {
+		working_dir_abs, err := findWorkingDirectory(working_dir)
+		if err != nil {
+			return nil, err
+		}
+		working_dir_path = C.CString(working_dir_abs)
+		defer C.free(unsafe.Pointer(working_dir_path))
+	}
+
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
-	app := C.AsgiApp_import(module_name, app_name, packages_path)
+	app := C.AsgiApp_import(module_name, app_name, working_dir_path, packages_path)
 	if app == nil {
 		return nil, errors.New("failed to import module")
 	}
@@ -500,7 +582,7 @@ func NewAsgi(asgi_pattern string, venv_path string, lifespan bool) (*Asgi, error
 		}
 	}
 
-	result := &Asgi{app, asgi_pattern}
+	result := &Asgi{app, asgi_pattern, logger}
 	asgiapp_cache[asgi_pattern] = result
 	return result, err
 }
@@ -664,31 +746,17 @@ func (m *Asgi) HandleRequest(w http.ResponseWriter, r *http.Request) error {
 		"query_string": r.URL.RawQuery,
 		"root_path":    "",
 	}
-	scope := C.MapKeyVal_new(C.size_t(len(scope_map)))
-	defer C.free(unsafe.Pointer(scope))
-	defer C.free(unsafe.Pointer(scope.keys))
-	defer C.free(unsafe.Pointer(scope.values))
+	scope := NewMapKeyVal(len(scope_map))
+	defer scope.Cleanup()
 	scope_count := 0
-	base_of_keys := uintptr(unsafe.Pointer(scope.keys))
-	base_of_values := uintptr(unsafe.Pointer(scope.values))
-	size_of_pointer := unsafe.Sizeof(scope.keys)
 	for k, v := range scope_map {
-		key_str := C.CString(k)
-		defer C.free(unsafe.Pointer(key_str))
-		value_str := C.CString(v)
-		defer C.free(unsafe.Pointer(value_str))
-		*(**C.char)(unsafe.Pointer(base_of_keys + uintptr(scope_count)*size_of_pointer)) = key_str
-		*(**C.char)(unsafe.Pointer(base_of_values + uintptr(scope_count)*size_of_pointer)) = value_str
+		scope.Set(k, v, scope_count)
 		scope_count++
 	}
 
-	request_headers := C.MapKeyVal_new(C.size_t(len(r.Header)))
-	defer C.free(unsafe.Pointer(request_headers))
-	defer C.free(unsafe.Pointer(request_headers.keys))
-	defer C.free(unsafe.Pointer(request_headers.values))
+	request_headers := NewMapKeyVal(len(r.Header))
+	defer request_headers.Cleanup()
 	header_count := 0
-	base_of_keys = uintptr(unsafe.Pointer(request_headers.keys))
-	base_of_values = uintptr(unsafe.Pointer(request_headers.values))
 	for k, items := range r.Header {
 		if k == "Proxy" {
 			// golang cgi issue 16405
@@ -700,12 +768,7 @@ func (m *Asgi) HandleRequest(w http.ResponseWriter, r *http.Request) error {
 			joinStr = "; "
 		}
 
-		key_str := C.CString(strings.ToLower(k))
-		defer C.free(unsafe.Pointer(key_str))
-		value_str := C.CString(strings.Join(items, joinStr))
-		defer C.free(unsafe.Pointer(value_str))
-		*(**C.char)(unsafe.Pointer(base_of_keys + uintptr(header_count)*size_of_pointer)) = key_str
-		*(**C.char)(unsafe.Pointer(base_of_values + uintptr(header_count)*size_of_pointer)) = value_str
+		request_headers.Set(strings.ToLower(k), strings.Join(items, joinStr), header_count)
 		header_count++
 	}
 
@@ -735,8 +798,8 @@ func (m *Asgi) HandleRequest(w http.ResponseWriter, r *http.Request) error {
 	C.AsgiApp_handle_request(
 		m.app,
 		C.uint64_t(request_id),
-		scope,
-		request_headers,
+		scope.m,
+		request_headers.m,
 		client_host_str,
 		C.int(client_port),
 		server_host_str,
@@ -746,7 +809,8 @@ func (m *Asgi) HandleRequest(w http.ResponseWriter, r *http.Request) error {
 	runtime.UnlockOSThread()
 
 	if err := <-arh.done; err != nil {
-		return err
+		w.WriteHeader(500)
+		m.logger.Debug(err.Error())
 	}
 
 	return nil
@@ -858,19 +922,12 @@ func asgi_set_headers(request_id C.uint64_t, status_code C.int, headers *C.MapKe
 	if arh.is_websocket {
 		ws_headers := arh.w.Header().Clone()
 		if headers != nil {
-			size_of_pointer := unsafe.Sizeof(headers.keys)
-			defer C.free(unsafe.Pointer(headers))
-			defer C.free(unsafe.Pointer(headers.keys))
-			defer C.free(unsafe.Pointer(headers.values))
+			map_headers := NewMapKeyValFromSource(headers)
+			defer map_headers.Cleanup()
 
-			for i := 0; i < int(headers.count); i++ {
-				header_name_ptr := unsafe.Pointer(uintptr(unsafe.Pointer(headers.keys)) + uintptr(i)*size_of_pointer)
-				header_value_ptr := unsafe.Pointer(uintptr(unsafe.Pointer(headers.values)) + uintptr(i)*size_of_pointer)
-				header_name := *(**C.char)(header_name_ptr)
-				defer C.free(unsafe.Pointer(header_name))
-				header_value := *(**C.char)(header_value_ptr)
-				defer C.free(unsafe.Pointer(header_value))
-				ws_headers.Add(C.GoString(header_name), C.GoString(header_value))
+			for i := 0; i < map_headers.Len(); i++ {
+				header_name, header_value := map_headers.Get(i)
+				ws_headers.Add(header_name, header_value)
 			}
 		}
 		switch arh.websocket_state {
@@ -902,19 +959,12 @@ func asgi_set_headers(request_id C.uint64_t, status_code C.int, headers *C.MapKe
 
 	arh.operations <- AsgiOperations{op: func() {
 		if headers != nil {
-			size_of_pointer := unsafe.Sizeof(headers.keys)
-			defer C.free(unsafe.Pointer(headers))
-			defer C.free(unsafe.Pointer(headers.keys))
-			defer C.free(unsafe.Pointer(headers.values))
+			map_headers := NewMapKeyValFromSource(headers)
+			defer map_headers.Cleanup()
 
-			for i := 0; i < int(headers.count); i++ {
-				header_name_ptr := unsafe.Pointer(uintptr(unsafe.Pointer(headers.keys)) + uintptr(i)*size_of_pointer)
-				header_value_ptr := unsafe.Pointer(uintptr(unsafe.Pointer(headers.values)) + uintptr(i)*size_of_pointer)
-				header_name := *(**C.char)(header_name_ptr)
-				defer C.free(unsafe.Pointer(header_name))
-				header_value := *(**C.char)(header_value_ptr)
-				defer C.free(unsafe.Pointer(header_value))
-				arh.w.Header().Add(C.GoString(header_name), C.GoString(header_value))
+			for i := 0; i < map_headers.Len(); i++ {
+				header_name, header_value := map_headers.Get(i)
+				arh.w.Header().Add(header_name, header_value)
 			}
 		}
 

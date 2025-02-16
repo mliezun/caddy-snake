@@ -13,10 +13,11 @@ typedef struct {
   char **values;
 } MapKeyVal;
 MapKeyVal *MapKeyVal_new(size_t);
+void MapKeyVal_free(MapKeyVal *map, size_t pos);
 
 // WSGI Protocol
 typedef struct WsgiApp WsgiApp;
-WsgiApp *WsgiApp_import(const char *, const char *, const char *);
+WsgiApp *WsgiApp_import(const char *, const char *, const char *, const char *);
 void WsgiApp_handle_request(WsgiApp *, int64_t, MapKeyVal *, const char *);
 void WsgiApp_cleanup(WsgiApp *);
 
@@ -26,7 +27,7 @@ extern void wsgi_write_response(int64_t, int, MapKeyVal *, char *, size_t);
 
 typedef struct AsgiApp AsgiApp;
 typedef struct AsgiEvent AsgiEvent;
-AsgiApp *AsgiApp_import(const char *, const char *, const char *);
+AsgiApp *AsgiApp_import(const char *, const char *, const char *, const char *);
 uint8_t AsgiApp_lifespan_startup(AsgiApp *);
 uint8_t AsgiApp_lifespan_shutdown(AsgiApp *);
 void AsgiApp_handle_request(AsgiApp *, uint64_t, MapKeyVal *, MapKeyVal *,
