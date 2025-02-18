@@ -1,81 +1,27 @@
-# Caddy Snake 🐍
+---
+sidebar_position: 1
+---
 
-[![Integration Tests](https://github.com/mliezun/caddy-snake/actions/workflows/integration-tests.yml/badge.svg)](https://github.com/mliezun/caddy-snake/actions/workflows/integration_tests.yaml)
-[![Go Coverage](https://github.com/mliezun/caddy-snake/wiki/coverage.svg)](https://raw.githack.com/wiki/mliezun/caddy-snake/coverage.html)
+# Quickstart
 
-> [Caddy](https://github.com/caddyserver/caddy) is a powerful, enterprise-ready, open source web server with automatic HTTPS written in Go.
+Let's discover **Caddy Snake in less than 5 minutes**.
 
-[![Caddy Snake logo](docs/static/img/caddysnake-512x512.png)](https://caddysnake.readthedocs.org/docs/intro)
+## Getting Started
 
-Caddy Snake is a plugin that provides native support for Python apps built-in the Caddy web server.
-
-It embeds the Python interpreter inside Caddy and serves requests directly without going through a reverse proxy.
-
-Supports both WSGI and ASGI, which means you can run all types of frameworks like Flask, Django and FastAPI.
-
-## Quickstart
+Get started by **building from source**. You can also [build with Docker](#build-with-docker).
 
 ```
 CGO_ENABLED=1 xcaddy build --with github.com/mliezun/caddy-snake
 ```
 
-#### Requirements
+### What you'll need
 
 - Python >= 3.10 + dev files
 - C compiler and build tools
 - Go >= 1.21 and [Xcaddy](https://github.com/caddyserver/xcaddy)
 
-Install requirements on Ubuntu 24.04:
 
-```
-$ sudo apt-get install python3-dev build-essential pkg-config golang
-$ go install github.com/caddyserver/xcaddy/cmd/xcaddy@latest
-```
-
-You can also [build with Docker](#build-with-docker).
-
-#### Example usage: Flask
-
-`main.py`
-
-```python
-from flask import Flask
-
-app = Flask(__name__)
-
-@app.route("/hello-world")
-def hello():
-    return "Hello world!"
-```
-
-`Caddyfile`
-
-```Caddyfile
-http://localhost:9080 {
-    route {
-        python {
-            module_wsgi "main:app"
-        }
-    }
-}
-```
-
-Run:
-
-```
-$ pip install Flask
-$ CGO_ENABLED=1 xcaddy build --with github.com/mliezun/caddy-snake
-$ ./caddy run --config Caddyfile
-```
-
-```
-$ curl http://localhost:9080/hello-world
-Hello world!
-```
-
-See how to setup [Hot Reloading](#hot-reloading)
-
-#### Example usage: FastAPI
+### Example usage: FastAPI
 
 `main.py`
 
@@ -113,6 +59,47 @@ Hello world!
 ```
 
 > NOTE: It's possible to enable/disable [lifespan events](https://fastapi.tiangolo.com/advanced/events/) by adding the `lifespan on|off` directive to your Caddy configuration. In the above case the lifespan events are disabled because the directive was omitted.
+
+See how to setup [Hot Reloading](#hot-reloading)
+
+### Example usage: Flask
+
+`main.py`
+
+```python
+from flask import Flask
+
+app = Flask(__name__)
+
+@app.route("/hello-world")
+def hello():
+    return "Hello world!"
+```
+
+`Caddyfile`
+
+```Caddyfile
+http://localhost:9080 {
+    route {
+        python {
+            module_wsgi "main:app"
+        }
+    }
+}
+```
+
+Run:
+
+```
+$ pip install Flask
+$ CGO_ENABLED=1 xcaddy build --with github.com/mliezun/caddy-snake
+$ ./caddy run --config Caddyfile
+```
+
+```
+$ curl http://localhost:9080/hello-world
+Hello world!
+```
 
 See how to setup [Hot Reloading](#hot-reloading)
 
@@ -183,7 +170,3 @@ watchmedo auto-restart -d . -p "*.py" --recursive \
 ```
 
 Note that this will restart Caddy when new `.py` files are created. If your venv is in the directory watched by watchmedo, installing packages in the venv will also restart Caddy by modifying `.py` files.
-
-## LICENSE
-
-[MIT License](/LICENSE).
