@@ -182,18 +182,6 @@ watchmedo auto-restart -d . -p "*.py" --recursive \
 
 Note that this will restart Caddy when new `.py` files are created. If your venv is in the directory watched by watchmedo, installing packages in the venv will also restart Caddy by modifying `.py` files.
 
-## Dev resources
-
-- [Python C API Docs](https://docs.python.org/3.12/c-api/structures.html)
-- [Python C API New Type Tutorial](https://docs.python.org/3/extending/newtypes_tutorial.html)
-- [Bjoern WSGI](https://github.com/jonashaag/bjoern/tree/master)
-- [WSGO](https://github.com/jonny5532/wsgo/blob/main)
-- [embedding-python-in-golang | WSGI Django implementation](https://github.com/spikeekips/embedding-python-in-golang/blob/master/wsgi-django)
-- [Apache mod_wsgi](https://github.com/GrahamDumpleton/mod_wsgi)
-- [FrankenPHP](https://github.com/dunglas/frankenphp)
-- [WSGI Standard PEP 3333](https://peps.python.org/pep-3333/)
-- [ASGI Spec](https://asgi.readthedocs.io/en/latest/index.html)
-
 ## LICENSE
 
 [MIT License](/LICENSE).

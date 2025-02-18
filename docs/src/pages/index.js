@@ -4,6 +4,7 @@ import useDocusaurusContext from '@docusaurus/useDocusaurusContext';
 import Layout from '@theme/Layout';
 import HomepageFeatures from '@site/src/components/HomepageFeatures';
 
+import CaddysnakeLogo from '@site/static/img/caddysnake.png';
 import Heading from '@theme/Heading';
 import styles from './index.module.css';
 
@@ -16,11 +17,12 @@ function HomepageHeader() {
           {siteConfig.title}
         </Heading>
         <p className="hero__subtitle">{siteConfig.tagline}</p>
+        <img src={CaddysnakeLogo} alt="Caddy Snake logo" width={200} />
         <div className={styles.buttons}>
           <Link
             className="button button--secondary button--lg"
             to="/docs/intro">
-            Docusaurus Tutorial - 5min ⏱️
+            Quickstart - 5min ⏱️
           </Link>
         </div>
       </div>
@@ -32,8 +34,8 @@ export default function Home() {
   const {siteConfig} = useDocusaurusContext();
   return (
     <Layout
-      title={`Hello from ${siteConfig.title}`}
-      description="Description will go into a meta tag in <head />">
+      title={`${siteConfig.title} documentation`}
+      description="Caddy Snake is a plugin that integrates the Python interpreter inside the revers proxy to serve WSGI and ASGI apps.">
       <HomepageHeader />
       <main>
         <HomepageFeatures />
