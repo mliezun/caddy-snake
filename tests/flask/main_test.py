@@ -30,8 +30,11 @@ def upload_file():
     # Only upload every 10th item
     if item_count % 10 != 0:
         return True
+    # Open the caddy binary itself
+    # This is just to test the upload functionality
     with open("./caddy", "rb") as f:
         response = requests.post(f"{BASE_URL}/item/upload-file/", files={"file": f})
+        f.seek(0)
         binary_content = f.read()
         return response.ok and response.content == binary_content
 
