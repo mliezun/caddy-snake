@@ -26,6 +26,17 @@ def store_item(id: str, item: dict):
     response = requests.post(f"{BASE_URL}/item/{id}", json=item)
     return response.status_code == 200 and b"Stored" in response.content
 
+def upload_file():
+    # Only upload every 10th item
+    if item_count % 10 != 0:
+        return True
+    # Open the caddy binary itself
+    # This is just to test the upload functionality
+    with open("./caddy", "rb") as f:
+        response = requests.post(f"{BASE_URL}/item/upload-file/", files={"file": f})
+        f.seek(0)
+        binary_content = f.read()
+        return response.ok and response.content == binary_content
 
 def get_item(id: str, item: dict):
     response = requests.get(f"{BASE_URL}/item/{id}")
@@ -44,6 +55,7 @@ def item_lifecycle():
     assert get_item(id, item), "Get item failed"
     assert delete_item(id), "Delete item failed"
     assert not delete_item(id), "Delete item should fail"
+    assert upload_file(), "Upload file failed"
 
 
 def make_objects(max_workers: int, count: int):
