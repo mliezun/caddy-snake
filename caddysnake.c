@@ -266,7 +266,8 @@ void WsgiApp_cleanup(WsgiApp *app) {
 }
 
 void WsgiApp_handle_request(WsgiApp *app, int64_t request_id,
-                            MapKeyVal *headers, const char *body) {
+                            MapKeyVal *headers, const char *body,
+                            size_t body_len) {
   PyGILState_STATE gstate = PyGILState_Ensure();
 
   PyObject *environ = PyDict_New();
@@ -278,7 +279,7 @@ void WsgiApp_handle_request(WsgiApp *app, int64_t request_id,
     Py_DECREF(value);
   }
   PyObject *input_key = PyUnicode_FromString("wsgi.input");
-  PyObject *bytes = PyBytes_FromString(body);
+  PyObject *bytes = PyBytes_FromStringAndSize(body, body_len);
   PyObject *bytes_file = PyObject_CallOneArg(BytesIO, bytes);
   PyDict_SetItem(environ, input_key, bytes_file);
   Py_DECREF(input_key);

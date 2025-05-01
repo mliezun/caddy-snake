@@ -465,8 +465,6 @@ func (m *Wsgi) HandleRequest(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
-	body_str := C.CString(string(body))
-	defer C.free(unsafe.Pointer(body_str))
 
 	ch := make(chan WsgiRequestHandler)
 	wsgi_lock.Lock()
@@ -476,7 +474,7 @@ func (m *Wsgi) HandleRequest(w http.ResponseWriter, r *http.Request) error {
 	wsgi_lock.Unlock()
 
 	runtime.LockOSThread()
-	C.WsgiApp_handle_request(m.app, C.int64_t(request_id), rh.m, body_str)
+	C.WsgiApp_handle_request(m.app, C.int64_t(request_id), rh.m, (*C.char)(unsafe.Pointer(&body[0])), C.size_t(len(body)))
 	runtime.UnlockOSThread()
 
 	h := <-ch
