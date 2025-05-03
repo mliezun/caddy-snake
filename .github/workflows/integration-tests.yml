@@ -48,6 +48,7 @@ jobs:
           source venv/bin/activate
           python main_test.py
       - name: Upload caddy.log
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: caddy-log
