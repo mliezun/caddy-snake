@@ -28,6 +28,19 @@ def store_item(id: str, item: dict):
     return response.status_code == 200 and b"Stored" in response.content
 
 
+def upload_file():
+    # Only upload every 10th item
+    if item_count % 10 != 0:
+        return True
+    # Open the caddy binary itself
+    # This is just to test the upload functionality
+    with open("./caddy", "rb") as f:
+        response = requests.post(f"{BASE_URL}/item/upload-file/", files={"file": f})
+        f.seek(0)
+        binary_content = f.read()
+        return response.ok and response.content == binary_content
+
+
 def get_item(id: str, item: dict):
     response = requests.get(f"{BASE_URL}/item/{id}")
     return response.status_code == 200 and response.json() == item
@@ -55,6 +68,7 @@ def item_lifecycle():
         assert stream_content(id, item), "Failed to stream content"
     assert delete_item(id), "Delete item failed"
     assert not delete_item(id), "Delete item should fail"
+    assert upload_file(), "Upload file failed"
 
 
 def make_objects(max_workers: int, count: int):
@@ -78,7 +92,7 @@ def make_objects(max_workers: int, count: int):
         exit(1)
 
     print(f"Created and destroyed {count} objects")
-    print(f"Elapsed: {time.time()-start}s")
+    print(f"Elapsed: {time.time() - start}s")
 
 
 def find_and_terminate_process(process_name):
@@ -104,12 +118,15 @@ def check_lifespan_events_on_logs(logs: str):
             if event in events_count:
                 events_count[event] += 1
     for event, count in events_count.items():
-        assert (
-            count == 1
-        ), f"Expected '{event}' to only be seen once, but seen {count} times"
+        assert count == 1, (
+            f"Expected '{event}' to only be seen once, but seen {count} times"
+        )
 
 
 if __name__ == "__main__":
-    make_objects(max_workers=4, count=2_500)
+    import sys
+
+    count = int(sys.argv[1]) if len(sys.argv) > 1 else 2_500
+    make_objects(max_workers=4, count=count)
     find_and_terminate_process("caddy")
     check_lifespan_events_on_logs("caddy.log")

@@ -26,6 +26,7 @@ def store_item(id: str, item: dict):
     response = requests.post(f"{BASE_URL}/item/{id}", json=item)
     return response.status_code == 200 and b"Stored" in response.content
 
+
 def upload_file():
     # Only upload every 10th item
     if item_count % 10 != 0:
@@ -37,6 +38,7 @@ def upload_file():
         f.seek(0)
         binary_content = f.read()
         return response.ok and response.content == binary_content
+
 
 def get_item(id: str, item: dict):
     response = requests.get(f"{BASE_URL}/item/{id}")
@@ -79,8 +81,11 @@ def make_objects(max_workers: int, count: int):
         exit(1)
 
     print(f"Created and destroyed {count} objects")
-    print(f"Elapsed: {time.time()-start}s")
+    print(f"Elapsed: {time.time() - start}s")
 
 
 if __name__ == "__main__":
-    make_objects(max_workers=4, count=2_500)
+    import sys
+
+    count = int(sys.argv[1]) if len(sys.argv) > 1 else 2_500
+    make_objects(max_workers=4, count=count)

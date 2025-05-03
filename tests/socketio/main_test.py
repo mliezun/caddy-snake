@@ -21,15 +21,15 @@ def get_dummy_user() -> dict:
         "blob": BIG_BLOB if user_count % 4 == 0 else None,
     }
 
+
 def user_lifecycle():
     sio = socketio.Client()
-    
+
     connected_ok = False
     disconnected_ok = False
     ping_data = get_dummy_user()
     pong_data = []
-    
-    
+
     @sio.event
     def connect():
         nonlocal connected_ok
@@ -44,16 +44,16 @@ def user_lifecycle():
     def pong(data):
         nonlocal pong_data
         pong_data.append(data)
-        
+
     sio.connect(BASE_URL)
     start_data = sio.call("start", ping_data)
     sio.emit("ping", ping_data)
-    
+
     time.sleep(1 if not ping_data.get("blob") else 5)
     assert connected_ok
     assert start_data in pong_data
     assert start_data["data"] == ping_data
-    
+
     sio.disconnect()
     time.sleep(1)
     assert disconnected_ok
@@ -80,7 +80,7 @@ def make_users(max_workers: int, count: int):
         exit(1)
 
     print(f"Created and destroyed {count} users")
-    print(f"Elapsed: {time.time()-start}s")
+    print(f"Elapsed: {time.time() - start}s")
 
 
 def find_and_terminate_process(process_name):
@@ -95,7 +95,7 @@ def find_and_terminate_process(process_name):
             pass
 
 
-def check_user_events_on_logs(logs: str):
+def check_user_events_on_logs(logs: str, check_count: int = 256):
     events_count = {
         "User connected": 0,
         "User disconnected": 0,
@@ -107,12 +107,15 @@ def check_user_events_on_logs(logs: str):
                 if event_key in event:
                     events_count[event_key] += 1
     for event, count in events_count.items():
-        assert (
-            count == 256
-        ), f"Expected '{event}' to only be seen once, but seen {count} times"
+        assert count == check_count, (
+            f"Expected '{event}' to only be seen {check_count}, but seen {count} times"
+        )
 
 
 if __name__ == "__main__":
-    make_users(max_workers=8, count=256)
+    import sys
+
+    count = int(sys.argv[1]) if len(sys.argv) > 1 else 256
+    make_users(max_workers=8, count=count)
     find_and_terminate_process("caddy")
-    check_user_events_on_logs("caddy.log")
+    check_user_events_on_logs("caddy.log", check_count=count)

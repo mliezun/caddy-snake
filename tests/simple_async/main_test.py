@@ -67,8 +67,11 @@ def make_objects(max_workers: int, count: int):
         exit(1)
 
     print(f"Created and destroyed {count} objects")
-    print(f"Elapsed: {time.time()-start}s")
+    print(f"Elapsed: {time.time() - start}s")
 
 
 if __name__ == "__main__":
-    make_objects(max_workers=4, count=2_500)
+    import sys
+
+    count = int(sys.argv[1]) if len(sys.argv) > 1 else 2_500
+    make_objects(max_workers=4, count=count)

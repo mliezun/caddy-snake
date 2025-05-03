@@ -1,10 +1,9 @@
-import random
 import sys
 from typing import Optional
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, WebSocket
-from fastapi.responses import StreamingResponse, HTMLResponse
+from fastapi import FastAPI, UploadFile
+from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel
 
 
@@ -28,6 +27,7 @@ class Item(BaseModel):
 
 @app.get("/item/{id}")
 async def get_item(id: str):
+    print("Get item", file=sys.stderr)
     return db.get(id)
 
 
@@ -53,3 +53,9 @@ def chunked_blob(blob: str):
 @app.get("/stream-item/{id}")
 async def item_stream(id: str) -> StreamingResponse:
     return StreamingResponse(chunked_blob(db[id].blob), media_type="text/event-stream")
+
+
+@app.post("/item/upload-file/")
+async def upload_file(file: UploadFile):
+    contents = await file.read()
+    return Response(content=contents, media_type="application/octet-stream")
