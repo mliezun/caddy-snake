@@ -24,6 +24,8 @@ jobs:
         run: |
           sudo apt-get update -yyqq
           sudo apt-get install -yyqq python3-dev clang-format
+      - name: Check pre-commit
+        uses: pre-commit/action@v3.0.0
       - name: Go vet
         run: |
           go vet -unsafeptr=false ./...

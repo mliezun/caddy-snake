@@ -23,7 +23,7 @@ CGO_ENABLED=1 xcaddy build --with github.com/mliezun/caddy-snake
 
 - Python >= 3.10 + dev files
 - C compiler and build tools
-- Go >= 1.21 and [Xcaddy](https://github.com/caddyserver/xcaddy)
+- Go >= 1.24 and [Xcaddy](https://github.com/caddyserver/xcaddy)
 
 Install requirements on Ubuntu 24.04:
 
