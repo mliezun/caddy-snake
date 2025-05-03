@@ -148,12 +148,14 @@ Make sure to use the same Python version as you have installed in your system.
 You can copy the contents of the builder Dockerfile and execute the following commands to get your Caddy binary: 
 
 ```bash
-docker build -f builder.Dockerfile --build-arg PY_VERSION=3.11 -t caddy-snake .
+docker build -f builder.Dockerfile --build-arg PY_VERSION=3.11 -t caddy-snake-builder .
 ```
 
 ```bash
-docker run --rm -v $(pwd):/output caddy-snake
+docker run --rm -v $(pwd):/output caddy-snake-builder
 ```
+
+The output `caddy` binary file will be located in your current folder.
 
 **NOTE**
 

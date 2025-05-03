@@ -14,26 +14,21 @@ jobs:
       GOEXPERIMENT: cgocheck2
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
-        with:
-          go-version: '1.24'
-          cache: false
-      - name: Install Xcaddy
-        run: go install github.com/caddyserver/xcaddy/cmd/xcaddy@latest
-      - name: Set up Python ${{ matrix.python-version }}
+      # Use builder.Dockerfile from the root of the repo
+      # to build caddy with the caddy-snake module.
+      # We need to setup docker and then use the following commands to build
+      # docker build -f builder.Dockerfile --build-arg PY_VERSION=3.11 -t caddy-snake .
+      # docker run --rm -v $(pwd):/output caddy-snake
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@f95db51fddba0c2d1ec667646a06c2ce06100226
+      - name: Build Caddy with caddy-snake module
         run: |
-          export DEBIAN_FRONTEND=noninteractive
-          sudo apt-get update -yyqq
-          sudo apt-get install -yyqq software-properties-common
-          sudo add-apt-repository -y ppa:deadsnakes/ppa
-          sudo apt-get install -yyqq python${{ matrix.python-version }}-dev python${{ matrix.python-version }}-venv
-          sudo mv /usr/lib/x86_64-linux-gnu/pkgconfig/python-${{ matrix.python-version }}-embed.pc /usr/lib/x86_64-linux-gnu/pkgconfig/python3-embed.pc
-      - name: Run module tests
-        run: go test -race -v ./...
+          docker build -f builder.Dockerfile --build-arg PY_VERSION=${{ matrix.python-version }} -t caddy-snake-builder .
+          docker run --rm -v $(pwd):/output caddy-snake-builder
       - name: Build the CLI
         run: |
-          cd cmd/cli
-          CGO_ENABLED=1 go build -o caddysnake-cli main.go
+          mv caddy cmd/cli/caddysnake-cli
+          cd cmd/cli/
           touch dummy.c
           python -m pip install cibuildwheel==2.22.0
           export CIBW_BUILD=cp$(echo ${{ matrix.python-version }} | tr -d .)-manylinux_x86_64
