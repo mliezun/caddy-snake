@@ -40,11 +40,11 @@ jobs:
       - name: Build the server
         working-directory: tests/${{ matrix.tool-name }}/
         run: CGO_ENABLED=1 xcaddy build --with github.com/mliezun/caddy-snake=../..
-      - name: Run integration tests
+      - name: Run integration tests with valgrind
         working-directory: tests/${{ matrix.tool-name }}/
         run: |
           valgrind --tool=memcheck --leak-check=full --num-callers=50 --error-limit=no ./caddy run --config Caddyfile > caddy.log 2>&1 &
-          timeout 120 bash -c 'while ! grep -q "finished cleaning storage units" caddy.log; do sleep 1; done'
+          timeout 240 bash -c 'while ! grep -q "finished cleaning storage units" caddy.log; do sleep 1; done'
           source venv/bin/activate
           python main_test.py 100
       - name: Upload caddy.log
