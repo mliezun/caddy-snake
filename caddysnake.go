@@ -889,6 +889,7 @@ func asgi_receive_start(request_id C.uint64_t, event *C.AsgiEvent) C.uint8_t {
 
 	arh.operations <- AsgiOperations{op: func() {
 		var body_str *C.char
+		var body_len C.size_t
 		var more_body C.uint8_t
 		if !arh.completed_body {
 			buffer := make([]byte, 1<<16)
@@ -898,8 +899,9 @@ func asgi_receive_start(request_id C.uint64_t, event *C.AsgiEvent) C.uint8_t {
 				return
 			}
 			arh.completed_body = (err == io.EOF)
-			body_str = C.CString(string(buffer))
-			defer C.free(unsafe.Pointer(body_str))
+			buffer = append(buffer, 0)
+			body_str = (*C.char)(unsafe.Pointer(&buffer[0]))
+			body_len = C.size_t(len(buffer) - 1) // -1 to remove null-terminator
 		}
 
 		if arh.completed_body {
@@ -909,7 +911,7 @@ func asgi_receive_start(request_id C.uint64_t, event *C.AsgiEvent) C.uint8_t {
 		}
 
 		runtime.LockOSThread()
-		C.AsgiEvent_set(event, body_str, more_body, C.uint8_t(0))
+		C.AsgiEvent_set(event, body_str, body_len, more_body, C.uint8_t(0))
 		runtime.UnlockOSThread()
 	}}
 

@@ -33,7 +33,7 @@ uint8_t AsgiApp_lifespan_startup(AsgiApp *);
 uint8_t AsgiApp_lifespan_shutdown(AsgiApp *);
 void AsgiApp_handle_request(AsgiApp *, uint64_t, MapKeyVal *, MapKeyVal *,
                             const char *, int, const char *, int, const char *);
-void AsgiEvent_set(AsgiEvent *, const char *, uint8_t, uint8_t);
+void AsgiEvent_set(AsgiEvent *, const char *, size_t, uint8_t, uint8_t);
 void AsgiEvent_set_websocket(AsgiEvent *, const char *, size_t, uint8_t,
                              uint8_t);
 void AsgiEvent_connect_websocket(AsgiEvent *);

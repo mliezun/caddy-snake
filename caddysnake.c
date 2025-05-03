@@ -596,14 +596,14 @@ void AsgiEvent_cleanup(AsgiEvent *event) {
   PyGILState_Release(gstate);
 }
 
-void AsgiEvent_set(AsgiEvent *self, const char *body, uint8_t more_body,
-                   uint8_t is_send) {
+void AsgiEvent_set(AsgiEvent *self, const char *body, size_t body_len,
+                   uint8_t more_body, uint8_t is_send) {
   PyGILState_STATE gstate = PyGILState_Ensure();
-  if (body) {
+  if (body_len) {
     if (self->request_body) {
       Py_DECREF(self->request_body);
     }
-    self->request_body = PyBytes_FromString(body);
+    self->request_body = PyBytes_FromStringAndSize(body, body_len);
   }
   self->more_body = more_body;
   PyObject *set_fn = NULL;
