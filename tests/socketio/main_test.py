@@ -113,6 +113,8 @@ def check_user_events_on_logs(logs: str):
 
 
 if __name__ == "__main__":
-    make_users(max_workers=8, count=256)
+    import sys
+    count = int(sys.argv[1]) if len(sys.argv) > 1 else 2_500
+    make_users(max_workers=8, count=count)
     find_and_terminate_process("caddy")
     check_user_events_on_logs("caddy.log")

@@ -71,4 +71,6 @@ def make_objects(max_workers: int, count: int):
 
 
 if __name__ == "__main__":
-    make_objects(max_workers=4, count=2_500)
+    import sys
+    count = int(sys.argv[1]) if len(sys.argv) > 1 else 2_500
+    make_objects(max_workers=4, count=count)
