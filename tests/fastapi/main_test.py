@@ -92,7 +92,7 @@ def make_objects(max_workers: int, count: int):
         exit(1)
 
     print(f"Created and destroyed {count} objects")
-    print(f"Elapsed: {time.time()-start}s")
+    print(f"Elapsed: {time.time() - start}s")
 
 
 def find_and_terminate_process(process_name):
@@ -118,13 +118,14 @@ def check_lifespan_events_on_logs(logs: str):
             if event in events_count:
                 events_count[event] += 1
     for event, count in events_count.items():
-        assert (
-            count == 1
-        ), f"Expected '{event}' to only be seen once, but seen {count} times"
+        assert count == 1, (
+            f"Expected '{event}' to only be seen once, but seen {count} times"
+        )
 
 
 if __name__ == "__main__":
     import sys
+
     count = int(sys.argv[1]) if len(sys.argv) > 1 else 2_500
     make_objects(max_workers=4, count=count)
     find_and_terminate_process("caddy")

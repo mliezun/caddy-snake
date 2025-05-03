@@ -1,4 +1,3 @@
-import random
 import sys
 from typing import Optional
 from contextlib import asynccontextmanager
@@ -54,7 +53,6 @@ def chunked_blob(blob: str):
 @app.get("/stream-item/{id}")
 async def item_stream(id: str) -> StreamingResponse:
     return StreamingResponse(chunked_blob(db[id].blob), media_type="text/event-stream")
-
 
 
 @app.post("/item/upload-file/")

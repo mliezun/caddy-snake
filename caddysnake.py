@@ -53,7 +53,6 @@ def caddysnake_setup_asgi(loop):
 
     def build_lifespan(app, state):
         import sys
-        import warnings
 
         scope = {
             "type": "lifespan",
