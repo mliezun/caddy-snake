@@ -44,7 +44,7 @@ jobs:
         working-directory: tests/${{ matrix.tool-name }}/
         run: |
           valgrind --tool=memcheck --leak-check=full --num-callers=50 --error-limit=no ./caddy run --config Caddyfile > caddy.log 2>&1 &
-          sleep 2
+          timeout 60 bash -c 'while ! grep -q "finished cleaning storage units" caddy.log; do sleep 1; done'
           source venv/bin/activate
           python main_test.py
       - name: Upload caddy.log
