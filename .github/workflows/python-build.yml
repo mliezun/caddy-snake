@@ -2,6 +2,8 @@ name: Python Build Package - Linux
 on:
   push:
     tags: [ 'v*.*.*' ]
+  pull_request:
+    branches: [ "main" ]
 
 jobs:
   build:
