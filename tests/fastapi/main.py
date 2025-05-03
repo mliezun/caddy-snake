@@ -3,8 +3,8 @@ import sys
 from typing import Optional
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, WebSocket
-from fastapi.responses import StreamingResponse, HTMLResponse
+from fastapi import FastAPI, UploadFile
+from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel
 
 
@@ -56,7 +56,8 @@ async def item_stream(id: str) -> StreamingResponse:
     return StreamingResponse(chunked_blob(db[id].blob), media_type="text/event-stream")
 
 
+
 @app.post("/item/upload-file/")
-async def upload_file(file: bytes):
-    # Return the content of the uploaded file
-    return file
+async def upload_file(file: UploadFile):
+    contents = await file.read()
+    return Response(content=contents, media_type="application/octet-stream")
