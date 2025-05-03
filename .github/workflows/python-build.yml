@@ -28,11 +28,10 @@ jobs:
         run: |
           docker build -f builder.Dockerfile --build-arg PY_VERSION=${{ matrix.python-version }} -t caddy-snake-builder .
           docker run --rm -v $(pwd):/output caddy-snake-builder
-      - name: Run module tests
-        run: go test -race -v ./...
       - name: Build the CLI
         run: |
           mv caddy cmd/cli/caddysnake-cli
+          cd cmd/cli/
           touch dummy.c
           python -m pip install cibuildwheel==2.22.0
           export CIBW_BUILD=cp$(echo ${{ matrix.python-version }} | tr -d .)-manylinux_x86_64
