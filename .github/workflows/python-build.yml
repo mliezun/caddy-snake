@@ -2,6 +2,9 @@ name: Python Build Package - Linux
 on:
   push:
     tags: [ 'v*.*.*' ]
+  pull_request:
+    branches:
+      - main
 
 jobs:
   build:
@@ -39,9 +42,9 @@ jobs:
           export CIBW_BUILD=cp$(echo ${{ matrix.python-version }} | tr -d .)-manylinux_x86_64
           echo $CIBW_BUILD
           CIBW_BUILD_VERBOSITY=1 python -m cibuildwheel
-      - name: Publish package
-        uses: pypa/gh-action-pypi-publish@release/v1
-        with:
-          packages-dir: cmd/cli/wheelhouse
-          user: __token__
-          password: ${{ secrets.PYPI_API_TOKEN }}
+      # - name: Publish package
+      #   uses: pypa/gh-action-pypi-publish@release/v1
+      #   with:
+      #     packages-dir: cmd/cli/wheelhouse
+      #     user: __token__
+      #     password: ${{ secrets.PYPI_API_TOKEN }}
