@@ -1,5 +1,5 @@
 ---
-name: Integration Tests
+name: Memory Tests
 on:
   pull_request:
     branches:
@@ -43,7 +43,13 @@ jobs:
       - name: Run integration tests
         working-directory: tests/${{ matrix.tool-name }}/
         run: |
-          ./caddy run --config Caddyfile > caddy.log 2>&1 &
-          timeout 60 bash -c 'while ! grep -q "finished cleaning storage units" caddy.log; do sleep 1; done'
+          valgrind --tool=memcheck --leak-check=full --num-callers=50 --error-limit=no ./caddy run --config Caddyfile > caddy.log 2>&1 &
+          timeout 120 bash -c 'while ! grep -q "finished cleaning storage units" caddy.log; do sleep 1; done'
           source venv/bin/activate
-          python main_test.py
+          python main_test.py 100
+      - name: Upload caddy.log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: caddy-log
+          path: caddy.log
