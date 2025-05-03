@@ -28,6 +28,7 @@ class Item(BaseModel):
 
 @app.get("/item/{id}")
 async def get_item(id: str):
+    print("Get item", file=sys.stderr)
     return db.get(id)
 
 
@@ -53,3 +54,9 @@ def chunked_blob(blob: str):
 @app.get("/stream-item/{id}")
 async def item_stream(id: str) -> StreamingResponse:
     return StreamingResponse(chunked_blob(db[id].blob), media_type="text/event-stream")
+
+
+@app.post("/item/upload-file/")
+async def upload_file(file: bytes):
+    # Return the content of the uploaded file
+    return file
