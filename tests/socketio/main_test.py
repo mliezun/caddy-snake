@@ -95,7 +95,7 @@ def find_and_terminate_process(process_name):
             pass
 
 
-def check_user_events_on_logs(logs: str):
+def check_user_events_on_logs(logs: str, check_count: int = 256):
     events_count = {
         "User connected": 0,
         "User disconnected": 0,
@@ -108,13 +108,13 @@ def check_user_events_on_logs(logs: str):
                     events_count[event_key] += 1
     for event, count in events_count.items():
         assert (
-            count == 256
-        ), f"Expected '{event}' to only be seen once, but seen {count} times"
+            count == check_count
+        ), f"Expected '{event}' to only be seen {check_count}, but seen {count} times"
 
 
 if __name__ == "__main__":
     import sys
-    count = int(sys.argv[1]) if len(sys.argv) > 1 else 2_500
+    count = int(sys.argv[1]) if len(sys.argv) > 1 else 256
     make_users(max_workers=8, count=count)
     find_and_terminate_process("caddy")
-    check_user_events_on_logs("caddy.log")
+    check_user_events_on_logs("caddy.log", check_count=count)
