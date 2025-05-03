@@ -599,7 +599,7 @@ void AsgiEvent_cleanup(AsgiEvent *event) {
 void AsgiEvent_set(AsgiEvent *self, const char *body, size_t body_len,
                    uint8_t more_body, uint8_t is_send) {
   PyGILState_STATE gstate = PyGILState_Ensure();
-  if (body_len) {
+  if (body) {
     if (self->request_body) {
       Py_DECREF(self->request_body);
     }
