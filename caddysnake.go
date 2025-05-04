@@ -398,8 +398,7 @@ func upperCaseAndUnderscore(r rune) rune {
 	return r
 }
 
-// HandleRequest passes request down to Python Wsgi app and writes responses and headers.
-func (m *Wsgi) HandleRequest(w http.ResponseWriter, r *http.Request) error {
+func getHostPort(r *http.Request) (string, string) {
 	ctx := r.Context()
 	srvAddr := ctx.Value(http.LocalAddrContextKey).(net.Addr)
 	_, port, _ := net.SplitHostPort(srvAddr.String())
@@ -408,6 +407,13 @@ func (m *Wsgi) HandleRequest(w http.ResponseWriter, r *http.Request) error {
 		// net.SplitHostPort returns error and an empty host when port is missing
 		host = r.Host
 	}
+	return host, port
+}
+
+// buildWsgiHeaders builds the WSGI headers from the HTTP request.
+func buildWsgiHeaders(r *http.Request) *MapKeyVal {
+	host, port := getHostPort(r)
+
 	extra_headers := map[string]string{
 		"SERVER_NAME":     host,
 		"SERVER_PORT":     port,
@@ -431,8 +437,7 @@ func (m *Wsgi) HandleRequest(w http.ResponseWriter, r *http.Request) error {
 	if _, ok := r.Header[textproto.CanonicalMIMEHeaderKey("Content-Length")]; ok {
 		headers_length -= 1
 	}
-	rh := NewMapKeyVal(headers_length + len(extra_headers))
-	defer rh.Cleanup()
+	request_headers := NewMapKeyVal(headers_length + len(extra_headers))
 	i := 0
 	for k, items := range r.Header {
 		key := strings.Map(upperCaseAndUnderscore, k)
@@ -453,22 +458,35 @@ func (m *Wsgi) HandleRequest(w http.ResponseWriter, r *http.Request) error {
 			joinStr = "; "
 		}
 
-		rh.Set("HTTP_"+key, strings.Join(items, joinStr), i)
+		request_headers.Set("HTTP_"+key, strings.Join(items, joinStr), i)
 		i++
 	}
 	for k, v := range extra_headers {
-		rh.Set(k, v, i)
+		request_headers.Set(k, v, i)
 		i++
 	}
+	return request_headers
+}
+
+// bytesAsBuffer converts a byte slice to a C char pointer and its length.
+func bytesAsBuffer(b []byte) (*C.char, C.size_t) {
+	// Append null-terminator for strings
+	b = append(b, 0)
+	buffer := (*C.char)(unsafe.Pointer(&b[0]))
+	buffer_len := C.size_t(len(b) - 1) // -1 to remove null-terminator
+	return buffer, buffer_len
+}
+
+// HandleRequest passes request down to Python Wsgi app and writes responses and headers.
+func (m *Wsgi) HandleRequest(w http.ResponseWriter, r *http.Request) error {
+	request_headers := buildWsgiHeaders(r)
+	defer request_headers.Cleanup()
 
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
 		return err
 	}
-	// Append null-terminator for strings
-	body = append(body, 0)
-	body_str := (*C.char)(unsafe.Pointer(&body[0]))
-	body_size := C.size_t(len(body) - 1) // -1 to remove null-terminator
+	buffer, buffer_len := bytesAsBuffer(body)
 
 	ch := make(chan WsgiRequestHandler)
 	wsgi_lock.Lock()
@@ -478,7 +496,13 @@ func (m *Wsgi) HandleRequest(w http.ResponseWriter, r *http.Request) error {
 	wsgi_lock.Unlock()
 
 	runtime.LockOSThread()
-	C.WsgiApp_handle_request(m.app, C.int64_t(request_id), rh.m, body_str, body_size)
+	C.WsgiApp_handle_request(
+		m.app,
+		C.int64_t(request_id),
+		request_headers.m,
+		buffer,
+		buffer_len,
+	)
 	runtime.UnlockOSThread()
 
 	h := <-ch
