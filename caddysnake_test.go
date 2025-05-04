@@ -145,3 +145,27 @@ func TestLenNull(t *testing.T) {
 		t.Errorf("Expected length 0, got %d", m.Len())
 	}
 }
+
+func TestUpperCaseAndUnderscore(t *testing.T) {
+	tests := []struct {
+		input    rune
+		expected rune
+	}{
+		{'a', 'A'},
+		{'z', 'Z'},
+		{'m', 'M'},
+		{'-', '_'},
+		{'=', '_'},
+		{'A', 'A'}, // already uppercase
+		{'_', '_'}, // should remain the same
+		{'1', '1'}, // number
+		{'$', '$'}, // symbol
+	}
+
+	for _, tt := range tests {
+		got := upperCaseAndUnderscore(tt.input)
+		if got != tt.expected {
+			t.Errorf("upperCaseAndUnderscore(%q) = %q, want %q", tt.input, got, tt.expected)
+		}
+	}
+}
