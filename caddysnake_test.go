@@ -1,7 +1,11 @@
 package caddysnake
 
 import (
+	"context"
 	"fmt"
+	"io"
+	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -175,5 +179,100 @@ func TestUpperCaseAndUnderscore(t *testing.T) {
 		if got != tt.expected {
 			t.Errorf("upperCaseAndUnderscore(%q) = %q, want %q", tt.input, got, tt.expected)
 		}
+	}
+}
+
+func TestBytesAsBuffer(t *testing.T) {
+	// Test with a non-empty byte slice
+	input := []byte("hello world")
+	buffer, bufferLen := bytesAsBuffer(input)
+
+	if buffer == nil {
+		t.Errorf("Expected non-nil buffer, got nil")
+	}
+
+	if int(bufferLen) != len(input) {
+		t.Errorf("Expected buffer length %d, got %d", len(input), bufferLen)
+	}
+
+	// Test with an empty byte slice
+	emptyInput := []byte("")
+	emptyBuffer, emptyBufferLen := bytesAsBuffer(emptyInput)
+
+	if emptyBuffer == nil {
+		t.Errorf("Expected non-nil buffer for empty input, got nil")
+	}
+
+	if emptyBufferLen != 0 {
+		t.Errorf("Expected buffer length 0 for empty input, got %d", emptyBufferLen)
+	}
+}
+
+type mockNetAddr struct {
+	addr string
+}
+
+func (m *mockNetAddr) Network() string {
+	return "tcp"
+}
+
+func (m *mockNetAddr) String() string {
+	return m.addr
+}
+
+func TestBuildWsgiHeaders(t *testing.T) {
+	// Create a sample HTTP request
+	r := &http.Request{
+		Method: "GET",
+		Proto:  "HTTP/1.1",
+		Header: http.Header{
+			"Content-Type":   []string{"application/json"},
+			"Content-Length": []string{"123"},
+			"Custom-Header":  []string{"CustomValue"},
+		},
+		URL: &url.URL{
+			Path:     "/test/path",
+			RawQuery: "key=value",
+		},
+		Host: "localhost:8080",
+		Body: io.NopCloser(strings.NewReader("")),
+	}
+	ctx := context.WithValue(context.Background(), http.LocalAddrContextKey, &mockNetAddr{"localhost:8080"})
+	r = r.WithContext(ctx)
+
+	// Call the function
+	headers := buildWsgiHeaders(r)
+	defer headers.Cleanup()
+
+	// Check the headers
+	expectedHeaders := map[string]string{
+		"SERVER_NAME":        "localhost",
+		"SERVER_PORT":        "8080",
+		"SERVER_PROTOCOL":    "HTTP/1.1",
+		"REQUEST_METHOD":     "GET",
+		"PATH_INFO":          "/test/path",
+		"QUERY_STRING":       "key=value",
+		"CONTENT_TYPE":       "application/json",
+		"CONTENT_LENGTH":     "123",
+		"HTTP_CUSTOM_HEADER": "CustomValue",
+		"SCRIPT_NAME":        "",
+		"X_FROM":             "caddy-snake",
+		"wsgi.url_scheme":    "http",
+	}
+
+	for i := 0; i < headers.Len(); i++ {
+		key, value := headers.Get(i)
+		if expectedValue, ok := expectedHeaders[key]; ok {
+			if value != expectedValue {
+				t.Errorf("Header %s: expected %s, got %s", key, expectedValue, value)
+			}
+			delete(expectedHeaders, key)
+		} else {
+			t.Errorf("Unexpected header: %s=%s", key, value)
+		}
+	}
+
+	if len(expectedHeaders) > 0 {
+		t.Errorf("Missing headers: %v", expectedHeaders)
 	}
 }
