@@ -128,6 +128,7 @@ func TestSetAndGet(t *testing.T) {
 
 func TestSetGetBounds(t *testing.T) {
 	m := NewMapKeyVal(1)
+	m.Set("Content-Type", "application/json", 0)
 	defer m.Cleanup()
 
 	defer func() {
@@ -140,6 +141,7 @@ func TestSetGetBounds(t *testing.T) {
 
 func TestGetBounds(t *testing.T) {
 	m := NewMapKeyVal(1)
+	m.Set("Content-Type", "application/json", 0)
 	defer m.Cleanup()
 
 	defer func() {
