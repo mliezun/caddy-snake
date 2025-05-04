@@ -39,24 +39,24 @@ var SIZE_OF_CHAR_POINTER = unsafe.Sizeof((*C.char)(nil))
 // MapKeyVal wraps the same structure defined in the C layer
 type MapKeyVal struct {
 	m            *C.MapKeyVal
-	base_headers uintptr
-	base_values  uintptr
+	baseHeaders  uintptr
+	baseValues   uintptr
 }
 
 func NewMapKeyVal(count int) *MapKeyVal {
 	m := C.MapKeyVal_new(C.size_t(count))
 	return &MapKeyVal{
 		m:            m,
-		base_headers: uintptr(unsafe.Pointer(m.keys)),
-		base_values:  uintptr(unsafe.Pointer(m.values)),
+		baseHeaders:  uintptr(unsafe.Pointer(m.keys)),
+		baseValues:   uintptr(unsafe.Pointer(m.values)),
 	}
 }
 
 func NewMapKeyValFromSource(m *C.MapKeyVal) *MapKeyVal {
 	return &MapKeyVal{
 		m:            m,
-		base_headers: uintptr(unsafe.Pointer(m.keys)),
-		base_values:  uintptr(unsafe.Pointer(m.values)),
+		baseHeaders:  uintptr(unsafe.Pointer(m.keys)),
+		baseValues:   uintptr(unsafe.Pointer(m.values)),
 	}
 }
 
@@ -70,19 +70,19 @@ func (m *MapKeyVal) Set(k, v string, pos int) {
 	if pos < 0 || pos > int(m.m.count) {
 		panic("Expected pos to be within limits")
 	}
-	*(**C.char)(unsafe.Pointer(m.base_headers + uintptr(pos)*SIZE_OF_CHAR_POINTER)) = C.CString(k)
-	*(**C.char)(unsafe.Pointer(m.base_values + uintptr(pos)*SIZE_OF_CHAR_POINTER)) = C.CString(v)
+	*(**C.char)(unsafe.Pointer(m.baseHeaders + uintptr(pos)*SIZE_OF_CHAR_POINTER)) = C.CString(k)
+	*(**C.char)(unsafe.Pointer(m.baseValues + uintptr(pos)*SIZE_OF_CHAR_POINTER)) = C.CString(v)
 }
 
 func (m *MapKeyVal) Get(pos int) (string, string) {
 	if pos < 0 || pos > int(m.m.count) {
 		panic("Expected pos to be within limits")
 	}
-	header_name_ptr := unsafe.Pointer(uintptr(unsafe.Pointer(m.m.keys)) + uintptr(pos)*SIZE_OF_CHAR_POINTER)
-	header_value_ptr := unsafe.Pointer(uintptr(unsafe.Pointer(m.m.values)) + uintptr(pos)*SIZE_OF_CHAR_POINTER)
-	header_name := *(**C.char)(header_name_ptr)
-	header_value := *(**C.char)(header_value_ptr)
-	return C.GoString(header_name), C.GoString(header_value)
+	headerNamePtr := unsafe.Pointer(uintptr(unsafe.Pointer(m.m.keys)) + uintptr(pos)*SIZE_OF_CHAR_POINTER)
+	headerValuePtr := unsafe.Pointer(uintptr(unsafe.Pointer(m.m.values)) + uintptr(pos)*SIZE_OF_CHAR_POINTER)
+	headerName := *(**C.char)(headerNamePtr)
+	headerValue := *(**C.char)(headerValuePtr)
+	return C.GoString(headerName), C.GoString(headerValue)
 }
 
 func (m *MapKeyVal) Len() int {
@@ -224,20 +224,38 @@ func parsePythonDirective(h httpcaddyfile.Helper) (caddyhttp.MiddlewareHandler, 
 
 // WsgiRequestHandler tracks the state of a HTTP request to a WSGI App
 type WsgiRequestHandler struct {
-	status_code C.int
-	headers     *C.MapKeyVal
-	body        *C.char
-	body_size   C.size_t
+	statusCode C.int
+	headers    *C.MapKeyVal
+	body       *C.char
+	bodySize   C.size_t
 }
 
-var wsgi_lock sync.RWMutex = sync.RWMutex{}
-var wsgi_request_counter int64 = 0
-var wsgi_handlers map[int64]chan WsgiRequestHandler = map[int64]chan WsgiRequestHandler{}
+type WsgiState struct {
+	lock           sync.RWMutex
+	requestCounter int64
+	handlers       map[int64]chan WsgiRequestHandler
+}
+
+var (
+	wsgiStateInstance *WsgiState
+	wsgiStateOnce     sync.Once
+)
+
+func NewWsgiState() *WsgiState {
+	wsgiStateOnce.Do(func() {
+		wsgiStateInstance = &WsgiState{
+			lock:           sync.RWMutex{},
+			handlers:       make(map[int64]chan WsgiRequestHandler),
+			requestCounter: 0,
+		}
+	})
+	return wsgiStateInstance
+}
 
 func init() {
-	setup_py := C.CString(caddysnake_py)
-	defer C.free(unsafe.Pointer(setup_py))
-	C.Py_init_and_release_gil(setup_py)
+	setupPy := C.CString(caddysnake_py)
+	defer C.free(unsafe.Pointer(setupPy))
+	C.Py_init_and_release_gil(setupPy)
 	caddy.RegisterModule(CaddySnake{})
 	httpcaddyfile.RegisterHandlerDirective("python", parsePythonDirective)
 }
@@ -265,22 +283,22 @@ func findSitePackagesInVenv(venvPath string) (string, error) {
 }
 
 // findWorkingDirectory checks if the directory exists and returns the absolute path
-func findWorkingDirectory(working_dir string) (string, error) {
-	working_dir_abs, err := filepath.Abs(working_dir)
+func findWorkingDirectory(workingDir string) (string, error) {
+	workingDirAbs, err := filepath.Abs(workingDir)
 	if err != nil {
 		return "", err
 	}
-	fileInfo, err := os.Stat(working_dir_abs)
+	fileInfo, err := os.Stat(workingDirAbs)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return "", fmt.Errorf("working_dir directory does not exist in: %s", working_dir_abs)
+			return "", fmt.Errorf("working_dir directory does not exist in: %s", workingDirAbs)
 		}
 		return "", err
 	}
 	if !fileInfo.IsDir() {
-		return "", fmt.Errorf("working_dir is not a directory: %s", working_dir_abs)
+		return "", fmt.Errorf("working_dir is not a directory: %s", workingDirAbs)
 	}
-	return working_dir_abs, nil
+	return workingDirAbs, nil
 }
 
 // findPythonDirectory searches for a directory that matches "python3.*" inside the given libPath.
@@ -311,72 +329,74 @@ func findPythonDirectory(libPath string) (string, error) {
 
 // Wsgi stores a reference to a Python Wsgi application
 type Wsgi struct {
-	app          *C.WsgiApp
-	wsgi_pattern string
+	app         *C.WsgiApp
+	wsgiPattern string
+	state       *WsgiState
 }
 
-var wsgiapp_cache map[string]*Wsgi = map[string]*Wsgi{}
+var wsgiAppCache map[string]*Wsgi = map[string]*Wsgi{}
 
 // NewWsgi imports a WSGI app
-func NewWsgi(wsgi_pattern, working_dir, venv_path string) (*Wsgi, error) {
-	wsgi_lock.Lock()
-	defer wsgi_lock.Unlock()
+func NewWsgi(wsgiPattern, workingDir, venvPath string) (*Wsgi, error) {
+	state := NewWsgiState()
+	state.lock.Lock()
+	defer state.lock.Unlock()
 
-	if app, ok := wsgiapp_cache[wsgi_pattern]; ok {
+	if app, ok := wsgiAppCache[wsgiPattern]; ok {
 		return app, nil
 	}
 
-	module_app := strings.Split(wsgi_pattern, ":")
-	if len(module_app) != 2 {
+	moduleApp := strings.Split(wsgiPattern, ":")
+	if len(moduleApp) != 2 {
 		return nil, errors.New("expected pattern $(MODULE_NAME):$(VARIABLE_NAME)")
 	}
-	module_name := C.CString(module_app[0])
-	defer C.free(unsafe.Pointer(module_name))
-	app_name := C.CString(module_app[1])
-	defer C.free(unsafe.Pointer(app_name))
+	moduleName := C.CString(moduleApp[0])
+	defer C.free(unsafe.Pointer(moduleName))
+	appName := C.CString(moduleApp[1])
+	defer C.free(unsafe.Pointer(appName))
 
-	var packages_path *C.char = nil
-	if venv_path != "" {
-		sitePackagesPath, err := findSitePackagesInVenv(venv_path)
+	var packagesPath *C.char = nil
+	if venvPath != "" {
+		sitePackagesPath, err := findSitePackagesInVenv(venvPath)
 		if err != nil {
 			return nil, err
 		}
-		packages_path = C.CString(sitePackagesPath)
-		defer C.free(unsafe.Pointer(packages_path))
+		packagesPath = C.CString(sitePackagesPath)
+		defer C.free(unsafe.Pointer(packagesPath))
 	}
 
-	var working_dir_path *C.char = nil
-	if working_dir != "" {
-		working_dir_abs, err := findWorkingDirectory(working_dir)
+	var workingDirPath *C.char = nil
+	if workingDir != "" {
+		workingDirAbs, err := findWorkingDirectory(workingDir)
 		if err != nil {
 			return nil, err
 		}
-		working_dir_path = C.CString(working_dir_abs)
-		defer C.free(unsafe.Pointer(working_dir_path))
+		workingDirPath = C.CString(workingDirAbs)
+		defer C.free(unsafe.Pointer(workingDirPath))
 	}
 
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
-	app := C.WsgiApp_import(module_name, app_name, working_dir_path, packages_path)
+	app := C.WsgiApp_import(moduleName, appName, workingDirPath, packagesPath)
 	if app == nil {
 		return nil, errors.New("failed to import module")
 	}
 
-	result := &Wsgi{app, wsgi_pattern}
-	wsgiapp_cache[wsgi_pattern] = result
+	result := &Wsgi{app, wsgiPattern, state}
+	wsgiAppCache[wsgiPattern] = result
 	return result, nil
 }
 
 // Cleanup deallocates CGO resources used by Wsgi app
 func (m *Wsgi) Cleanup() error {
 	if m.app != nil {
-		wsgi_lock.Lock()
-		if _, ok := wsgiapp_cache[m.wsgi_pattern]; !ok {
-			wsgi_lock.Unlock()
+		m.state.lock.Lock()
+		if _, ok := wsgiAppCache[m.wsgiPattern]; !ok {
+			m.state.lock.Unlock()
 			return nil
 		}
-		delete(wsgiapp_cache, m.wsgi_pattern)
-		wsgi_lock.Unlock()
+		delete(wsgiAppCache, m.wsgiPattern)
+		m.state.lock.Unlock()
 
 		runtime.LockOSThread()
 		defer runtime.UnlockOSThread()
@@ -414,7 +434,7 @@ func getHostPort(r *http.Request) (string, string) {
 func buildWsgiHeaders(r *http.Request) *MapKeyVal {
 	host, port := getHostPort(r)
 
-	extra_headers := map[string]string{
+	extraHeaders := map[string]string{
 		"SERVER_NAME":     host,
 		"SERVER_PORT":     port,
 		"SERVER_PROTOCOL": r.Proto,
@@ -427,17 +447,17 @@ func buildWsgiHeaders(r *http.Request) *MapKeyVal {
 		"CONTENT_LENGTH":  r.Header.Get("Content-length"),
 		"wsgi.url_scheme": strings.ToLower(strings.Split(r.Proto, "/")[0]),
 	}
-	headers_length := len(r.Header)
+	headersLength := len(r.Header)
 	if _, ok := r.Header[textproto.CanonicalMIMEHeaderKey("Proxy")]; ok {
-		headers_length -= 1
+		headersLength -= 1
 	}
 	if _, ok := r.Header[textproto.CanonicalMIMEHeaderKey("Content-Type")]; ok {
-		headers_length -= 1
+		headersLength -= 1
 	}
 	if _, ok := r.Header[textproto.CanonicalMIMEHeaderKey("Content-Length")]; ok {
-		headers_length -= 1
+		headersLength -= 1
 	}
-	request_headers := NewMapKeyVal(headers_length + len(extra_headers))
+	requestHeaders := NewMapKeyVal(headersLength + len(extraHeaders))
 	i := 0
 	for k, items := range r.Header {
 		key := strings.Map(upperCaseAndUnderscore, k)
@@ -445,7 +465,7 @@ func buildWsgiHeaders(r *http.Request) *MapKeyVal {
 			// golang cgi issue 16405
 			continue
 		}
-		// Content type and length already defined in extra_headers
+		// Content type and length already defined in extraHeaders
 		if key == "CONTENT_TYPE" {
 			continue
 		}
@@ -458,14 +478,14 @@ func buildWsgiHeaders(r *http.Request) *MapKeyVal {
 			joinStr = "; "
 		}
 
-		request_headers.Set("HTTP_"+key, strings.Join(items, joinStr), i)
+		requestHeaders.Set("HTTP_"+key, strings.Join(items, joinStr), i)
 		i++
 	}
-	for k, v := range extra_headers {
-		request_headers.Set(k, v, i)
+	for k, v := range extraHeaders {
+		requestHeaders.Set(k, v, i)
 		i++
 	}
-	return request_headers
+	return requestHeaders
 }
 
 // bytesAsBuffer converts a byte slice to a C char pointer and its length.
@@ -473,56 +493,56 @@ func bytesAsBuffer(b []byte) (*C.char, C.size_t) {
 	// Append null-terminator for strings
 	b = append(b, 0)
 	buffer := (*C.char)(unsafe.Pointer(&b[0]))
-	buffer_len := C.size_t(len(b) - 1) // -1 to remove null-terminator
-	return buffer, buffer_len
+	bufferLen := C.size_t(len(b) - 1) // -1 to remove null-terminator
+	return buffer, bufferLen
 }
 
 // HandleRequest passes request down to Python Wsgi app and writes responses and headers.
 func (m *Wsgi) HandleRequest(w http.ResponseWriter, r *http.Request) error {
-	request_headers := buildWsgiHeaders(r)
-	defer request_headers.Cleanup()
+	requestHeaders := buildWsgiHeaders(r)
+	defer requestHeaders.Cleanup()
 
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
 		return err
 	}
-	buffer, buffer_len := bytesAsBuffer(body)
+	buffer, bufferLen := bytesAsBuffer(body)
 
 	ch := make(chan WsgiRequestHandler)
-	wsgi_lock.Lock()
-	wsgi_request_counter++
-	request_id := wsgi_request_counter
-	wsgi_handlers[request_id] = ch
-	wsgi_lock.Unlock()
+	m.state.lock.Lock()
+	m.state.requestCounter++
+	requestID := m.state.requestCounter
+	m.state.handlers[requestID] = ch
+	m.state.lock.Unlock()
 
 	runtime.LockOSThread()
 	C.WsgiApp_handle_request(
 		m.app,
-		C.int64_t(request_id),
-		request_headers.m,
+		C.int64_t(requestID),
+		requestHeaders.m,
 		buffer,
-		buffer_len,
+		bufferLen,
 	)
 	runtime.UnlockOSThread()
 
 	h := <-ch
 	if h.headers != nil {
-		result_headers := NewMapKeyValFromSource(h.headers)
-		defer result_headers.Cleanup()
+		resultHeaders := NewMapKeyValFromSource(h.headers)
+		defer resultHeaders.Cleanup()
 
-		for i := 0; i < result_headers.Len(); i++ {
-			k, v := result_headers.Get(i)
+		for i := 0; i < resultHeaders.Len(); i++ {
+			k, v := resultHeaders.Get(i)
 			w.Header().Add(k, v)
 		}
 	}
 
-	w.WriteHeader(int(h.status_code))
+	w.WriteHeader(int(h.statusCode))
 
 	if h.body != nil {
 		defer C.free(unsafe.Pointer(h.body))
-		body_bytes := C.GoBytes(unsafe.Pointer(h.body), C.int(h.body_size))
-		w.Write(body_bytes)
-	} else if h.status_code == 500 {
+		bodyBytes := C.GoBytes(unsafe.Pointer(h.body), C.int(h.bodySize))
+		w.Write(bodyBytes)
+	} else if h.statusCode == 500 {
 		w.Write([]byte("Internal Server Error"))
 	}
 
@@ -530,17 +550,17 @@ func (m *Wsgi) HandleRequest(w http.ResponseWriter, r *http.Request) error {
 }
 
 //export wsgi_write_response
-func wsgi_write_response(request_id C.int64_t, status_code C.int, headers *C.MapKeyVal, body *C.char, body_size C.size_t) {
-	wsgi_lock.Lock()
-	defer wsgi_lock.Unlock()
-	ch := wsgi_handlers[int64(request_id)]
+func wsgi_write_response(requestID C.int64_t, statusCode C.int, headers *C.MapKeyVal, body *C.char, bodySize C.size_t) {
+	wsgiStateInstance.lock.Lock()
+	defer wsgiStateInstance.lock.Unlock()
+	ch := wsgiStateInstance.handlers[int64(requestID)]
 	ch <- WsgiRequestHandler{
-		status_code: status_code,
-		body:        body,
-		body_size:   body_size,
-		headers:     headers,
+		statusCode: statusCode,
+		body:       body,
+		bodySize:   bodySize,
+		headers:    headers,
 	}
-	delete(wsgi_handlers, int64(request_id))
+	delete(wsgiStateInstance.handlers, int64(requestID))
 }
 
 // ASGI: Implementation
@@ -548,53 +568,53 @@ func wsgi_write_response(request_id C.int64_t, status_code C.int, headers *C.Map
 // Asgi stores a reference to a Python Asgi application
 type Asgi struct {
 	app          *C.AsgiApp
-	asgi_pattern string
+	asgiPattern  string
 	logger       *zap.Logger
 }
 
-var asgiapp_cache map[string]*Asgi = map[string]*Asgi{}
+var asgiAppCache map[string]*Asgi = map[string]*Asgi{}
 
 // NewAsgi imports a Python ASGI app
-func NewAsgi(asgi_pattern, working_dir, venv_path string, lifespan bool, logger *zap.Logger) (*Asgi, error) {
-	asgi_lock.Lock()
-	defer asgi_lock.Unlock()
+func NewAsgi(asgiPattern, workingDir, venvPath string, lifespan bool, logger *zap.Logger) (*Asgi, error) {
+	asgiLock.Lock()
+	defer asgiLock.Unlock()
 
-	if app, ok := asgiapp_cache[asgi_pattern]; ok {
+	if app, ok := asgiAppCache[asgiPattern]; ok {
 		return app, nil
 	}
 
-	module_app := strings.Split(asgi_pattern, ":")
-	if len(module_app) != 2 {
+	moduleApp := strings.Split(asgiPattern, ":")
+	if len(moduleApp) != 2 {
 		return nil, errors.New("expected pattern $(MODULE_NAME):$(VARIABLE_NAME)")
 	}
-	module_name := C.CString(module_app[0])
-	defer C.free(unsafe.Pointer(module_name))
-	app_name := C.CString(module_app[1])
-	defer C.free(unsafe.Pointer(app_name))
+	moduleName := C.CString(moduleApp[0])
+	defer C.free(unsafe.Pointer(moduleName))
+	appName := C.CString(moduleApp[1])
+	defer C.free(unsafe.Pointer(appName))
 
-	var packages_path *C.char = nil
-	if venv_path != "" {
-		sitePackagesPath, err := findSitePackagesInVenv(venv_path)
+	var packagesPath *C.char = nil
+	if venvPath != "" {
+		sitePackagesPath, err := findSitePackagesInVenv(venvPath)
 		if err != nil {
 			return nil, err
 		}
-		packages_path = C.CString(sitePackagesPath)
-		defer C.free(unsafe.Pointer(packages_path))
+		packagesPath = C.CString(sitePackagesPath)
+		defer C.free(unsafe.Pointer(packagesPath))
 	}
 
-	var working_dir_path *C.char = nil
-	if working_dir != "" {
-		working_dir_abs, err := findWorkingDirectory(working_dir)
+	var workingDirPath *C.char = nil
+	if workingDir != "" {
+		workingDirAbs, err := findWorkingDirectory(workingDir)
 		if err != nil {
 			return nil, err
 		}
-		working_dir_path = C.CString(working_dir_abs)
-		defer C.free(unsafe.Pointer(working_dir_path))
+		workingDirPath = C.CString(workingDirAbs)
+		defer C.free(unsafe.Pointer(workingDirPath))
 	}
 
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
-	app := C.AsgiApp_import(module_name, app_name, working_dir_path, packages_path)
+	app := C.AsgiApp_import(moduleName, appName, workingDirPath, packagesPath)
 	if app == nil {
 		return nil, errors.New("failed to import module")
 	}
@@ -608,21 +628,21 @@ func NewAsgi(asgi_pattern, working_dir, venv_path string, lifespan bool, logger 
 		}
 	}
 
-	result := &Asgi{app, asgi_pattern, logger}
-	asgiapp_cache[asgi_pattern] = result
+	result := &Asgi{app, asgiPattern, logger}
+	asgiAppCache[asgiPattern] = result
 	return result, err
 }
 
 // Cleanup deallocates CGO resources used by Asgi app
 func (m *Asgi) Cleanup() (err error) {
 	if m != nil && m.app != nil {
-		asgi_lock.Lock()
-		if _, ok := asgiapp_cache[m.asgi_pattern]; !ok {
-			asgi_lock.Unlock()
+		asgiLock.Lock()
+		if _, ok := asgiAppCache[m.asgiPattern]; !ok {
+			asgiLock.Unlock()
 			return
 		}
-		delete(asgiapp_cache, m.asgi_pattern)
-		asgi_lock.Unlock()
+		delete(asgiAppCache, m.asgiPattern)
+		asgiLock.Unlock()
 
 		runtime.LockOSThread()
 		defer runtime.UnlockOSThread()
@@ -655,16 +675,16 @@ type AsgiRequestHandler struct {
 	event                     *C.AsgiEvent
 	w                         http.ResponseWriter
 	r                         *http.Request
-	completed_body            bool
-	completed_response        bool
-	accumulated_response_size int
+	completedBody             bool
+	completedResponse         bool
+	accumulatedResponseSize   int
 	done                      chan error
 
 	operations chan AsgiOperations
 
-	is_websocket    bool
-	websocket_state WebsocketState
-	websocket_conn  *websocket.Conn
+	isWebsocket    bool
+	websocketState WebsocketState
+	websocketConn  *websocket.Conn
 }
 
 // AsgiOperations stores operations that should be executed in the background
@@ -705,65 +725,65 @@ func NewAsgiRequestHandler(w http.ResponseWriter, r *http.Request) *AsgiRequestH
 	return h
 }
 
-var asgi_lock sync.RWMutex = sync.RWMutex{}
-var asgi_request_counter uint64 = 0
-var asgi_handlers map[uint64]*AsgiRequestHandler = map[uint64]*AsgiRequestHandler{}
+var asgiLock sync.RWMutex = sync.RWMutex{}
+var asgiRequestCounter uint64 = 0
+var asgiHandlers map[uint64]*AsgiRequestHandler = map[uint64]*AsgiRequestHandler{}
 var upgrader = websocket.Upgrader{} // use default options
 
 // HandleRequest passes request down to Python ASGI app and writes responses and headers.
 func (m *Asgi) HandleRequest(w http.ResponseWriter, r *http.Request) error {
 	ctx := r.Context()
 	srvAddr := ctx.Value(http.LocalAddrContextKey).(net.Addr)
-	_, server_port_string, _ := net.SplitHostPort(srvAddr.String())
-	server_port, _ := strconv.Atoi(server_port_string)
-	server_host, _, _ := net.SplitHostPort(r.Host)
-	if server_host == "" {
+	_, serverPortString, _ := net.SplitHostPort(srvAddr.String())
+	serverPort, _ := strconv.Atoi(serverPortString)
+	serverHost, _, _ := net.SplitHostPort(r.Host)
+	if serverHost == "" {
 		// net.SplitHostPort returns error and an empty host when port is missing
-		server_host = r.Host
+		serverHost = r.Host
 	}
-	server_host_str := C.CString(server_host)
-	defer C.free(unsafe.Pointer(server_host_str))
-	client_host, client_port_string, _ := net.SplitHostPort(r.RemoteAddr)
-	client_port, _ := strconv.Atoi(client_port_string)
-	client_host_str := C.CString(client_host)
-	defer C.free(unsafe.Pointer(client_host_str))
+	serverHostStr := C.CString(serverHost)
+	defer C.free(unsafe.Pointer(serverHostStr))
+	clientHost, clientPortString, _ := net.SplitHostPort(r.RemoteAddr)
+	clientPort, _ := strconv.Atoi(clientPortString)
+	clientHostStr := C.CString(clientHost)
+	defer C.free(unsafe.Pointer(clientHostStr))
 
-	contains_connection_upgrade := false
+	containsConnectionUpgrade := false
 	for _, v := range r.Header.Values("connection") {
 		if strings.Contains(strings.ToLower(v), "upgrade") {
-			contains_connection_upgrade = true
+			containsConnectionUpgrade = true
 			break
 		}
 	}
-	contains_upgrade_websockets := false
+	containsUpgradeWebsockets := false
 	for _, v := range r.Header.Values("upgrade") {
 		if strings.Contains(strings.ToLower(v), "websocket") {
-			contains_upgrade_websockets = true
+			containsUpgradeWebsockets = true
 			break
 		}
 	}
-	is_websocket := contains_connection_upgrade && contains_upgrade_websockets && r.Method == "GET"
+	isWebsocket := containsConnectionUpgrade && containsUpgradeWebsockets && r.Method == "GET"
 
 	decodedPath, err := url.PathUnescape(r.URL.Path)
 	if err != nil {
 		return err
 	}
-	var conn_type, scheme string
-	if is_websocket {
-		conn_type = "websocket"
+	var connType, scheme string
+	if isWebsocket {
+		connType = "websocket"
 		scheme = "ws"
 		if r.TLS != nil {
 			scheme = "wss"
 		}
 	} else {
-		conn_type = "http"
+		connType = "http"
 		scheme = "http"
 		if r.TLS != nil {
 			scheme = "https"
 		}
 	}
-	scope_map := map[string]string{
-		"type":         conn_type,
+	scopeMap := map[string]string{
+		"type":         connType,
 		"http_version": fmt.Sprintf("%d.%d", r.ProtoMajor, r.ProtoMinor),
 		"method":       r.Method,
 		"scheme":       scheme,
@@ -772,17 +792,17 @@ func (m *Asgi) HandleRequest(w http.ResponseWriter, r *http.Request) error {
 		"query_string": r.URL.RawQuery,
 		"root_path":    "",
 	}
-	scope := NewMapKeyVal(len(scope_map))
+	scope := NewMapKeyVal(len(scopeMap))
 	defer scope.Cleanup()
-	scope_count := 0
-	for k, v := range scope_map {
-		scope.Set(k, v, scope_count)
-		scope_count++
+	scopeCount := 0
+	for k, v := range scopeMap {
+		scope.Set(k, v, scopeCount)
+		scopeCount++
 	}
 
-	request_headers := NewMapKeyVal(len(r.Header))
-	defer request_headers.Cleanup()
-	header_count := 0
+	requestHeaders := NewMapKeyVal(len(r.Header))
+	defer requestHeaders.Cleanup()
+	headerCount := 0
 	for k, items := range r.Header {
 		if k == "Proxy" {
 			// golang cgi issue 16405
@@ -794,28 +814,28 @@ func (m *Asgi) HandleRequest(w http.ResponseWriter, r *http.Request) error {
 			joinStr = "; "
 		}
 
-		request_headers.Set(strings.ToLower(k), strings.Join(items, joinStr), header_count)
-		header_count++
+		requestHeaders.Set(strings.ToLower(k), strings.Join(items, joinStr), headerCount)
+		headerCount++
 	}
 
 	arh := NewAsgiRequestHandler(w, r)
-	arh.is_websocket = is_websocket
+	arh.isWebsocket = isWebsocket
 
-	asgi_lock.Lock()
-	asgi_request_counter++
-	request_id := asgi_request_counter
-	asgi_handlers[request_id] = arh
-	asgi_lock.Unlock()
+	asgiLock.Lock()
+	asgiRequestCounter++
+	requestID := asgiRequestCounter
+	asgiHandlers[requestID] = arh
+	asgiLock.Unlock()
 	defer func() {
-		arh.completed_response = true
+		arh.completedResponse = true
 		arh.operations <- AsgiOperations{stop: true}
-		asgi_lock.Lock()
-		delete(asgi_handlers, request_id)
-		asgi_lock.Unlock()
+		asgiLock.Lock()
+		delete(asgiHandlers, requestID)
+		asgiLock.Unlock()
 	}()
 
 	var subprotocols *C.char = nil
-	if is_websocket {
+	if isWebsocket {
 		subprotocols = C.CString(r.Header.Get("sec-websocket-protocol"))
 		defer C.free(unsafe.Pointer(subprotocols))
 	}
@@ -823,13 +843,13 @@ func (m *Asgi) HandleRequest(w http.ResponseWriter, r *http.Request) error {
 	runtime.LockOSThread()
 	C.AsgiApp_handle_request(
 		m.app,
-		C.uint64_t(request_id),
+		C.uint64_t(requestID),
 		scope.m,
-		request_headers.m,
-		client_host_str,
-		C.int(client_port),
-		server_host_str,
-		C.int(server_port),
+		requestHeaders.m,
+		clientHostStr,
+		C.int(clientPort),
+		serverHostStr,
+		C.int(serverPort),
 		subprotocols,
 	)
 	runtime.UnlockOSThread()
@@ -843,24 +863,24 @@ func (m *Asgi) HandleRequest(w http.ResponseWriter, r *http.Request) error {
 }
 
 //export asgi_receive_start
-func asgi_receive_start(request_id C.uint64_t, event *C.AsgiEvent) C.uint8_t {
-	asgi_lock.Lock()
-	defer asgi_lock.Unlock()
-	arh := asgi_handlers[uint64(request_id)]
-	if arh == nil || arh.completed_response {
+func asgi_receive_start(requestID C.uint64_t, event *C.AsgiEvent) C.uint8_t {
+	asgiLock.Lock()
+	defer asgiLock.Unlock()
+	arh := asgiHandlers[uint64(requestID)]
+	if arh == nil || arh.completedResponse {
 		return C.uint8_t(0)
 	}
 
 	arh.event = event
 
-	if arh.is_websocket {
-		switch arh.websocket_state {
+	if arh.isWebsocket {
+		switch arh.websocketState {
 		case WS_STARTING:
 			// TODO: this shouldn't happen, what do I do here?
 			fmt.Println("SHOULD NOT SEE THIS - PLEASE REPORT")
 		case WS_CONNECTED:
 			go func() {
-				mt, message, err := arh.websocket_conn.ReadMessage()
+				mt, message, err := arh.websocketConn.ReadMessage()
 				if err != nil {
 					closeError, isClose := err.(*websocket.CloseError)
 					closeCode := 1005
@@ -868,29 +888,29 @@ func asgi_receive_start(request_id C.uint64_t, event *C.AsgiEvent) C.uint8_t {
 						closeCode = closeError.Code
 					}
 					closeStr := fmt.Sprintf("%d", closeCode)
-					body_str := C.CString(closeStr)
-					body_len := C.size_t(len(closeStr))
-					defer C.free(unsafe.Pointer(body_str))
-					arh.websocket_state = WS_DISCONNECTED
-					arh.websocket_conn.Close()
+					bodyStr := C.CString(closeStr)
+					bodyLen := C.size_t(len(closeStr))
+					defer C.free(unsafe.Pointer(bodyStr))
+					arh.websocketState = WS_DISCONNECTED
+					arh.websocketConn.Close()
 					runtime.LockOSThread()
 					C.AsgiEvent_disconnect_websocket(event)
-					C.AsgiEvent_set_websocket(event, body_str, body_len, C.uint8_t(0), C.uint8_t(0))
+					C.AsgiEvent_set_websocket(event, bodyStr, bodyLen, C.uint8_t(0), C.uint8_t(0))
 					runtime.UnlockOSThread()
 					arh.done <- fmt.Errorf("websocket closed: %d", closeCode)
 					return
 				}
 				message = append(message, 0)
-				body_str := (*C.char)(unsafe.Pointer(&message[0]))
-				body_len := C.size_t(len(message) - 1)
+				bodyStr := (*C.char)(unsafe.Pointer(&message[0]))
+				bodyLen := C.size_t(len(message) - 1)
 
-				message_type := C.uint8_t(0)
+				messageType := C.uint8_t(0)
 				if mt == websocket.BinaryMessage {
-					message_type = C.uint8_t(1)
+					messageType = C.uint8_t(1)
 				}
 
 				runtime.LockOSThread()
-				C.AsgiEvent_set_websocket(event, body_str, body_len, message_type, C.uint8_t(0))
+				C.AsgiEvent_set_websocket(event, bodyStr, bodyLen, messageType, C.uint8_t(0))
 				runtime.UnlockOSThread()
 			}()
 		case WS_DISCONNECTED:
@@ -902,7 +922,7 @@ func asgi_receive_start(request_id C.uint64_t, event *C.AsgiEvent) C.uint8_t {
 				arh.done <- errors.New("websocket closed - receive start")
 			}()
 		default:
-			arh.websocket_state = WS_STARTING
+			arh.websocketState = WS_STARTING
 			runtime.LockOSThread()
 			C.AsgiEvent_connect_websocket(event)
 			C.AsgiEvent_set(event, nil, 0, C.uint8_t(0), C.uint8_t(0))
@@ -912,30 +932,30 @@ func asgi_receive_start(request_id C.uint64_t, event *C.AsgiEvent) C.uint8_t {
 	}
 
 	arh.operations <- AsgiOperations{op: func() {
-		var body_str *C.char
-		var body_len C.size_t
-		var more_body C.uint8_t
-		if !arh.completed_body {
+		var bodyStr *C.char
+		var bodyLen C.size_t
+		var moreBody C.uint8_t
+		if !arh.completedBody {
 			buffer := make([]byte, 1<<16)
 			n, err := arh.r.Body.Read(buffer)
 			if err != nil && err != io.EOF {
 				arh.done <- err
 				return
 			}
-			arh.completed_body = (err == io.EOF)
+			arh.completedBody = (err == io.EOF)
 			buffer = append(buffer[:n], 0)
-			body_str = (*C.char)(unsafe.Pointer(&buffer[0]))
-			body_len = C.size_t(len(buffer) - 1) // -1 to remove null-terminator
+			bodyStr = (*C.char)(unsafe.Pointer(&buffer[0]))
+			bodyLen = C.size_t(len(buffer) - 1) // -1 to remove null-terminator
 		}
 
-		if arh.completed_body {
-			more_body = C.uint8_t(0)
+		if arh.completedBody {
+			moreBody = C.uint8_t(0)
 		} else {
-			more_body = C.uint8_t(1)
+			moreBody = C.uint8_t(1)
 		}
 
 		runtime.LockOSThread()
-		C.AsgiEvent_set(event, body_str, body_len, more_body, C.uint8_t(0))
+		C.AsgiEvent_set(event, bodyStr, bodyLen, moreBody, C.uint8_t(0))
 		runtime.UnlockOSThread()
 	}}
 
@@ -943,38 +963,38 @@ func asgi_receive_start(request_id C.uint64_t, event *C.AsgiEvent) C.uint8_t {
 }
 
 //export asgi_set_headers
-func asgi_set_headers(request_id C.uint64_t, status_code C.int, headers *C.MapKeyVal, event *C.AsgiEvent) {
-	asgi_lock.Lock()
-	defer asgi_lock.Unlock()
-	arh := asgi_handlers[uint64(request_id)]
+func asgi_set_headers(requestID C.uint64_t, statusCode C.int, headers *C.MapKeyVal, event *C.AsgiEvent) {
+	asgiLock.Lock()
+	defer asgiLock.Unlock()
+	arh := asgiHandlers[uint64(requestID)]
 
 	arh.event = event
 
-	if arh.is_websocket {
-		ws_headers := arh.w.Header().Clone()
+	if arh.isWebsocket {
+		wsHeaders := arh.w.Header().Clone()
 		if headers != nil {
-			map_headers := NewMapKeyValFromSource(headers)
-			defer map_headers.Cleanup()
+			mapHeaders := NewMapKeyValFromSource(headers)
+			defer mapHeaders.Cleanup()
 
-			for i := 0; i < map_headers.Len(); i++ {
-				header_name, header_value := map_headers.Get(i)
-				ws_headers.Add(header_name, header_value)
+			for i := 0; i < mapHeaders.Len(); i++ {
+				headerName, headerValue := mapHeaders.Get(i)
+				wsHeaders.Add(headerName, headerValue)
 			}
 		}
-		switch arh.websocket_state {
+		switch arh.websocketState {
 		case WS_STARTING:
-			ws_conn, err := upgrader.Upgrade(arh.w, arh.r, ws_headers)
+			wsConn, err := upgrader.Upgrade(arh.w, arh.r, wsHeaders)
 			if err != nil {
-				arh.websocket_state = WS_DISCONNECTED
-				arh.websocket_conn.Close()
+				arh.websocketState = WS_DISCONNECTED
+				arh.websocketConn.Close()
 				runtime.LockOSThread()
 				C.AsgiEvent_disconnect_websocket(event)
 				C.AsgiEvent_set(event, nil, 0, C.uint8_t(0), C.uint8_t(1))
 				runtime.UnlockOSThread()
 				return
 			}
-			arh.websocket_state = WS_CONNECTED
-			arh.websocket_conn = ws_conn
+			arh.websocketState = WS_CONNECTED
+			arh.websocketConn = wsConn
 
 			runtime.LockOSThread()
 			C.AsgiEvent_set(event, nil, 0, C.uint8_t(0), C.uint8_t(1))
@@ -990,16 +1010,16 @@ func asgi_set_headers(request_id C.uint64_t, status_code C.int, headers *C.MapKe
 
 	arh.operations <- AsgiOperations{op: func() {
 		if headers != nil {
-			map_headers := NewMapKeyValFromSource(headers)
-			defer map_headers.Cleanup()
+			mapHeaders := NewMapKeyValFromSource(headers)
+			defer mapHeaders.Cleanup()
 
-			for i := 0; i < map_headers.Len(); i++ {
-				header_name, header_value := map_headers.Get(i)
-				arh.w.Header().Add(header_name, header_value)
+			for i := 0; i < mapHeaders.Len(); i++ {
+				headerName, headerValue := mapHeaders.Get(i)
+				arh.w.Header().Add(headerName, headerValue)
 			}
 		}
 
-		arh.w.WriteHeader(int(status_code))
+		arh.w.WriteHeader(int(statusCode))
 
 		runtime.LockOSThread()
 		C.AsgiEvent_set(event, nil, 0, C.uint8_t(0), C.uint8_t(1))
@@ -1008,24 +1028,24 @@ func asgi_set_headers(request_id C.uint64_t, status_code C.int, headers *C.MapKe
 }
 
 //export asgi_send_response
-func asgi_send_response(request_id C.uint64_t, body *C.char, body_len C.size_t, more_body C.uint8_t, event *C.AsgiEvent) {
-	asgi_lock.Lock()
-	defer asgi_lock.Unlock()
-	arh := asgi_handlers[uint64(request_id)]
+func asgi_send_response(requestID C.uint64_t, body *C.char, bodyLen C.size_t, moreBody C.uint8_t, event *C.AsgiEvent) {
+	asgiLock.Lock()
+	defer asgiLock.Unlock()
+	arh := asgiHandlers[uint64(requestID)]
 
 	arh.event = event
 
 	arh.operations <- AsgiOperations{op: func() {
 		defer C.free(unsafe.Pointer(body))
-		body_bytes := C.GoBytes(unsafe.Pointer(body), C.int(body_len))
-		arh.accumulated_response_size += len(body_bytes)
-		_, err := arh.w.Write(body_bytes)
+		bodyBytes := C.GoBytes(unsafe.Pointer(body), C.int(bodyLen))
+		arh.accumulatedResponseSize += len(bodyBytes)
+		_, err := arh.w.Write(bodyBytes)
 		if f, ok := arh.w.(http.Flusher); ok {
 			f.Flush()
 		}
 		if err != nil {
 			arh.done <- err
-		} else if int(more_body) == 0 {
+		} else if int(moreBody) == 0 {
 			arh.done <- nil
 		}
 
@@ -1036,28 +1056,28 @@ func asgi_send_response(request_id C.uint64_t, body *C.char, body_len C.size_t, 
 }
 
 //export asgi_send_response_websocket
-func asgi_send_response_websocket(request_id C.uint64_t, body *C.char, body_len C.size_t, message_type C.uint8_t, event *C.AsgiEvent) {
-	asgi_lock.Lock()
-	defer asgi_lock.Unlock()
-	arh := asgi_handlers[uint64(request_id)]
+func asgi_send_response_websocket(requestID C.uint64_t, body *C.char, bodyLen C.size_t, messageType C.uint8_t, event *C.AsgiEvent) {
+	asgiLock.Lock()
+	defer asgiLock.Unlock()
+	arh := asgiHandlers[uint64(requestID)]
 
 	arh.event = event
 
 	arh.operations <- AsgiOperations{op: func() {
 		defer C.free(unsafe.Pointer(body))
-		var body_bytes []byte
-		var ws_message_type int
-		if message_type == C.uint8_t(0) {
-			ws_message_type = websocket.TextMessage
-			body_bytes = []byte(C.GoString(body))
+		var bodyBytes []byte
+		var wsMessageType int
+		if messageType == C.uint8_t(0) {
+			wsMessageType = websocket.TextMessage
+			bodyBytes = []byte(C.GoString(body))
 		} else {
-			ws_message_type = websocket.BinaryMessage
-			body_bytes = C.GoBytes(unsafe.Pointer(body), C.int(body_len))
+			wsMessageType = websocket.BinaryMessage
+			bodyBytes = C.GoBytes(unsafe.Pointer(body), C.int(bodyLen))
 		}
-		err := arh.websocket_conn.WriteMessage(ws_message_type, body_bytes)
+		err := arh.websocketConn.WriteMessage(wsMessageType, bodyBytes)
 		if err != nil {
-			arh.websocket_state = WS_DISCONNECTED
-			arh.websocket_conn.Close()
+			arh.websocketState = WS_DISCONNECTED
+			arh.websocketConn.Close()
 			runtime.LockOSThread()
 			C.AsgiEvent_disconnect_websocket(event)
 			C.AsgiEvent_set(event, nil, 0, C.uint8_t(0), C.uint8_t(1))
@@ -1072,20 +1092,20 @@ func asgi_send_response_websocket(request_id C.uint64_t, body *C.char, body_len 
 }
 
 //export asgi_cancel_request
-func asgi_cancel_request(request_id C.uint64_t) {
-	asgi_lock.Lock()
-	defer asgi_lock.Unlock()
-	arh, ok := asgi_handlers[uint64(request_id)]
+func asgi_cancel_request(requestID C.uint64_t) {
+	asgiLock.Lock()
+	defer asgiLock.Unlock()
+	arh, ok := asgiHandlers[uint64(requestID)]
 	if ok {
 		arh.done <- errors.New("request cancelled")
 	}
 }
 
 //export asgi_cancel_request_websocket
-func asgi_cancel_request_websocket(request_id C.uint64_t, reason *C.char, code C.int) {
-	asgi_lock.Lock()
-	defer asgi_lock.Unlock()
-	arh, ok := asgi_handlers[uint64(request_id)]
+func asgi_cancel_request_websocket(requestID C.uint64_t, reason *C.char, code C.int) {
+	asgiLock.Lock()
+	defer asgiLock.Unlock()
+	arh, ok := asgiHandlers[uint64(requestID)]
 	if ok {
 		var reasonText string
 		if reason != nil {
@@ -1093,16 +1113,16 @@ func asgi_cancel_request_websocket(request_id C.uint64_t, reason *C.char, code C
 			reasonText = C.GoString(reason)
 		}
 		closeCode := int(code)
-		if arh.websocket_state == WS_STARTING {
+		if arh.websocketState == WS_STARTING {
 			arh.w.WriteHeader(403)
 			arh.done <- fmt.Errorf("websocket closed: %d '%s'", closeCode, reasonText)
-		} else if arh.websocket_state == WS_CONNECTED {
-			arh.websocket_state = WS_DISCONNECTED
+		} else if arh.websocketState == WS_CONNECTED {
+			arh.websocketState = WS_DISCONNECTED
 			closeMessage := websocket.FormatCloseMessage(closeCode, reasonText)
 			go func() {
-				if arh.websocket_conn != nil {
-					arh.websocket_conn.WriteControl(websocket.CloseMessage, closeMessage, time.Now().Add(5*time.Second))
-					arh.websocket_conn.Close()
+				if arh.websocketConn != nil {
+					arh.websocketConn.WriteControl(websocket.CloseMessage, closeMessage, time.Now().Add(5*time.Second))
+					arh.websocketConn.Close()
 					arh.done <- fmt.Errorf("websocket closed: %d '%s'", closeCode, reasonText)
 				}
 			}()
