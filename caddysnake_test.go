@@ -1,6 +1,7 @@
 package caddysnake
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -76,6 +77,9 @@ func TestFindSitePackagesInVenv_NoSitePackages(t *testing.T) {
 
 func TestNewMapKeyVal(t *testing.T) {
 	m := NewMapKeyVal(3)
+	for i := 0; i < 3; i++ {
+		m.Set(fmt.Sprintf("key%d", i), fmt.Sprintf("value%d", i), i)
+	}
 	if m == nil {
 		t.Fatal("Expected non-nil MapKeyVal")
 	}
@@ -86,7 +90,11 @@ func TestNewMapKeyVal(t *testing.T) {
 }
 
 func TestNewMapKeyValFromSource(t *testing.T) {
-	m := NewMapKeyValFromSource(NewMapKeyVal(3).m)
+	m := NewMapKeyVal(3)
+	for i := 0; i < 3; i++ {
+		m.Set(fmt.Sprintf("key%d", i), fmt.Sprintf("value%d", i), i)
+	}
+	m = NewMapKeyValFromSource(m.m)
 	if m == nil {
 		t.Fatal("Expected non-nil MapKeyVal")
 	}
