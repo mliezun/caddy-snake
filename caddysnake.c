@@ -27,7 +27,7 @@ static PyObject *build_send;
 static PyObject *build_lifespan;
 static PyObject *websocket_closed;
 
-char *concatenate_strings(const char *str1, const char *str2) {
+static char *concatenate_strings(const char *str1, const char *str2) {
   size_t new_str_len = strlen(str1) + strlen(str2) + 1;
   char *result = malloc(new_str_len * sizeof(char));
   if (result == NULL) {
@@ -38,8 +38,9 @@ char *concatenate_strings(const char *str1, const char *str2) {
   return result;
 }
 
-char *concatenate_bytes(const char *buffer1, size_t size1, const char *buffer2,
-                        size_t size2, size_t *out_size) {
+static char *concatenate_bytes(const char *buffer1, size_t size1,
+                               const char *buffer2, size_t size2,
+                               size_t *out_size) {
   if (buffer1 == NULL || buffer2 == NULL || out_size == NULL) {
     return NULL;
   }
@@ -54,7 +55,7 @@ char *concatenate_bytes(const char *buffer1, size_t size1, const char *buffer2,
   return result;
 }
 
-char *copy_pystring(PyObject *pystr) {
+static char *copy_pystring(PyObject *pystr) {
   Py_ssize_t og_size = 0;
   const char *og_str = PyUnicode_AsUTF8AndSize(pystr, &og_size);
   size_t new_str_len = og_size + 1;
@@ -66,7 +67,7 @@ char *copy_pystring(PyObject *pystr) {
   return result;
 }
 
-char *copy_pybytes(PyObject *pybytes, size_t *size) {
+static char *copy_pybytes(PyObject *pybytes, size_t *size) {
   Py_ssize_t og_size = 0;
   *size = 0;
   char *og_str;

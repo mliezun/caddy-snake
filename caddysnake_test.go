@@ -73,3 +73,75 @@ func TestFindSitePackagesInVenv_NoSitePackages(t *testing.T) {
 		t.Errorf("expected error %q, got %q", expectedError, err.Error())
 	}
 }
+
+func TestNewMapKeyVal(t *testing.T) {
+	m := NewMapKeyVal(3)
+	if m == nil {
+		t.Fatal("Expected non-nil MapKeyVal")
+	}
+	if m.Len() != 3 {
+		t.Fatalf("Expected length 3, got %d", m.Len())
+	}
+	defer m.Cleanup()
+}
+
+func TestNewMapKeyValFromSource(t *testing.T) {
+	m := NewMapKeyValFromSource(NewMapKeyVal(3).m)
+	if m == nil {
+		t.Fatal("Expected non-nil MapKeyVal")
+	}
+	if m.Len() != 3 {
+		t.Fatalf("Expected length 3, got %d", m.Len())
+	}
+	defer m.Cleanup()
+}
+
+func TestSetAndGet(t *testing.T) {
+	m := NewMapKeyVal(2)
+	defer m.Cleanup()
+
+	m.Set("Content-Type", "application/json", 0)
+	m.Set("Accept", "text/plain", 1)
+
+	k0, v0 := m.Get(0)
+	if k0 != "Content-Type" || v0 != "application/json" {
+		t.Errorf("Unexpected result at pos 0: got (%s, %s)", k0, v0)
+	}
+
+	k1, v1 := m.Get(1)
+	if k1 != "Accept" || v1 != "text/plain" {
+		t.Errorf("Unexpected result at pos 1: got (%s, %s)", k1, v1)
+	}
+}
+
+func TestSetGetBounds(t *testing.T) {
+	m := NewMapKeyVal(1)
+	defer m.Cleanup()
+
+	defer func() {
+		if r := recover(); r == nil {
+			t.Errorf("Expected panic for out-of-bounds Set, but did not panic")
+		}
+	}()
+	m.Set("Overflow", "Oops", 2)
+}
+
+func TestGetBounds(t *testing.T) {
+	m := NewMapKeyVal(1)
+	defer m.Cleanup()
+
+	defer func() {
+		if r := recover(); r == nil {
+			t.Errorf("Expected panic for out-of-bounds Get, but did not panic")
+		}
+	}()
+	m.Get(5)
+}
+
+func TestLenNull(t *testing.T) {
+	m := MapKeyVal{}
+
+	if m.Len() != 0 {
+		t.Errorf("Expected length 0, got %d", m.Len())
+	}
+}
