@@ -270,20 +270,22 @@ func (s *WsgiState) Request() int64 {
 
 // Response sends the response to the channel and closes it
 func (s *WsgiState) Response(requestID int64, response WsgiResponse) {
-	s.Lock()
-	defer s.Unlock()
+	s.RLock()
 	ch := s.handlers[requestID]
+	s.RUnlock()
 	ch <- response
-	delete(s.handlers, requestID)
 }
 
 // WaitResponse waits for the response from the channel and returns it
 func (s *WsgiState) WaitResponse(requestID int64) WsgiResponse {
 	s.RLock()
-	defer s.RUnlock()
 	ch := s.handlers[requestID]
+	s.RUnlock()
 	response := <-ch
 	close(ch)
+	s.Lock()
+	delete(s.handlers, requestID)
+	s.Unlock()
 	return response
 }
 

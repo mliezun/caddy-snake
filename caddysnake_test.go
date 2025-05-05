@@ -278,3 +278,31 @@ func TestBuildWsgiHeaders(t *testing.T) {
 		t.Errorf("Missing headers: %v", expectedHeaders)
 	}
 }
+
+func TestWsgiState(t *testing.T) {
+	state := &WsgiState{
+		handlers: make(map[int64]chan WsgiResponse),
+	}
+
+	// Test Request method
+	requestID := state.Request()
+	if requestID != 1 {
+		t.Errorf("Expected request ID 1, got %d", requestID)
+	}
+	if _, exists := state.handlers[requestID]; !exists {
+		t.Errorf("Handler for request ID %d does not exist", requestID)
+	}
+
+	// Test Response method
+	response := WsgiResponse{
+		statusCode: 200,
+		body:       nil,
+		bodySize:   0,
+	}
+	go state.Response(requestID, response)
+
+	result := state.WaitResponse(requestID)
+	if result.statusCode != 200 {
+		t.Errorf("Expected status code 200, got %d", result.statusCode)
+	}
+}
