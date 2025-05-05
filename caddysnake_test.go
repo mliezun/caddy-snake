@@ -306,3 +306,64 @@ func TestWsgiState(t *testing.T) {
 		t.Errorf("Expected status code 200, got %d", result.statusCode)
 	}
 }
+
+func TestWsgiResponseWrite(t *testing.T) {
+	// Mock HTTP ResponseWriter
+	mockWriter := &mockResponseWriter{
+		headers: make(http.Header),
+	}
+
+	// Create a WsgiResponse with mock data
+	response := &WsgiResponse{
+		statusCode: 200,
+		headers:    nil,
+		body:       nil,
+		bodySize:   0,
+	}
+
+	// Set headers in the WsgiResponse
+	responseHeaders := NewMapKeyVal(2)
+	responseHeaders.Set("Content-Type", "text/plain", 0)
+	responseHeaders.Set("X-Custom-Header", "CustomValue", 1)
+	response.headers = responseHeaders.m
+	// defer responseHeaders.Cleanup()
+
+	// Call the Write method
+	response.Write(mockWriter)
+
+	// Validate the response
+	if mockWriter.statusCode != 200 {
+		t.Errorf("Expected status code 200, got %d", mockWriter.statusCode)
+	}
+
+	if mockWriter.body != "" {
+		t.Errorf("Expected body to be empty, got '%s'", mockWriter.body)
+	}
+
+	if mockWriter.headers.Get("Content-Type") != "text/plain" {
+		t.Errorf("Expected Content-Type 'text/plain', got '%s'", mockWriter.headers.Get("Content-Type"))
+	}
+
+	if mockWriter.headers.Get("X-Custom-Header") != "CustomValue" {
+		t.Errorf("Expected X-Custom-Header 'CustomValue', got '%s'", mockWriter.headers.Get("X-Custom-Header"))
+	}
+}
+
+type mockResponseWriter struct {
+	headers    http.Header
+	body       string
+	statusCode int
+}
+
+func (m *mockResponseWriter) Header() http.Header {
+	return m.headers
+}
+
+func (m *mockResponseWriter) Write(data []byte) (int, error) {
+	m.body = string(data)
+	return len(data), nil
+}
+
+func (m *mockResponseWriter) WriteHeader(statusCode int) {
+	m.statusCode = statusCode
+}
