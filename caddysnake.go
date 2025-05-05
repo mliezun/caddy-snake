@@ -38,25 +38,25 @@ var SIZE_OF_CHAR_POINTER = unsafe.Sizeof((*C.char)(nil))
 
 // MapKeyVal wraps the same structure defined in the C layer
 type MapKeyVal struct {
-	m            *C.MapKeyVal
-	baseHeaders  uintptr
-	baseValues   uintptr
+	m           *C.MapKeyVal
+	baseHeaders uintptr
+	baseValues  uintptr
 }
 
 func NewMapKeyVal(count int) *MapKeyVal {
 	m := C.MapKeyVal_new(C.size_t(count))
 	return &MapKeyVal{
-		m:            m,
-		baseHeaders:  uintptr(unsafe.Pointer(m.keys)),
-		baseValues:   uintptr(unsafe.Pointer(m.values)),
+		m:           m,
+		baseHeaders: uintptr(unsafe.Pointer(m.keys)),
+		baseValues:  uintptr(unsafe.Pointer(m.values)),
 	}
 }
 
 func NewMapKeyValFromSource(m *C.MapKeyVal) *MapKeyVal {
 	return &MapKeyVal{
-		m:            m,
-		baseHeaders:  uintptr(unsafe.Pointer(m.keys)),
-		baseValues:   uintptr(unsafe.Pointer(m.values)),
+		m:           m,
+		baseHeaders: uintptr(unsafe.Pointer(m.keys)),
+		baseValues:  uintptr(unsafe.Pointer(m.values)),
 	}
 }
 
@@ -222,34 +222,83 @@ func parsePythonDirective(h httpcaddyfile.Helper) (caddyhttp.MiddlewareHandler, 
 	return app, nil
 }
 
-// WsgiRequestHandler tracks the state of a HTTP request to a WSGI App
-type WsgiRequestHandler struct {
+// WsgiResponse holds the response from the WSGI app
+type WsgiResponse struct {
 	statusCode C.int
 	headers    *C.MapKeyVal
 	body       *C.char
 	bodySize   C.size_t
 }
 
+func (r *WsgiResponse) Write(w http.ResponseWriter) {
+	if r.headers != nil {
+		resultHeaders := NewMapKeyValFromSource(r.headers)
+		defer resultHeaders.Cleanup()
+
+		for i := 0; i < resultHeaders.Len(); i++ {
+			k, v := resultHeaders.Get(i)
+			w.Header().Add(k, v)
+		}
+	}
+
+	w.WriteHeader(int(r.statusCode))
+
+	if r.body != nil {
+		defer C.free(unsafe.Pointer(r.body))
+		bodyBytes := C.GoBytes(unsafe.Pointer(r.body), C.int(r.bodySize))
+		w.Write(bodyBytes)
+	} else if r.statusCode == 500 {
+		w.Write([]byte("Internal Server Error"))
+	}
+}
+
+// WsgiState holds the global state for all requests to WSGI apps
 type WsgiState struct {
-	lock           sync.RWMutex
+	sync.RWMutex
 	requestCounter int64
-	handlers       map[int64]chan WsgiRequestHandler
+	handlers       map[int64]chan WsgiResponse
+}
+
+// Request creates a new request handler and returns its ID
+func (s *WsgiState) Request() int64 {
+	s.Lock()
+	defer s.Unlock()
+	s.requestCounter++
+	s.handlers[s.requestCounter] = make(chan WsgiResponse)
+	return s.requestCounter
+}
+
+// Response sends the response to the channel and closes it
+func (s *WsgiState) Response(requestID int64, response WsgiResponse) {
+	s.Lock()
+	defer s.Unlock()
+	ch := s.handlers[requestID]
+	ch <- response
+	delete(s.handlers, requestID)
+}
+
+// WaitResponse waits for the response from the channel and returns it
+func (s *WsgiState) WaitResponse(requestID int64) WsgiResponse {
+	s.RLock()
+	defer s.RUnlock()
+	ch := s.handlers[requestID]
+	response := <-ch
+	close(ch)
+	return response
 }
 
 var (
-	wsgiStateInstance *WsgiState
-	wsgiStateOnce     sync.Once
+	wsgiState     *WsgiState
+	wsgiStateOnce sync.Once
 )
 
-func NewWsgiState() *WsgiState {
+func initWsgiState() {
 	wsgiStateOnce.Do(func() {
-		wsgiStateInstance = &WsgiState{
-			lock:           sync.RWMutex{},
-			handlers:       make(map[int64]chan WsgiRequestHandler),
+		wsgiState = &WsgiState{
+			handlers:       make(map[int64]chan WsgiResponse),
 			requestCounter: 0,
 		}
 	})
-	return wsgiStateInstance
 }
 
 func init() {
@@ -258,6 +307,7 @@ func init() {
 	C.Py_init_and_release_gil(setupPy)
 	caddy.RegisterModule(CaddySnake{})
 	httpcaddyfile.RegisterHandlerDirective("python", parsePythonDirective)
+	initWsgiState()
 }
 
 // findSitePackagesInVenv searches for the site-packages directory in a given venv.
@@ -331,16 +381,14 @@ func findPythonDirectory(libPath string) (string, error) {
 type Wsgi struct {
 	app         *C.WsgiApp
 	wsgiPattern string
-	state       *WsgiState
 }
 
 var wsgiAppCache map[string]*Wsgi = map[string]*Wsgi{}
 
 // NewWsgi imports a WSGI app
 func NewWsgi(wsgiPattern, workingDir, venvPath string) (*Wsgi, error) {
-	state := NewWsgiState()
-	state.lock.Lock()
-	defer state.lock.Unlock()
+	wsgiState.Lock()
+	defer wsgiState.Unlock()
 
 	if app, ok := wsgiAppCache[wsgiPattern]; ok {
 		return app, nil
@@ -382,7 +430,7 @@ func NewWsgi(wsgiPattern, workingDir, venvPath string) (*Wsgi, error) {
 		return nil, errors.New("failed to import module")
 	}
 
-	result := &Wsgi{app, wsgiPattern, state}
+	result := &Wsgi{app, wsgiPattern}
 	wsgiAppCache[wsgiPattern] = result
 	return result, nil
 }
@@ -390,13 +438,13 @@ func NewWsgi(wsgiPattern, workingDir, venvPath string) (*Wsgi, error) {
 // Cleanup deallocates CGO resources used by Wsgi app
 func (m *Wsgi) Cleanup() error {
 	if m.app != nil {
-		m.state.lock.Lock()
+		wsgiState.Lock()
 		if _, ok := wsgiAppCache[m.wsgiPattern]; !ok {
-			m.state.lock.Unlock()
+			wsgiState.Unlock()
 			return nil
 		}
 		delete(wsgiAppCache, m.wsgiPattern)
-		m.state.lock.Unlock()
+		wsgiState.Unlock()
 
 		runtime.LockOSThread()
 		defer runtime.UnlockOSThread()
@@ -508,12 +556,7 @@ func (m *Wsgi) HandleRequest(w http.ResponseWriter, r *http.Request) error {
 	}
 	buffer, bufferLen := bytesAsBuffer(body)
 
-	ch := make(chan WsgiRequestHandler)
-	m.state.lock.Lock()
-	m.state.requestCounter++
-	requestID := m.state.requestCounter
-	m.state.handlers[requestID] = ch
-	m.state.lock.Unlock()
+	requestID := wsgiState.Request()
 
 	runtime.LockOSThread()
 	C.WsgiApp_handle_request(
@@ -525,51 +568,30 @@ func (m *Wsgi) HandleRequest(w http.ResponseWriter, r *http.Request) error {
 	)
 	runtime.UnlockOSThread()
 
-	h := <-ch
-	if h.headers != nil {
-		resultHeaders := NewMapKeyValFromSource(h.headers)
-		defer resultHeaders.Cleanup()
+	response := wsgiState.WaitResponse(requestID)
 
-		for i := 0; i < resultHeaders.Len(); i++ {
-			k, v := resultHeaders.Get(i)
-			w.Header().Add(k, v)
-		}
-	}
-
-	w.WriteHeader(int(h.statusCode))
-
-	if h.body != nil {
-		defer C.free(unsafe.Pointer(h.body))
-		bodyBytes := C.GoBytes(unsafe.Pointer(h.body), C.int(h.bodySize))
-		w.Write(bodyBytes)
-	} else if h.statusCode == 500 {
-		w.Write([]byte("Internal Server Error"))
-	}
+	response.Write(w)
 
 	return nil
 }
 
 //export wsgi_write_response
 func wsgi_write_response(requestID C.int64_t, statusCode C.int, headers *C.MapKeyVal, body *C.char, bodySize C.size_t) {
-	wsgiStateInstance.lock.Lock()
-	defer wsgiStateInstance.lock.Unlock()
-	ch := wsgiStateInstance.handlers[int64(requestID)]
-	ch <- WsgiRequestHandler{
+	wsgiState.Response(int64(requestID), WsgiResponse{
 		statusCode: statusCode,
+		headers:    headers,
 		body:       body,
 		bodySize:   bodySize,
-		headers:    headers,
-	}
-	delete(wsgiStateInstance.handlers, int64(requestID))
+	})
 }
 
 // ASGI: Implementation
 
 // Asgi stores a reference to a Python Asgi application
 type Asgi struct {
-	app          *C.AsgiApp
-	asgiPattern  string
-	logger       *zap.Logger
+	app         *C.AsgiApp
+	asgiPattern string
+	logger      *zap.Logger
 }
 
 var asgiAppCache map[string]*Asgi = map[string]*Asgi{}
@@ -672,13 +694,13 @@ type WsMessage struct {
 
 // AsgiRequestHandler stores pointers to the request and the response writer
 type AsgiRequestHandler struct {
-	event                     *C.AsgiEvent
-	w                         http.ResponseWriter
-	r                         *http.Request
-	completedBody             bool
-	completedResponse         bool
-	accumulatedResponseSize   int
-	done                      chan error
+	event                   *C.AsgiEvent
+	w                       http.ResponseWriter
+	r                       *http.Request
+	completedBody           bool
+	completedResponse       bool
+	accumulatedResponseSize int
+	done                    chan error
 
 	operations chan AsgiOperations
 
