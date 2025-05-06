@@ -280,7 +280,7 @@ func TestBuildWsgiHeaders(t *testing.T) {
 }
 
 func TestWsgiState(t *testing.T) {
-	state := &WsgiState{
+	state := &WsgiGlobalState{
 		handlers: make(map[int64]chan WsgiResponse),
 	}
 
@@ -366,4 +366,124 @@ func (m *mockResponseWriter) Write(data []byte) (int, error) {
 
 func (m *mockResponseWriter) WriteHeader(statusCode int) {
 	m.statusCode = statusCode
+}
+
+func TestWebsocketUpgrade(t *testing.T) {
+	// Create a simple GET request
+	r := &http.Request{
+		Method: "POST",
+		Header: http.Header{},
+	}
+	if needsWebsocketUpgrade(r) {
+		t.Error("Expected POST request not to be upgraded to websockets")
+	}
+
+	r.Method = "GET"
+	if needsWebsocketUpgrade(r) {
+		t.Error("Expected request not to be upgraded to websockets, missing headers")
+	}
+
+	r.Header.Add("connection", "upgrade")
+	if needsWebsocketUpgrade(r) {
+		t.Error("Expected request not to be upgraded to websockets, missing header: upgrade")
+	}
+
+	r.Header.Add("upgrade", "websocket")
+	if !needsWebsocketUpgrade(r) {
+		t.Error("Expected requests to be upgraded to websockets")
+	}
+}
+
+func TestRemoteHostPort(t *testing.T) {
+	r := &http.Request{
+		RemoteAddr: "10.10.10.10:54321",
+	}
+	host, port := getRemoteHostPort(r)
+	if host != "10.10.10.10" {
+		t.Error("Expected host to be 10.10.10.10")
+	}
+	if port != 54321 {
+		t.Error("Expected port to be 54321")
+	}
+}
+
+func TestBuildAsgiHeaders(t *testing.T) {
+	// Create a sample HTTP request
+	r := &http.Request{
+		Method:     "GET",
+		Proto:      "HTTP/1.1",
+		ProtoMajor: 1,
+		ProtoMinor: 1,
+		Header: http.Header{
+			"Content-Type":   []string{"application/json"},
+			"Content-Length": []string{"123"},
+			"Custom-Header":  []string{"CustomValue"},
+		},
+		URL: &url.URL{
+			Path:     "/test/path",
+			RawQuery: "key=value",
+		},
+		Host: "localhost:8080",
+		Body: io.NopCloser(strings.NewReader("")),
+	}
+	ctx := context.WithValue(context.Background(), http.LocalAddrContextKey, &mockNetAddr{"localhost:8080"})
+	r = r.WithContext(ctx)
+
+	// Call the function
+	headers, scope, err := buildAsgiHeaders(r, false)
+	if err != nil {
+		t.Error("Expected err to be nil")
+	}
+	defer headers.Cleanup()
+
+	// Check the headers
+	expectedHeaders := map[string]string{
+		"content-type":   "application/json",
+		"content-length": "123",
+		"custom-header":  "CustomValue",
+	}
+
+	for i := 0; i < headers.Len(); i++ {
+		key, value := headers.Get(i)
+		if expectedValue, ok := expectedHeaders[key]; ok {
+			if value != expectedValue {
+				t.Errorf("Header %s: expected %s, got %s", key, expectedValue, value)
+			}
+			delete(expectedHeaders, key)
+		} else {
+			t.Errorf("Unexpected header: %s=%s", key, value)
+		}
+	}
+
+	if len(expectedHeaders) > 0 {
+		t.Errorf("Missing headers: %v", expectedHeaders)
+	}
+
+	// Check the scope
+	expectedScope := map[string]string{
+		"type":         "http",
+		"http_version": "1.1",
+		"method":       "GET",
+		"scheme":       "http",
+		"path":         "/test/path",
+		"raw_path":     r.URL.EscapedPath(),
+		"query_string": r.URL.RawQuery,
+		"root_path":    "",
+	}
+
+	for i := 0; i < scope.Len(); i++ {
+		key, value := scope.Get(i)
+		if expectedValue, ok := expectedScope[key]; ok {
+			if value != expectedValue {
+				t.Errorf("Scope %s: expected %s, got %s", key, expectedValue, value)
+			}
+			delete(expectedScope, key)
+		} else {
+			t.Errorf("Unexpected header: %s=%s", key, value)
+		}
+	}
+
+	if len(expectedScope) > 0 {
+		t.Errorf("Missing scope: %v", expectedScope)
+	}
 }

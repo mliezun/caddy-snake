@@ -60,6 +60,16 @@ func NewMapKeyValFromSource(m *C.MapKeyVal) *MapKeyVal {
 	}
 }
 
+func NewMapKeyValFromNative(m map[string]string) *MapKeyVal {
+	mkv := NewMapKeyVal(len(m))
+	i := 0
+	for k, v := range m {
+		mkv.Set(k, v, i)
+		i++
+	}
+	return mkv
+}
+
 func (m *MapKeyVal) Cleanup() {
 	if m.m != nil {
 		C.MapKeyVal_free(m.m, m.m.count)
@@ -252,15 +262,15 @@ func (r *WsgiResponse) Write(w http.ResponseWriter) {
 	}
 }
 
-// WsgiState holds the global state for all requests to WSGI apps
-type WsgiState struct {
+// WsgiGlobalState holds the global state for all requests to WSGI apps
+type WsgiGlobalState struct {
 	sync.RWMutex
 	requestCounter int64
 	handlers       map[int64]chan WsgiResponse
 }
 
 // Request creates a new request handler and returns its ID
-func (s *WsgiState) Request() int64 {
+func (s *WsgiGlobalState) Request() int64 {
 	s.Lock()
 	defer s.Unlock()
 	s.requestCounter++
@@ -269,7 +279,7 @@ func (s *WsgiState) Request() int64 {
 }
 
 // Response sends the response to the channel and closes it
-func (s *WsgiState) Response(requestID int64, response WsgiResponse) {
+func (s *WsgiGlobalState) Response(requestID int64, response WsgiResponse) {
 	s.RLock()
 	ch := s.handlers[requestID]
 	s.RUnlock()
@@ -277,7 +287,7 @@ func (s *WsgiState) Response(requestID int64, response WsgiResponse) {
 }
 
 // WaitResponse waits for the response from the channel and returns it
-func (s *WsgiState) WaitResponse(requestID int64) WsgiResponse {
+func (s *WsgiGlobalState) WaitResponse(requestID int64) WsgiResponse {
 	s.RLock()
 	ch := s.handlers[requestID]
 	s.RUnlock()
@@ -290,13 +300,13 @@ func (s *WsgiState) WaitResponse(requestID int64) WsgiResponse {
 }
 
 var (
-	wsgiState     *WsgiState
+	wsgiState     *WsgiGlobalState
 	wsgiStateOnce sync.Once
 )
 
-func initWsgiState() {
+func initWsgi() {
 	wsgiStateOnce.Do(func() {
-		wsgiState = &WsgiState{
+		wsgiState = &WsgiGlobalState{
 			handlers:       make(map[int64]chan WsgiResponse),
 			requestCounter: 0,
 		}
@@ -309,7 +319,8 @@ func init() {
 	C.Py_init_and_release_gil(setupPy)
 	caddy.RegisterModule(CaddySnake{})
 	httpcaddyfile.RegisterHandlerDirective("python", parsePythonDirective)
-	initWsgiState()
+	initWsgi()
+	initAsgi()
 }
 
 // findSitePackagesInVenv searches for the site-packages directory in a given venv.
@@ -468,7 +479,7 @@ func upperCaseAndUnderscore(r rune) rune {
 	return r
 }
 
-func getHostPort(r *http.Request) (string, string) {
+func getHostPort(r *http.Request) (string, int) {
 	ctx := r.Context()
 	srvAddr := ctx.Value(http.LocalAddrContextKey).(net.Addr)
 	_, port, _ := net.SplitHostPort(srvAddr.String())
@@ -477,7 +488,8 @@ func getHostPort(r *http.Request) (string, string) {
 		// net.SplitHostPort returns error and an empty host when port is missing
 		host = r.Host
 	}
-	return host, port
+	portN, _ := strconv.Atoi(port)
+	return host, portN
 }
 
 // buildWsgiHeaders builds the WSGI headers from the HTTP request.
@@ -486,7 +498,7 @@ func buildWsgiHeaders(r *http.Request) *MapKeyVal {
 
 	extraHeaders := map[string]string{
 		"SERVER_NAME":     host,
-		"SERVER_PORT":     port,
+		"SERVER_PORT":     fmt.Sprintf("%d", port),
 		"SERVER_PROTOCOL": r.Proto,
 		"X_FROM":          "caddy-snake",
 		"REQUEST_METHOD":  r.Method,
@@ -600,8 +612,8 @@ var asgiAppCache map[string]*Asgi = map[string]*Asgi{}
 
 // NewAsgi imports a Python ASGI app
 func NewAsgi(asgiPattern, workingDir, venvPath string, lifespan bool, logger *zap.Logger) (*Asgi, error) {
-	asgiLock.Lock()
-	defer asgiLock.Unlock()
+	asgiState.Lock()
+	defer asgiState.Unlock()
 
 	if app, ok := asgiAppCache[asgiPattern]; ok {
 		return app, nil
@@ -660,13 +672,13 @@ func NewAsgi(asgiPattern, workingDir, venvPath string, lifespan bool, logger *za
 // Cleanup deallocates CGO resources used by Asgi app
 func (m *Asgi) Cleanup() (err error) {
 	if m != nil && m.app != nil {
-		asgiLock.Lock()
+		asgiState.Lock()
 		if _, ok := asgiAppCache[m.asgiPattern]; !ok {
-			asgiLock.Unlock()
+			asgiState.Unlock()
 			return
 		}
 		delete(asgiAppCache, m.asgiPattern)
-		asgiLock.Unlock()
+		asgiState.Unlock()
 
 		runtime.LockOSThread()
 		defer runtime.UnlockOSThread()
@@ -706,9 +718,14 @@ type AsgiRequestHandler struct {
 
 	operations chan AsgiOperations
 
-	isWebsocket    bool
+	websocket      bool
 	websocketState WebsocketState
 	websocketConn  *websocket.Conn
+}
+
+func (h *AsgiRequestHandler) Cleanup() {
+	h.completedResponse = true
+	h.operations <- AsgiOperations{stop: true}
 }
 
 // AsgiOperations stores operations that should be executed in the background
@@ -737,40 +754,66 @@ func (h *AsgiRequestHandler) consume() {
 
 // NewAsgiRequestHandler initializes handler and starts queue that consumes operations
 // in the background.
-func NewAsgiRequestHandler(w http.ResponseWriter, r *http.Request) *AsgiRequestHandler {
+func NewAsgiRequestHandler(w http.ResponseWriter, r *http.Request, websocket bool) *AsgiRequestHandler {
 	h := &AsgiRequestHandler{
 		w:    w,
 		r:    r,
 		done: make(chan error, 2),
 
 		operations: make(chan AsgiOperations, 16),
+
+		websocket: websocket,
 	}
 	go h.consume()
 	return h
 }
 
-var asgiLock sync.RWMutex = sync.RWMutex{}
-var asgiRequestCounter uint64 = 0
-var asgiHandlers map[uint64]*AsgiRequestHandler = map[uint64]*AsgiRequestHandler{}
+type AsgiGlobalState struct {
+	sync.RWMutex
+	requestCounter uint64
+	handlers       map[uint64]*AsgiRequestHandler
+}
+
+func (s *AsgiGlobalState) Request(h *AsgiRequestHandler) uint64 {
+	s.Lock()
+	defer s.Unlock()
+	s.requestCounter++
+	s.handlers[s.requestCounter] = h
+	return s.requestCounter
+}
+
+func (s *AsgiGlobalState) Cleanup(requestID uint64) {
+	s.Lock()
+	defer s.Unlock()
+	delete(s.handlers, requestID)
+}
+
+func initAsgi() {
+	asgiStateOnce.Do(func() {
+		asgiState = &AsgiGlobalState{
+			requestCounter: 0,
+			handlers:       make(map[uint64]*AsgiRequestHandler),
+		}
+	})
+}
+
+var (
+	asgiState     *AsgiGlobalState
+	asgiStateOnce sync.Once
+)
+
 var upgrader = websocket.Upgrader{} // use default options
 
-// HandleRequest passes request down to Python ASGI app and writes responses and headers.
-func (m *Asgi) HandleRequest(w http.ResponseWriter, r *http.Request) error {
-	ctx := r.Context()
-	srvAddr := ctx.Value(http.LocalAddrContextKey).(net.Addr)
-	_, serverPortString, _ := net.SplitHostPort(srvAddr.String())
-	serverPort, _ := strconv.Atoi(serverPortString)
-	serverHost, _, _ := net.SplitHostPort(r.Host)
-	if serverHost == "" {
-		// net.SplitHostPort returns error and an empty host when port is missing
-		serverHost = r.Host
+func getRemoteHostPort(r *http.Request) (string, int) {
+	host, port, _ := net.SplitHostPort(r.RemoteAddr)
+	portN, _ := strconv.Atoi(port)
+	return host, portN
+}
+
+func needsWebsocketUpgrade(r *http.Request) bool {
+	if r.Method != "GET" {
+		return false
 	}
-	serverHostStr := C.CString(serverHost)
-	defer C.free(unsafe.Pointer(serverHostStr))
-	clientHost, clientPortString, _ := net.SplitHostPort(r.RemoteAddr)
-	clientPort, _ := strconv.Atoi(clientPortString)
-	clientHostStr := C.CString(clientHost)
-	defer C.free(unsafe.Pointer(clientHostStr))
 
 	containsConnectionUpgrade := false
 	for _, v := range r.Header.Values("connection") {
@@ -779,6 +822,10 @@ func (m *Asgi) HandleRequest(w http.ResponseWriter, r *http.Request) error {
 			break
 		}
 	}
+	if !containsConnectionUpgrade {
+		return false
+	}
+
 	containsUpgradeWebsockets := false
 	for _, v := range r.Header.Values("upgrade") {
 		if strings.Contains(strings.ToLower(v), "websocket") {
@@ -786,14 +833,17 @@ func (m *Asgi) HandleRequest(w http.ResponseWriter, r *http.Request) error {
 			break
 		}
 	}
-	isWebsocket := containsConnectionUpgrade && containsUpgradeWebsockets && r.Method == "GET"
 
+	return containsUpgradeWebsockets
+}
+
+func buildAsgiHeaders(r *http.Request, websocket bool) (*MapKeyVal, *MapKeyVal, error) {
 	decodedPath, err := url.PathUnescape(r.URL.Path)
 	if err != nil {
-		return err
+		return nil, nil, err
 	}
 	var connType, scheme string
-	if isWebsocket {
+	if websocket {
 		connType = "websocket"
 		scheme = "ws"
 		if r.TLS != nil {
@@ -817,7 +867,6 @@ func (m *Asgi) HandleRequest(w http.ResponseWriter, r *http.Request) error {
 		"root_path":    "",
 	}
 	scope := NewMapKeyVal(len(scopeMap))
-	defer scope.Cleanup()
 	scopeCount := 0
 	for k, v := range scopeMap {
 		scope.Set(k, v, scopeCount)
@@ -825,7 +874,6 @@ func (m *Asgi) HandleRequest(w http.ResponseWriter, r *http.Request) error {
 	}
 
 	requestHeaders := NewMapKeyVal(len(r.Header))
-	defer requestHeaders.Cleanup()
 	headerCount := 0
 	for k, items := range r.Header {
 		if k == "Proxy" {
@@ -842,24 +890,36 @@ func (m *Asgi) HandleRequest(w http.ResponseWriter, r *http.Request) error {
 		headerCount++
 	}
 
-	arh := NewAsgiRequestHandler(w, r)
-	arh.isWebsocket = isWebsocket
+	return requestHeaders, scope, nil
+}
 
-	asgiLock.Lock()
-	asgiRequestCounter++
-	requestID := asgiRequestCounter
-	asgiHandlers[requestID] = arh
-	asgiLock.Unlock()
-	defer func() {
-		arh.completedResponse = true
-		arh.operations <- AsgiOperations{stop: true}
-		asgiLock.Lock()
-		delete(asgiHandlers, requestID)
-		asgiLock.Unlock()
-	}()
+// HandleRequest passes request down to Python ASGI app and writes responses and headers.
+func (m *Asgi) HandleRequest(w http.ResponseWriter, r *http.Request) error {
+	host, port := getHostPort(r)
+	serverHostStr := C.CString(host)
+	defer C.free(unsafe.Pointer(serverHostStr))
+
+	clientHost, clientPort := getRemoteHostPort(r)
+	clientHostStr := C.CString(clientHost)
+	defer C.free(unsafe.Pointer(clientHostStr))
+
+	websocket := needsWebsocketUpgrade(r)
+
+	requestHeaders, scope, err := buildAsgiHeaders(r, websocket)
+	if err != nil {
+		return err
+	}
+	defer requestHeaders.Cleanup()
+	defer scope.Cleanup()
+
+	arh := NewAsgiRequestHandler(w, r, websocket)
+	defer arh.Cleanup()
+
+	requestID := asgiState.Request(arh)
+	defer asgiState.Cleanup(requestID)
 
 	var subprotocols *C.char = nil
-	if isWebsocket {
+	if websocket {
 		subprotocols = C.CString(r.Header.Get("sec-websocket-protocol"))
 		defer C.free(unsafe.Pointer(subprotocols))
 	}
@@ -873,7 +933,7 @@ func (m *Asgi) HandleRequest(w http.ResponseWriter, r *http.Request) error {
 		clientHostStr,
 		C.int(clientPort),
 		serverHostStr,
-		C.int(serverPort),
+		C.int(port),
 		subprotocols,
 	)
 	runtime.UnlockOSThread()
@@ -888,16 +948,16 @@ func (m *Asgi) HandleRequest(w http.ResponseWriter, r *http.Request) error {
 
 //export asgi_receive_start
 func asgi_receive_start(requestID C.uint64_t, event *C.AsgiEvent) C.uint8_t {
-	asgiLock.Lock()
-	defer asgiLock.Unlock()
-	arh := asgiHandlers[uint64(requestID)]
+	asgiState.Lock()
+	defer asgiState.Unlock()
+	arh := asgiState.handlers[uint64(requestID)]
 	if arh == nil || arh.completedResponse {
 		return C.uint8_t(0)
 	}
 
 	arh.event = event
 
-	if arh.isWebsocket {
+	if arh.websocket {
 		switch arh.websocketState {
 		case WS_STARTING:
 			// TODO: this shouldn't happen, what do I do here?
@@ -988,13 +1048,13 @@ func asgi_receive_start(requestID C.uint64_t, event *C.AsgiEvent) C.uint8_t {
 
 //export asgi_set_headers
 func asgi_set_headers(requestID C.uint64_t, statusCode C.int, headers *C.MapKeyVal, event *C.AsgiEvent) {
-	asgiLock.Lock()
-	defer asgiLock.Unlock()
-	arh := asgiHandlers[uint64(requestID)]
+	asgiState.Lock()
+	defer asgiState.Unlock()
+	arh := asgiState.handlers[uint64(requestID)]
 
 	arh.event = event
 
-	if arh.isWebsocket {
+	if arh.websocket {
 		wsHeaders := arh.w.Header().Clone()
 		if headers != nil {
 			mapHeaders := NewMapKeyValFromSource(headers)
@@ -1053,9 +1113,9 @@ func asgi_set_headers(requestID C.uint64_t, statusCode C.int, headers *C.MapKeyV
 
 //export asgi_send_response
 func asgi_send_response(requestID C.uint64_t, body *C.char, bodyLen C.size_t, moreBody C.uint8_t, event *C.AsgiEvent) {
-	asgiLock.Lock()
-	defer asgiLock.Unlock()
-	arh := asgiHandlers[uint64(requestID)]
+	asgiState.Lock()
+	defer asgiState.Unlock()
+	arh := asgiState.handlers[uint64(requestID)]
 
 	arh.event = event
 
@@ -1081,9 +1141,9 @@ func asgi_send_response(requestID C.uint64_t, body *C.char, bodyLen C.size_t, mo
 
 //export asgi_send_response_websocket
 func asgi_send_response_websocket(requestID C.uint64_t, body *C.char, bodyLen C.size_t, messageType C.uint8_t, event *C.AsgiEvent) {
-	asgiLock.Lock()
-	defer asgiLock.Unlock()
-	arh := asgiHandlers[uint64(requestID)]
+	asgiState.Lock()
+	defer asgiState.Unlock()
+	arh := asgiState.handlers[uint64(requestID)]
 
 	arh.event = event
 
@@ -1117,9 +1177,9 @@ func asgi_send_response_websocket(requestID C.uint64_t, body *C.char, bodyLen C.
 
 //export asgi_cancel_request
 func asgi_cancel_request(requestID C.uint64_t) {
-	asgiLock.Lock()
-	defer asgiLock.Unlock()
-	arh, ok := asgiHandlers[uint64(requestID)]
+	asgiState.Lock()
+	defer asgiState.Unlock()
+	arh, ok := asgiState.handlers[uint64(requestID)]
 	if ok {
 		arh.done <- errors.New("request cancelled")
 	}
@@ -1127,9 +1187,9 @@ func asgi_cancel_request(requestID C.uint64_t) {
 
 //export asgi_cancel_request_websocket
 func asgi_cancel_request_websocket(requestID C.uint64_t, reason *C.char, code C.int) {
-	asgiLock.Lock()
-	defer asgiLock.Unlock()
-	arh, ok := asgiHandlers[uint64(requestID)]
+	asgiState.Lock()
+	defer asgiState.Unlock()
+	arh, ok := asgiState.handlers[uint64(requestID)]
 	if ok {
 		var reasonText string
 		if reason != nil {
