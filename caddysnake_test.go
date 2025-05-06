@@ -81,7 +81,7 @@ func TestFindSitePackagesInVenv_NoSitePackages(t *testing.T) {
 
 func TestNewMapKeyVal(t *testing.T) {
 	m := NewMapKeyVal(3)
-	for i := 0; i < 3; i++ {
+	for i := 0; i < m.Capacity(); i++ {
 		m.Append(fmt.Sprintf("key%d", i), fmt.Sprintf("value%d", i))
 	}
 	if m == nil {
@@ -95,7 +95,7 @@ func TestNewMapKeyVal(t *testing.T) {
 
 func TestNewMapKeyValFromSource(t *testing.T) {
 	m := NewMapKeyVal(3)
-	for i := 0; i < 3; i++ {
+	for i := 0; i < m.Capacity(); i++ {
 		m.Append(fmt.Sprintf("key%d", i), fmt.Sprintf("value%d", i))
 	}
 	m = NewMapKeyValFromSource(m.m)
@@ -157,6 +157,10 @@ func TestLenNull(t *testing.T) {
 
 	if m.Len() != 0 {
 		t.Errorf("Expected length 0, got %d", m.Len())
+	}
+
+	if m.Len() != 0 {
+		t.Errorf("Expected capacity 0, got %d", m.Capacity())
 	}
 }
 
