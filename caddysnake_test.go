@@ -82,7 +82,7 @@ func TestFindSitePackagesInVenv_NoSitePackages(t *testing.T) {
 func TestNewMapKeyVal(t *testing.T) {
 	m := NewMapKeyVal(3)
 	for i := 0; i < 3; i++ {
-		m.Set(fmt.Sprintf("key%d", i), fmt.Sprintf("value%d", i), i)
+		m.Append(fmt.Sprintf("key%d", i), fmt.Sprintf("value%d", i))
 	}
 	if m == nil {
 		t.Fatal("Expected non-nil MapKeyVal")
@@ -96,7 +96,7 @@ func TestNewMapKeyVal(t *testing.T) {
 func TestNewMapKeyValFromSource(t *testing.T) {
 	m := NewMapKeyVal(3)
 	for i := 0; i < 3; i++ {
-		m.Set(fmt.Sprintf("key%d", i), fmt.Sprintf("value%d", i), i)
+		m.Append(fmt.Sprintf("key%d", i), fmt.Sprintf("value%d", i))
 	}
 	m = NewMapKeyValFromSource(m.m)
 	if m == nil {
@@ -112,8 +112,8 @@ func TestSetAndGet(t *testing.T) {
 	m := NewMapKeyVal(2)
 	defer m.Cleanup()
 
-	m.Set("Content-Type", "application/json", 0)
-	m.Set("Accept", "text/plain", 1)
+	m.Append("Content-Type", "application/json")
+	m.Append("Accept", "text/plain")
 
 	k0, v0 := m.Get(0)
 	if k0 != "Content-Type" || v0 != "application/json" {
@@ -128,7 +128,7 @@ func TestSetAndGet(t *testing.T) {
 
 func TestSetGetBounds(t *testing.T) {
 	m := NewMapKeyVal(1)
-	m.Set("Content-Type", "application/json", 0)
+	m.Append("Content-Type", "application/json")
 	defer m.Cleanup()
 
 	defer func() {
@@ -136,12 +136,12 @@ func TestSetGetBounds(t *testing.T) {
 			t.Errorf("Expected panic for out-of-bounds Set, but did not panic")
 		}
 	}()
-	m.Set("Overflow", "Oops", 2)
+	m.Append("Overflow", "Oops")
 }
 
 func TestGetBounds(t *testing.T) {
 	m := NewMapKeyVal(1)
-	m.Set("Content-Type", "application/json", 0)
+	m.Append("Content-Type", "application/json")
 	defer m.Cleanup()
 
 	defer func() {
@@ -323,8 +323,8 @@ func TestWsgiResponseWrite(t *testing.T) {
 
 	// Set headers in the WsgiResponse
 	responseHeaders := NewMapKeyVal(2)
-	responseHeaders.Set("Content-Type", "text/plain", 0)
-	responseHeaders.Set("X-Custom-Header", "CustomValue", 1)
+	responseHeaders.Append("Content-Type", "text/plain")
+	responseHeaders.Append("X-Custom-Header", "CustomValue")
 	response.headers = responseHeaders.m
 	// defer responseHeaders.Cleanup()
 

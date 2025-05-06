@@ -60,32 +60,25 @@ func NewMapKeyValFromSource(m *C.MapKeyVal) *MapKeyVal {
 	}
 }
 
-func NewMapKeyValFromNative(m map[string]string) *MapKeyVal {
-	mkv := NewMapKeyVal(len(m))
-	i := 0
-	for k, v := range m {
-		mkv.Set(k, v, i)
-		i++
-	}
-	return mkv
-}
-
 func (m *MapKeyVal) Cleanup() {
 	if m.m != nil {
-		C.MapKeyVal_free(m.m, m.m.count)
+		C.MapKeyVal_free(m.m)
 	}
 }
 
-func (m *MapKeyVal) Set(k, v string, pos int) {
-	if pos < 0 || pos > int(m.m.count) {
-		panic("Expected pos to be within limits")
+func (m *MapKeyVal) Append(k, v string) {
+	// Replicate the function MapKeyVal_append to avoid a CGO call
+	if m.m == nil || m.m.length == m.m.capacity {
+		panic("Maximum capacity reached")
 	}
-	*(**C.char)(unsafe.Pointer(m.baseHeaders + uintptr(pos)*SIZE_OF_CHAR_POINTER)) = C.CString(k)
-	*(**C.char)(unsafe.Pointer(m.baseValues + uintptr(pos)*SIZE_OF_CHAR_POINTER)) = C.CString(v)
+	pos := uintptr(m.m.length)
+	*(**C.char)(unsafe.Pointer(m.baseHeaders + pos*SIZE_OF_CHAR_POINTER)) = C.CString(k)
+	*(**C.char)(unsafe.Pointer(m.baseValues + pos*SIZE_OF_CHAR_POINTER)) = C.CString(v)
+	m.m.length++
 }
 
 func (m *MapKeyVal) Get(pos int) (string, string) {
-	if pos < 0 || pos > int(m.m.count) {
+	if pos < 0 || pos > int(m.m.capacity) {
 		panic("Expected pos to be within limits")
 	}
 	headerNamePtr := unsafe.Pointer(uintptr(unsafe.Pointer(m.m.keys)) + uintptr(pos)*SIZE_OF_CHAR_POINTER)
@@ -99,7 +92,14 @@ func (m *MapKeyVal) Len() int {
 	if m.m == nil {
 		return 0
 	}
-	return int(m.m.count)
+	return int(m.m.length)
+}
+
+func (m *MapKeyVal) Capacity() int {
+	if m.m == nil {
+		return 0
+	}
+	return int(m.m.capacity)
 }
 
 // AppServer defines the interface to interacting with a WSGI or ASGI server
@@ -520,7 +520,6 @@ func buildWsgiHeaders(r *http.Request) *MapKeyVal {
 		headersLength -= 1
 	}
 	requestHeaders := NewMapKeyVal(headersLength + len(extraHeaders))
-	i := 0
 	for k, items := range r.Header {
 		key := strings.Map(upperCaseAndUnderscore, k)
 		if key == "PROXY" {
@@ -540,12 +539,10 @@ func buildWsgiHeaders(r *http.Request) *MapKeyVal {
 			joinStr = "; "
 		}
 
-		requestHeaders.Set("HTTP_"+key, strings.Join(items, joinStr), i)
-		i++
+		requestHeaders.Append("HTTP_"+key, strings.Join(items, joinStr))
 	}
 	for k, v := range extraHeaders {
-		requestHeaders.Set(k, v, i)
-		i++
+		requestHeaders.Append(k, v)
 	}
 	return requestHeaders
 }
@@ -867,14 +864,11 @@ func buildAsgiHeaders(r *http.Request, websocket bool) (*MapKeyVal, *MapKeyVal, 
 		"root_path":    "",
 	}
 	scope := NewMapKeyVal(len(scopeMap))
-	scopeCount := 0
 	for k, v := range scopeMap {
-		scope.Set(k, v, scopeCount)
-		scopeCount++
+		scope.Append(k, v)
 	}
 
 	requestHeaders := NewMapKeyVal(len(r.Header))
-	headerCount := 0
 	for k, items := range r.Header {
 		if k == "Proxy" {
 			// golang cgi issue 16405
@@ -886,8 +880,7 @@ func buildAsgiHeaders(r *http.Request, websocket bool) (*MapKeyVal, *MapKeyVal, 
 			joinStr = "; "
 		}
 
-		requestHeaders.Set(strings.ToLower(k), strings.Join(items, joinStr), headerCount)
-		headerCount++
+		requestHeaders.Append(strings.ToLower(k), strings.Join(items, joinStr))
 	}
 
 	return requestHeaders, scope, nil
