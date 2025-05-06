@@ -941,8 +941,8 @@ func (m *Asgi) HandleRequest(w http.ResponseWriter, r *http.Request) error {
 
 //export asgi_receive_start
 func asgi_receive_start(requestID C.uint64_t, event *C.AsgiEvent) C.uint8_t {
-	asgiState.Lock()
-	defer asgiState.Unlock()
+	asgiState.RLock()
+	defer asgiState.RUnlock()
 	arh := asgiState.handlers[uint64(requestID)]
 	if arh == nil || arh.completedResponse {
 		return C.uint8_t(0)
@@ -1041,8 +1041,8 @@ func asgi_receive_start(requestID C.uint64_t, event *C.AsgiEvent) C.uint8_t {
 
 //export asgi_set_headers
 func asgi_set_headers(requestID C.uint64_t, statusCode C.int, headers *C.MapKeyVal, event *C.AsgiEvent) {
-	asgiState.Lock()
-	defer asgiState.Unlock()
+	asgiState.RLock()
+	defer asgiState.RUnlock()
 	arh := asgiState.handlers[uint64(requestID)]
 
 	arh.event = event
@@ -1106,8 +1106,8 @@ func asgi_set_headers(requestID C.uint64_t, statusCode C.int, headers *C.MapKeyV
 
 //export asgi_send_response
 func asgi_send_response(requestID C.uint64_t, body *C.char, bodyLen C.size_t, moreBody C.uint8_t, event *C.AsgiEvent) {
-	asgiState.Lock()
-	defer asgiState.Unlock()
+	asgiState.RLock()
+	defer asgiState.RUnlock()
 	arh := asgiState.handlers[uint64(requestID)]
 
 	arh.event = event
@@ -1134,8 +1134,8 @@ func asgi_send_response(requestID C.uint64_t, body *C.char, bodyLen C.size_t, mo
 
 //export asgi_send_response_websocket
 func asgi_send_response_websocket(requestID C.uint64_t, body *C.char, bodyLen C.size_t, messageType C.uint8_t, event *C.AsgiEvent) {
-	asgiState.Lock()
-	defer asgiState.Unlock()
+	asgiState.RLock()
+	defer asgiState.RUnlock()
 	arh := asgiState.handlers[uint64(requestID)]
 
 	arh.event = event
@@ -1170,8 +1170,8 @@ func asgi_send_response_websocket(requestID C.uint64_t, body *C.char, bodyLen C.
 
 //export asgi_cancel_request
 func asgi_cancel_request(requestID C.uint64_t) {
-	asgiState.Lock()
-	defer asgiState.Unlock()
+	asgiState.RLock()
+	defer asgiState.RUnlock()
 	arh, ok := asgiState.handlers[uint64(requestID)]
 	if ok {
 		arh.done <- errors.New("request cancelled")
@@ -1180,8 +1180,8 @@ func asgi_cancel_request(requestID C.uint64_t) {
 
 //export asgi_cancel_request_websocket
 func asgi_cancel_request_websocket(requestID C.uint64_t, reason *C.char, code C.int) {
-	asgiState.Lock()
-	defer asgiState.Unlock()
+	asgiState.RLock()
+	defer asgiState.RUnlock()
 	arh, ok := asgiState.handlers[uint64(requestID)]
 	if ok {
 		var reasonText string
