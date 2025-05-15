@@ -84,25 +84,29 @@ static char *copy_pybytes(PyObject *pybytes, size_t *size) {
   return result;
 }
 
-MapKeyVal *MapKeyVal_new(size_t count) {
+MapKeyVal *MapKeyVal_new(size_t capacity) {
   MapKeyVal *new_map = (MapKeyVal *)malloc(sizeof(MapKeyVal));
-  new_map->count = count;
-  new_map->keys = malloc(sizeof(char *) * count);
-  new_map->values = malloc(sizeof(char *) * count);
+  new_map->length = 0;
+  new_map->capacity = capacity;
+  new_map->keys = malloc(sizeof(char *) * capacity);
+  new_map->values = malloc(sizeof(char *) * capacity);
   return new_map;
 }
 
-void MapKeyVal_free(MapKeyVal *map, size_t pos) {
-  if (pos > map->count) {
-    pos = map->count;
-  }
-  for (size_t i = 0; i < pos; i++) {
+void MapKeyVal_free(MapKeyVal *map) {
+  for (size_t i = 0; i < map->length; i++) {
     free(map->keys[i]);
     free(map->values[i]);
   }
   free(map->keys);
   free(map->values);
   free(map);
+}
+
+static void MapKeyVal_append(MapKeyVal *map, char *key, char *value) {
+  map->keys[map->length] = key;
+  map->values[map->length] = value;
+  map->length++;
 }
 
 typedef struct {
@@ -272,7 +276,7 @@ void WsgiApp_handle_request(WsgiApp *app, int64_t request_id,
   PyGILState_STATE gstate = PyGILState_Ensure();
 
   PyObject *environ = PyDict_New();
-  for (size_t i = 0; i < headers->count; i++) {
+  for (size_t i = 0; i < headers->length; i++) {
     PyObject *key = PyUnicode_FromString(headers->keys[i]);
     PyObject *value = PyUnicode_FromString(headers->values[i]);
     PyDict_SetItem(environ, key, value);
@@ -418,7 +422,6 @@ static PyObject *response_callback(PyObject *self, PyObject *args) {
   MapKeyVal *http_headers = MapKeyVal_new(headers_count);
 
   PyObject *key, *value, *item;
-  size_t pos = 0;
   while ((item = PyIter_Next(iterator))) {
     if (!PyTuple_Check(item) || PyTuple_Size(item) != 2) {
       PyErr_SetString(PyExc_RuntimeError,
@@ -426,15 +429,13 @@ static PyObject *response_callback(PyObject *self, PyObject *args) {
       PyErr_Print();
       Py_DECREF(item);
       Py_DECREF(iterator);
-      MapKeyVal_free(http_headers, pos);
+      MapKeyVal_free(http_headers);
       goto finalize_error;
     }
     key = PyTuple_GetItem(item, 0);
     value = PyTuple_GetItem(item, 1);
-    http_headers->keys[pos] = copy_pystring(key);
-    http_headers->values[pos] = copy_pystring(value);
+    MapKeyVal_append(http_headers, copy_pystring(key), copy_pystring(value));
     Py_DECREF(item);
-    pos++;
   }
   Py_DECREF(iterator);
 
@@ -811,7 +812,6 @@ static PyObject *AsgiEvent_send(AsgiEvent *self, PyObject *args) {
     MapKeyVal *http_headers = MapKeyVal_new(headers_count);
 
     PyObject *key, *value, *item;
-    size_t pos = 0;
     size_t len = 0;
     while ((item = PyIter_Next(iterator))) {
       // if (!PyTuple_Check(item) || PyTuple_Size(item) != 2) {
@@ -826,10 +826,9 @@ static PyObject *AsgiEvent_send(AsgiEvent *self, PyObject *args) {
       // }
       key = PyTuple_GetItem(item, 0);
       value = PyTuple_GetItem(item, 1);
-      http_headers->keys[pos] = copy_pybytes(key, &len);
-      http_headers->values[pos] = copy_pybytes(value, &len);
+      MapKeyVal_append(http_headers, copy_pybytes(key, &len),
+                       copy_pybytes(value, &len));
       Py_DECREF(item);
-      pos++;
     }
     Py_DECREF(iterator);
 
@@ -871,7 +870,6 @@ static PyObject *AsgiEvent_send(AsgiEvent *self, PyObject *args) {
     }
 
     MapKeyVal *http_headers = MapKeyVal_new(headers_count);
-    size_t pos = 0;
     size_t len = 0;
 
     if (iterator) {
@@ -889,19 +887,17 @@ static PyObject *AsgiEvent_send(AsgiEvent *self, PyObject *args) {
         // }
         key = PyTuple_GetItem(item, 0);
         value = PyTuple_GetItem(item, 1);
-        http_headers->keys[pos] = copy_pybytes(key, &len);
-        http_headers->values[pos] = copy_pybytes(value, &len);
+        MapKeyVal_append(http_headers, copy_pybytes(key, &len),
+                         copy_pybytes(value, &len));
         Py_DECREF(item);
-        pos++;
       }
       Py_DECREF(iterator);
     }
 
     if (subprotocol && subprotocol != Py_None) {
-      http_headers->keys[pos] =
-          concatenate_strings("sec-websocket-protocol", "");
-      http_headers->values[pos] = copy_pybytes(subprotocol, &len);
-      pos++;
+      MapKeyVal_append(http_headers,
+                       concatenate_strings("sec-websocket-protocol", ""),
+                       copy_pybytes(subprotocol, &len));
     }
 
     asgi_set_headers(self->request_id, 101, http_headers, self);
@@ -1004,7 +1000,7 @@ void AsgiApp_handle_request(AsgiApp *app, uint64_t request_id, MapKeyVal *scope,
   PyObject *scope_dict = PyDict_New();
   PyDict_SetItemString(scope_dict, "asgi", asgi_version);
 
-  for (int i = 0; i < scope->count; i++) {
+  for (int i = 0; i < scope->length; i++) {
     const char *key = scope->keys[i];
     if (strcmp(key, "raw_path") == 0 || strcmp(key, "query_string") == 0) {
       PyObject *value = PyBytes_FromString(scope->values[i]);
@@ -1019,8 +1015,8 @@ void AsgiApp_handle_request(AsgiApp *app, uint64_t request_id, MapKeyVal *scope,
     }
   }
 
-  PyObject *headers_tuple = PyTuple_New(headers->count);
-  for (int i = 0; i < headers->count; i++) {
+  PyObject *headers_tuple = PyTuple_New(headers->length);
+  for (int i = 0; i < headers->length; i++) {
     PyObject *element = PyTuple_New(2);
     PyTuple_SetItem(element, 0, PyBytes_FromString(headers->keys[i]));
     PyTuple_SetItem(element, 1, PyBytes_FromString(headers->values[i]));

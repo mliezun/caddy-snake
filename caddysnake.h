@@ -8,12 +8,14 @@
 void Py_init_and_release_gil(const char *);
 
 typedef struct {
-  size_t count;
+  // Capacity and length of the map work the same as in go slices.
+  size_t length;
+  size_t capacity;
   char **keys;
   char **values;
 } MapKeyVal;
 MapKeyVal *MapKeyVal_new(size_t);
-void MapKeyVal_free(MapKeyVal *map, size_t pos);
+void MapKeyVal_free(MapKeyVal *map);
 
 // WSGI Protocol
 typedef struct WsgiApp WsgiApp;
