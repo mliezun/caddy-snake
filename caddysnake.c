@@ -634,7 +634,7 @@ void AsgiEvent_set_websocket(AsgiEvent *self, const char *body, size_t body_len,
     }
     PyTuple_SetItem(tuple, 1, PyLong_FromLong(message_type));
     PyList_Append(self->request_body, tuple);
-    Py_DECREF(tuple); // WARNING: not sure if this should go here
+    Py_DECREF(tuple);
   }
   PyObject *set_fn = NULL;
   if (is_send) {
@@ -658,7 +658,6 @@ void AsgiEvent_disconnect_websocket(AsgiEvent *self) {
 static PyObject *AsgiEvent_receive_start(AsgiEvent *self, PyObject *args) {
   PyObject *result = Py_False;
   if (asgi_receive_start(self->request_id, self) == 1) {
-    // WARNING: should I incref here?
     Py_INCREF(self->event_ts_receive);
     result = self->event_ts_receive;
   }
@@ -703,8 +702,8 @@ static PyObject *AsgiEvent_receive_end(AsgiEvent *self, PyObject *args) {
       } else {
         PyDict_SetItemString(data, "bytes", message_data);
       }
-      Py_DECREF(message); // WARNING: not sure if this should be here
-      Py_DECREF(ix);      // WARNING: not sure if this should be here
+      Py_DECREF(message);
+      Py_DECREF(ix);
       Py_DECREF(pop_fn);
       Py_DECREF(data_type);
     }
@@ -732,15 +731,15 @@ static PyObject *AsgiEvent_receive_end(AsgiEvent *self, PyObject *args) {
           close_code = default_code;
         }
       }
-      Py_DECREF(message); // WARNING: not sure if this should be here
-      Py_DECREF(ix);      // WARNING: not sure if this should be here
+      Py_DECREF(message);
+      Py_DECREF(ix);
       Py_DECREF(pop_fn);
     }
     PyDict_SetItemString(data, "code", close_code);
     if (close_code != default_code) {
-      Py_DECREF(close_code); // WARNING: not sure if this should be here
+      Py_DECREF(close_code);
     }
-    Py_DECREF(default_code); // WARNING: not sure if this should be here
+    Py_DECREF(default_code);
     break;
   }
   }
@@ -795,57 +794,64 @@ static PyObject *AsgiEvent_result(AsgiEvent *self, PyObject *args) {
   Py_RETURN_NONE;
 }
 
+static void AsgiEvent_response_start(AsgiEvent *self, PyObject *data) {
+  PyObject *status_code = PyDict_GetItemString(data, "status");
+  PyObject *headers = PyDict_GetItemString(data, "headers");
+
+  PyObject *iterator = PyObject_GetIter(headers);
+  Py_ssize_t headers_count = 0;
+  if (PyTuple_Check(headers)) {
+    headers_count = PyTuple_Size(headers);
+  } else if (PyList_Check(headers)) {
+    headers_count = PyList_Size(headers);
+  }
+  MapKeyVal *http_headers = MapKeyVal_new(headers_count);
+
+  PyObject *key, *value, *item;
+  size_t len = 0;
+  while ((item = PyIter_Next(iterator))) {
+    // if (!PyTuple_Check(item) || PyTuple_Size(item) != 2) {
+    //   PyErr_SetString(PyExc_RuntimeError,
+    //                   "expected response headers to be tuples with 2
+    //                   items");
+    //   PyErr_Print();
+    //   Py_DECREF(item);
+    //   Py_DECREF(iterator);
+    //   MapKeyVal_free(http_headers, pos);
+    //   goto finalize_error;
+    // }
+    key = PyTuple_GetItem(item, 0);
+    value = PyTuple_GetItem(item, 1);
+    MapKeyVal_append(http_headers, copy_pybytes(key, &len),
+                     copy_pybytes(value, &len));
+    Py_DECREF(item);
+  }
+  Py_DECREF(iterator);
+
+  asgi_set_headers(self->request_id, PyLong_AsLong(status_code), http_headers,
+                   self);
+}
+
+static void AsgiEvent_write_body(AsgiEvent *self, PyObject *data) {
+  PyObject *more_body = PyDict_GetItemString(data, "more_body");
+  uint8_t send_more_body = 1;
+  if (!more_body || PyObject_RichCompareBool(more_body, Py_False, Py_EQ) == 1) {
+    send_more_body = 0;
+  }
+  PyObject *pybody = PyDict_GetItemString(data, "body");
+  size_t body_len = 0;
+  char *body = copy_pybytes(pybody, &body_len);
+  asgi_send_response(self->request_id, body, body_len, send_more_body, self);
+}
+
 static PyObject *AsgiEvent_send(AsgiEvent *self, PyObject *args) {
   PyObject *data = PyTuple_GetItem(args, 0);
   PyObject *data_type = PyDict_GetItemString(data, "type");
   if (PyUnicode_CompareWithASCIIString(data_type, "http.response.start") == 0) {
-    PyObject *status_code = PyDict_GetItemString(data, "status");
-    PyObject *headers = PyDict_GetItemString(data, "headers");
-
-    PyObject *iterator = PyObject_GetIter(headers);
-    Py_ssize_t headers_count = 0;
-    if (PyTuple_Check(headers)) {
-      headers_count = PyTuple_Size(headers);
-    } else if (PyList_Check(headers)) {
-      headers_count = PyList_Size(headers);
-    }
-    MapKeyVal *http_headers = MapKeyVal_new(headers_count);
-
-    PyObject *key, *value, *item;
-    size_t len = 0;
-    while ((item = PyIter_Next(iterator))) {
-      // if (!PyTuple_Check(item) || PyTuple_Size(item) != 2) {
-      //   PyErr_SetString(PyExc_RuntimeError,
-      //                   "expected response headers to be tuples with 2
-      //                   items");
-      //   PyErr_Print();
-      //   Py_DECREF(item);
-      //   Py_DECREF(iterator);
-      //   MapKeyVal_free(http_headers, pos);
-      //   goto finalize_error;
-      // }
-      key = PyTuple_GetItem(item, 0);
-      value = PyTuple_GetItem(item, 1);
-      MapKeyVal_append(http_headers, copy_pybytes(key, &len),
-                       copy_pybytes(value, &len));
-      Py_DECREF(item);
-    }
-    Py_DECREF(iterator);
-
-    asgi_set_headers(self->request_id, PyLong_AsLong(status_code), http_headers,
-                     self);
+    AsgiEvent_response_start(self, data);
   } else if (PyUnicode_CompareWithASCIIString(data_type,
                                               "http.response.body") == 0) {
-    PyObject *more_body = PyDict_GetItemString(data, "more_body");
-    uint8_t send_more_body = 1;
-    if (!more_body ||
-        PyObject_RichCompareBool(more_body, Py_False, Py_EQ) == 1) {
-      send_more_body = 0;
-    }
-    PyObject *pybody = PyDict_GetItemString(data, "body");
-    size_t body_len = 0;
-    char *body = copy_pybytes(pybody, &body_len);
-    asgi_send_response(self->request_id, body, body_len, send_more_body, self);
+    AsgiEvent_write_body(self, data);
   } else if (PyUnicode_CompareWithASCIIString(data_type, "websocket.accept") ==
              0) {
     if (self->websockets_state == WS_DISCONNECTED) {
@@ -963,7 +969,6 @@ websocket_error:
   Py_RETURN_NONE;
 
 finalize_send:
-  // WARNING: should I incref here?
   Py_INCREF(self->event_ts_send);
   return self->event_ts_send;
 }
