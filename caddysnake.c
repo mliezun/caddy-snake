@@ -236,19 +236,6 @@ static void Interpreter_release(PyThreadState *ts) {
   PyThreadState_DeleteCurrent();
 }
 
-static PyThreadState *Interpreter_acquire(PyInterpreterState *interp) {
-  PyThreadState *ts = PyThreadState_New(interp);
-  PyEval_RestoreThread(ts);
-  return ts;
-}
-
-static void Interpreter_release(PyThreadState *ts) {
-  // clear ts
-  PyThreadState_Clear(ts);
-  // delete the current thread state and release the GIL
-  PyThreadState_DeleteCurrent();
-}
-
 WsgiApp *WsgiApp_import(const char *module_name, const char *app_name,
                         const char *working_dir, const char *venv_path) {
   WsgiApp *app = malloc(sizeof(WsgiApp));
@@ -289,16 +276,17 @@ WsgiApp *WsgiApp_import(const char *module_name, const char *app_name,
   return app;
 }
 
-void App_cleanup(WsgiApp *app) {
-  PyGILState_STATE gstate = PyGILState_Ensure();
+void WsgiApp_cleanup(WsgiApp *app) {
+  PyThreadState *ts = Interpreter_acquire(interp->interp);
   Py_XDECREF(app->handler);
   Interpreter_release(ts);
   free(app);
 }
 
-void App_handle_request(WsgiApp *app, int64_t request_id, HTTPHeaders *headers,
-                        const char *body) {
-  PyGILState_STATE gstate = PyGILState_Ensure();
+void WsgiApp_handle_request(WsgiApp *app, int64_t request_id,
+                            MapKeyVal *headers, const char *body,
+                            size_t body_len) {
+  PyThreadState *ts = Interpreter_acquire(interp->interp);
 
   PyObject *environ = PyDict_New();
   for (size_t i = 0; i < headers->length; i++) {
