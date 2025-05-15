@@ -38,8 +38,8 @@ void AsgiApp_handle_request(AsgiApp *, uint64_t, MapKeyVal *, MapKeyVal *,
 void AsgiEvent_set(AsgiEvent *, const char *, size_t, uint8_t, uint8_t);
 void AsgiEvent_set_websocket(AsgiEvent *, const char *, size_t, uint8_t,
                              uint8_t);
-void AsgiEvent_connect_websocket(AsgiEvent *);
-void AsgiEvent_disconnect_websocket(AsgiEvent *);
+void AsgiEvent_websocket_set_connected(AsgiEvent *);
+void AsgiEvent_websocket_set_disconnected(AsgiEvent *);
 void AsgiEvent_cleanup(AsgiEvent *);
 void AsgiApp_cleanup(AsgiApp *);
 
