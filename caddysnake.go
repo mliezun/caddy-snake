@@ -1014,6 +1014,41 @@ func (h *AsgiRequestHandler) SetEvent(event *C.AsgiEvent) {
 	h.event = event
 }
 
+func (h *AsgiRequestHandler) readBody(event *C.AsgiEvent) {
+	var bodyStr *C.char
+	var bodyLen C.size_t
+	var moreBody C.uint8_t
+	if !h.completedBody {
+		buffer := make([]byte, 1<<16)
+		n, err := h.r.Body.Read(buffer)
+		if err != nil && err != io.EOF {
+			h.done <- err
+			return
+		}
+		h.completedBody = (err == io.EOF)
+		buffer = append(buffer[:n], 0)
+		bodyStr = (*C.char)(unsafe.Pointer(&buffer[0]))
+		bodyLen = C.size_t(len(buffer) - 1) // -1 to remove null-terminator
+	}
+
+	if h.completedBody {
+		moreBody = C.uint8_t(0)
+	} else {
+		moreBody = C.uint8_t(1)
+	}
+
+	runtime.LockOSThread()
+	C.AsgiEvent_set(event, bodyStr, bodyLen, moreBody, C.uint8_t(0))
+	runtime.UnlockOSThread()
+}
+
+func (h *AsgiRequestHandler) ReceiveStart(event *C.AsgiEvent) C.uint8_t {
+	h.operations <- AsgiOperations{op: func() {
+		h.readBody(event)
+	}}
+	return C.uint8_t(1)
+}
+
 //export asgi_receive_start
 func asgi_receive_start(requestID C.uint64_t, event *C.AsgiEvent) C.uint8_t {
 	arh := asgiState.GetHandler(uint64(requestID))
@@ -1026,35 +1061,7 @@ func asgi_receive_start(requestID C.uint64_t, event *C.AsgiEvent) C.uint8_t {
 		return arh.HandleWebsocket(event)
 	}
 
-	arh.operations <- AsgiOperations{op: func() {
-		var bodyStr *C.char
-		var bodyLen C.size_t
-		var moreBody C.uint8_t
-		if !arh.completedBody {
-			buffer := make([]byte, 1<<16)
-			n, err := arh.r.Body.Read(buffer)
-			if err != nil && err != io.EOF {
-				arh.done <- err
-				return
-			}
-			arh.completedBody = (err == io.EOF)
-			buffer = append(buffer[:n], 0)
-			bodyStr = (*C.char)(unsafe.Pointer(&buffer[0]))
-			bodyLen = C.size_t(len(buffer) - 1) // -1 to remove null-terminator
-		}
-
-		if arh.completedBody {
-			moreBody = C.uint8_t(0)
-		} else {
-			moreBody = C.uint8_t(1)
-		}
-
-		runtime.LockOSThread()
-		C.AsgiEvent_set(event, bodyStr, bodyLen, moreBody, C.uint8_t(0))
-		runtime.UnlockOSThread()
-	}}
-
-	return C.uint8_t(1)
+	return arh.ReceiveStart(event)
 }
 
 //export asgi_set_headers
