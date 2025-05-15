@@ -1049,84 +1049,93 @@ func (h *AsgiRequestHandler) ReceiveStart(event *C.AsgiEvent) C.uint8_t {
 	return C.uint8_t(1)
 }
 
-//export asgi_receive_start
-func asgi_receive_start(requestID C.uint64_t, event *C.AsgiEvent) C.uint8_t {
-	arh := asgiState.GetHandler(uint64(requestID))
-	if arh == nil || arh.completedResponse {
-		return C.uint8_t(0)
-	}
-	arh.SetEvent(event)
-
-	if arh.websocket {
-		return arh.HandleWebsocket(event)
-	}
-
-	return arh.ReceiveStart(event)
-}
-
-//export asgi_set_headers
-func asgi_set_headers(requestID C.uint64_t, statusCode C.int, headers *C.MapKeyVal, event *C.AsgiEvent) {
-	asgiState.RLock()
-	defer asgiState.RUnlock()
-	arh := asgiState.handlers[uint64(requestID)]
-
-	arh.event = event
-
-	if arh.websocket {
-		wsHeaders := arh.w.Header().Clone()
-		if headers != nil {
-			mapHeaders := NewMapKeyValFromSource(headers)
-			defer mapHeaders.Cleanup()
-
-			for i := 0; i < mapHeaders.Len(); i++ {
-				headerName, headerValue := mapHeaders.Get(i)
-				wsHeaders.Add(headerName, headerValue)
-			}
-		}
-		switch arh.websocketState {
-		case WS_STARTING:
-			wsConn, err := upgrader.Upgrade(arh.w, arh.r, wsHeaders)
-			if err != nil {
-				arh.websocketState = WS_DISCONNECTED
-				arh.websocketConn.Close()
-				runtime.LockOSThread()
-				C.AsgiEvent_disconnect_websocket(event)
-				C.AsgiEvent_set(event, nil, 0, C.uint8_t(0), C.uint8_t(1))
-				runtime.UnlockOSThread()
-				return
-			}
-			arh.websocketState = WS_CONNECTED
-			arh.websocketConn = wsConn
-
-			runtime.LockOSThread()
-			C.AsgiEvent_set(event, nil, 0, C.uint8_t(0), C.uint8_t(1))
-			runtime.UnlockOSThread()
-		case WS_DISCONNECTED:
-			runtime.LockOSThread()
-			C.AsgiEvent_disconnect_websocket(event)
-			C.AsgiEvent_set(event, nil, 0, C.uint8_t(0), C.uint8_t(1))
-			runtime.UnlockOSThread()
-		}
+func (h *AsgiRequestHandler) UpgradeWebsockets(headers http.Header, event *C.AsgiEvent) {
+	wsConn, err := upgrader.Upgrade(h.w, h.r, headers)
+	if err != nil {
+		h.websocketState = WS_DISCONNECTED
+		h.websocketConn.Close()
+		runtime.LockOSThread()
+		C.AsgiEvent_disconnect_websocket(event)
+		C.AsgiEvent_set(event, nil, 0, C.uint8_t(0), C.uint8_t(1))
+		runtime.UnlockOSThread()
 		return
 	}
+	h.websocketState = WS_CONNECTED
+	h.websocketConn = wsConn
 
-	arh.operations <- AsgiOperations{op: func() {
+	runtime.LockOSThread()
+	C.AsgiEvent_set(event, nil, 0, C.uint8_t(0), C.uint8_t(1))
+	runtime.UnlockOSThread()
+}
+
+func (h *AsgiRequestHandler) HandleWebsocketHeaders(statusCode C.int, headers *C.MapKeyVal, event *C.AsgiEvent) {
+	wsHeaders := h.w.Header().Clone()
+	if headers != nil {
+		mapHeaders := NewMapKeyValFromSource(headers)
+		defer mapHeaders.Cleanup()
+
+		for i := range mapHeaders.Len() {
+			headerName, headerValue := mapHeaders.Get(i)
+			wsHeaders.Add(headerName, headerValue)
+		}
+	}
+	switch h.websocketState {
+	case WS_STARTING:
+		h.UpgradeWebsockets(wsHeaders, event)
+	case WS_DISCONNECTED:
+		runtime.LockOSThread()
+		C.AsgiEvent_disconnect_websocket(event)
+		C.AsgiEvent_set(event, nil, 0, C.uint8_t(0), C.uint8_t(1))
+		runtime.UnlockOSThread()
+	}
+}
+
+func (h *AsgiRequestHandler) HandleHeaders(statusCode C.int, headers *C.MapKeyVal, event *C.AsgiEvent) {
+	h.operations <- AsgiOperations{op: func() {
 		if headers != nil {
 			mapHeaders := NewMapKeyValFromSource(headers)
 			defer mapHeaders.Cleanup()
 
 			for i := 0; i < mapHeaders.Len(); i++ {
 				headerName, headerValue := mapHeaders.Get(i)
-				arh.w.Header().Add(headerName, headerValue)
+				h.w.Header().Add(headerName, headerValue)
 			}
 		}
 
-		arh.w.WriteHeader(int(statusCode))
+		h.w.WriteHeader(int(statusCode))
 
 		runtime.LockOSThread()
 		C.AsgiEvent_set(event, nil, 0, C.uint8_t(0), C.uint8_t(1))
 		runtime.UnlockOSThread()
 	}}
+}
+
+//export asgi_receive_start
+func asgi_receive_start(requestID C.uint64_t, event *C.AsgiEvent) C.uint8_t {
+	h := asgiState.GetHandler(uint64(requestID))
+	if h == nil || h.completedResponse {
+		return C.uint8_t(0)
+	}
+	h.SetEvent(event)
+
+	if h.websocket {
+		return h.HandleWebsocket(event)
+	}
+
+	return h.ReceiveStart(event)
+}
+
+//export asgi_set_headers
+func asgi_set_headers(requestID C.uint64_t, statusCode C.int, headers *C.MapKeyVal, event *C.AsgiEvent) {
+	h := asgiState.GetHandler(uint64(requestID))
+	h.SetEvent(event)
+
+	if h.websocket {
+		h.HandleWebsocketHeaders(statusCode, headers, event)
+		return
+	}
+
+	h.HandleHeaders(statusCode, headers, event)
 }
 
 //export asgi_send_response
