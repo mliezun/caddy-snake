@@ -27,25 +27,24 @@ static PyObject *build_send;
 static PyObject *build_lifespan;
 static PyObject *websocket_closed;
 
-static char *concatenate_strings(const char *str1, const char *str2) {
-  size_t new_str_len = strlen(str1) + strlen(str2) + 1;
-  char *result = malloc(new_str_len * sizeof(char));
+static char *copy_string(const char *str1) {
+  size_t buffer_size = strlen(str1) + 1;
+  char *result = malloc(buffer_size * sizeof(char));
   if (result == NULL) {
     return NULL;
   }
-  strcpy(result, str1);
-  strcat(result, str2);
+  memcpy(result, str1, buffer_size);
   return result;
 }
 
-static char *concatenate_bytes(const char *buffer1, size_t size1,
-                               const char *buffer2, size_t size2,
-                               size_t *out_size) {
+static char *concatenate_buffers(const char *buffer1, size_t size1,
+                                 const char *buffer2, size_t size2,
+                                 size_t *out_size) {
   if (buffer1 == NULL || buffer2 == NULL || out_size == NULL) {
     return NULL;
   }
   size_t total_size = size1 + size2;
-  char *result = (char *)malloc(total_size);
+  char *result = malloc(total_size * sizeof(char));
   if (result == NULL) {
     return NULL;
   }
@@ -350,14 +349,14 @@ static PyObject *response_callback(PyObject *self, PyObject *args) {
           Py_ssize_t og_size;
           PyBytes_AsStringAndSize(item, &og_str, &og_size);
           response_body =
-              concatenate_bytes("", 0, og_str, og_size, &response_body_size);
+              concatenate_buffers("", 0, og_str, og_size, &response_body_size);
         } else {
           char *og_str;
           Py_ssize_t og_size;
           PyBytes_AsStringAndSize(item, &og_str, &og_size);
           response_body =
-              concatenate_bytes(previous_body, response_body_size, og_str,
-                                og_size, &response_body_size);
+              concatenate_buffers(previous_body, response_body_size, og_str,
+                                  og_size, &response_body_size);
           free(previous_body);
         }
         Py_DECREF(item);
@@ -888,8 +887,7 @@ static void AsgiEvent_websocket_accept(AsgiEvent *self, PyObject *data) {
   }
 
   if (subprotocol && subprotocol != Py_None) {
-    MapKeyVal_append(http_headers,
-                     concatenate_strings("sec-websocket-protocol", ""),
+    MapKeyVal_append(http_headers, copy_string("sec-websocket-protocol"),
                      copy_pybytes(subprotocol, &len));
   }
 
@@ -1072,19 +1070,8 @@ void AsgiApp_handle_request(AsgiApp *app, uint64_t request_id, MapKeyVal *scope,
       (AsgiEvent *)PyObject_CallObject((PyObject *)&AsgiEventType, NULL);
   asgi_event->app = app;
   asgi_event->request_id = request_id;
-#if PY_MINOR_VERSION == 9
-  PyObject *noargs = PyTuple_New(0);
-  PyObject *kwargs = PyDict_New();
-  PyDict_SetItemString(kwargs, "loop", asyncio_Loop);
-  asgi_event->event_ts_send = PyObject_Call(asyncio_Event_ts, noargs, kwargs);
-  asgi_event->event_ts_receive =
-      PyObject_Call(asyncio_Event_ts, noargs, kwargs);
-  Py_DECREF(kwargs);
-  Py_DECREF(noargs);
-#else
   asgi_event->event_ts_send = PyObject_CallNoArgs(asyncio_Event_ts);
   asgi_event->event_ts_receive = PyObject_CallNoArgs(asyncio_Event_ts);
-#endif
 
   PyObject *receive =
       PyObject_CallOneArg(build_receive, (PyObject *)asgi_event);
