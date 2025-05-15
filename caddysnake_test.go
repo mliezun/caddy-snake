@@ -491,3 +491,31 @@ func TestBuildAsgiHeaders(t *testing.T) {
 		t.Errorf("Missing scope: %v", expectedScope)
 	}
 }
+
+func TestFindWorkingDirectory(t *testing.T) {
+	tempDir := t.TempDir()
+
+	// Should succeed for existing directory
+	abs, err := findWorkingDirectory(tempDir)
+	if err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+	if abs != tempDir {
+		t.Errorf("expected %q, got %q", tempDir, abs)
+	}
+
+	// Should fail for non-existent directory
+	nonExistent := tempDir + "-doesnotexist"
+	_, err = findWorkingDirectory(nonExistent)
+	if err == nil || !strings.Contains(err.Error(), "working_dir directory does not exist") {
+		t.Errorf("expected error for non-existent directory, got: %v", err)
+	}
+
+	// Should fail for a file (not a directory)
+	filePath := filepath.Join(tempDir, "afile.txt")
+	os.WriteFile(filePath, []byte("test"), 0644)
+	_, err = findWorkingDirectory(filePath)
+	if err == nil || !strings.Contains(err.Error(), "working_dir is not a directory") {
+		t.Errorf("expected error for file, got: %v", err)
+	}
+}

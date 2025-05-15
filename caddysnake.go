@@ -698,11 +698,6 @@ const (
 	WS_DISCONNECTED
 )
 
-type WsMessage struct {
-	mt      int
-	message []byte
-}
-
 // AsgiRequestHandler stores pointers to the request and the response writer
 type AsgiRequestHandler struct {
 	event                   *C.AsgiEvent
@@ -939,73 +934,96 @@ func (m *Asgi) HandleRequest(w http.ResponseWriter, r *http.Request) error {
 	return nil
 }
 
+func (s *AsgiGlobalState) GetHandler(requestID uint64) *AsgiRequestHandler {
+	s.RLock()
+	defer s.RUnlock()
+	h := s.handlers[requestID]
+	return h
+}
+
+func (h *AsgiRequestHandler) SetWebsocketError(event *C.AsgiEvent, err error) {
+	closeError, isClose := err.(*websocket.CloseError)
+	closeCode := 1005
+	if isClose {
+		closeCode = closeError.Code
+	}
+	closeStr := fmt.Sprintf("%d", closeCode)
+	bodyStr := C.CString(closeStr)
+	bodyLen := C.size_t(len(closeStr))
+	defer C.free(unsafe.Pointer(bodyStr))
+	h.websocketState = WS_DISCONNECTED
+	h.websocketConn.Close()
+	runtime.LockOSThread()
+	C.AsgiEvent_disconnect_websocket(event)
+	C.AsgiEvent_set_websocket(event, bodyStr, bodyLen, C.uint8_t(0), C.uint8_t(0))
+	runtime.UnlockOSThread()
+	h.done <- fmt.Errorf("websocket closed: %d", closeCode)
+}
+
+func (h *AsgiRequestHandler) ReadWebsocketMessage(event *C.AsgiEvent) {
+	mt, message, err := h.websocketConn.ReadMessage()
+	if err != nil {
+		h.SetWebsocketError(event, err)
+		return
+	}
+	message = append(message, 0)
+	bodyStr := (*C.char)(unsafe.Pointer(&message[0]))
+	bodyLen := C.size_t(len(message) - 1)
+
+	messageType := C.uint8_t(0)
+	if mt == websocket.BinaryMessage {
+		messageType = C.uint8_t(1)
+	}
+
+	runtime.LockOSThread()
+	C.AsgiEvent_set_websocket(event, bodyStr, bodyLen, messageType, C.uint8_t(0))
+	runtime.UnlockOSThread()
+}
+
+func (h *AsgiRequestHandler) DisconnectWebsocket(event *C.AsgiEvent) {
+	runtime.LockOSThread()
+	C.AsgiEvent_disconnect_websocket(event)
+	C.AsgiEvent_set(event, nil, 0, C.uint8_t(0), C.uint8_t(0))
+	runtime.UnlockOSThread()
+	h.done <- errors.New("websocket closed - receive start")
+}
+
+func (h *AsgiRequestHandler) ConnectWebsocket(event *C.AsgiEvent) {
+	h.websocketState = WS_STARTING
+	runtime.LockOSThread()
+	C.AsgiEvent_connect_websocket(event)
+	C.AsgiEvent_set(event, nil, 0, C.uint8_t(0), C.uint8_t(0))
+	runtime.UnlockOSThread()
+}
+
+func (h *AsgiRequestHandler) HandleWebsocket(event *C.AsgiEvent) C.uint8_t {
+	switch h.websocketState {
+	case WS_STARTING:
+		panic("ASSERTION: websocket state should be WS_CONNECTED or WS_DISCONNECTED")
+	case WS_CONNECTED:
+		go h.ReadWebsocketMessage(event)
+	case WS_DISCONNECTED:
+		go h.DisconnectWebsocket(event)
+	default:
+		h.ConnectWebsocket(event)
+	}
+	return C.uint8_t(1)
+}
+
+func (h *AsgiRequestHandler) SetEvent(event *C.AsgiEvent) {
+	h.event = event
+}
+
 //export asgi_receive_start
 func asgi_receive_start(requestID C.uint64_t, event *C.AsgiEvent) C.uint8_t {
-	asgiState.RLock()
-	defer asgiState.RUnlock()
-	arh := asgiState.handlers[uint64(requestID)]
+	arh := asgiState.GetHandler(uint64(requestID))
 	if arh == nil || arh.completedResponse {
 		return C.uint8_t(0)
 	}
-
-	arh.event = event
+	arh.SetEvent(event)
 
 	if arh.websocket {
-		switch arh.websocketState {
-		case WS_STARTING:
-			// TODO: this shouldn't happen, what do I do here?
-			fmt.Println("SHOULD NOT SEE THIS - PLEASE REPORT")
-		case WS_CONNECTED:
-			go func() {
-				mt, message, err := arh.websocketConn.ReadMessage()
-				if err != nil {
-					closeError, isClose := err.(*websocket.CloseError)
-					closeCode := 1005
-					if isClose {
-						closeCode = closeError.Code
-					}
-					closeStr := fmt.Sprintf("%d", closeCode)
-					bodyStr := C.CString(closeStr)
-					bodyLen := C.size_t(len(closeStr))
-					defer C.free(unsafe.Pointer(bodyStr))
-					arh.websocketState = WS_DISCONNECTED
-					arh.websocketConn.Close()
-					runtime.LockOSThread()
-					C.AsgiEvent_disconnect_websocket(event)
-					C.AsgiEvent_set_websocket(event, bodyStr, bodyLen, C.uint8_t(0), C.uint8_t(0))
-					runtime.UnlockOSThread()
-					arh.done <- fmt.Errorf("websocket closed: %d", closeCode)
-					return
-				}
-				message = append(message, 0)
-				bodyStr := (*C.char)(unsafe.Pointer(&message[0]))
-				bodyLen := C.size_t(len(message) - 1)
-
-				messageType := C.uint8_t(0)
-				if mt == websocket.BinaryMessage {
-					messageType = C.uint8_t(1)
-				}
-
-				runtime.LockOSThread()
-				C.AsgiEvent_set_websocket(event, bodyStr, bodyLen, messageType, C.uint8_t(0))
-				runtime.UnlockOSThread()
-			}()
-		case WS_DISCONNECTED:
-			go func() {
-				runtime.LockOSThread()
-				C.AsgiEvent_disconnect_websocket(event)
-				C.AsgiEvent_set(event, nil, 0, C.uint8_t(0), C.uint8_t(0))
-				runtime.UnlockOSThread()
-				arh.done <- errors.New("websocket closed - receive start")
-			}()
-		default:
-			arh.websocketState = WS_STARTING
-			runtime.LockOSThread()
-			C.AsgiEvent_connect_websocket(event)
-			C.AsgiEvent_set(event, nil, 0, C.uint8_t(0), C.uint8_t(0))
-			runtime.UnlockOSThread()
-		}
-		return C.uint8_t(1)
+		return arh.HandleWebsocket(event)
 	}
 
 	arh.operations <- AsgiOperations{op: func() {
