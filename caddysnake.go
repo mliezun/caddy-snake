@@ -1164,6 +1164,29 @@ func (h *AsgiRequestHandler) CancelRequest() {
 	h.done <- errors.New("request cancelled")
 }
 
+func (h *AsgiRequestHandler) CancelWebsocket(reason *C.char, code C.int) {
+	var reasonText string
+	if reason != nil {
+		defer C.free(unsafe.Pointer(reason))
+		reasonText = C.GoString(reason)
+	}
+	closeCode := int(code)
+	if h.websocketState == WS_STARTING {
+		h.w.WriteHeader(403)
+		h.done <- fmt.Errorf("websocket closed: %d '%s'", closeCode, reasonText)
+	} else if h.websocketState == WS_CONNECTED {
+		h.websocketState = WS_DISCONNECTED
+		closeMessage := websocket.FormatCloseMessage(closeCode, reasonText)
+		go func() {
+			if h.websocketConn != nil {
+				h.websocketConn.WriteControl(websocket.CloseMessage, closeMessage, time.Now().Add(5*time.Second))
+				h.websocketConn.Close()
+				h.done <- fmt.Errorf("websocket closed: %d '%s'", closeCode, reasonText)
+			}
+		}()
+	}
+}
+
 //export asgi_receive_start
 func asgi_receive_start(requestID C.uint64_t, event *C.AsgiEvent) C.uint8_t {
 	h := asgiState.GetHandler(uint64(requestID))
@@ -1218,29 +1241,8 @@ func asgi_cancel_request(requestID C.uint64_t) {
 
 //export asgi_cancel_request_websocket
 func asgi_cancel_request_websocket(requestID C.uint64_t, reason *C.char, code C.int) {
-	asgiState.RLock()
-	defer asgiState.RUnlock()
-	arh, ok := asgiState.handlers[uint64(requestID)]
-	if ok {
-		var reasonText string
-		if reason != nil {
-			defer C.free(unsafe.Pointer(reason))
-			reasonText = C.GoString(reason)
-		}
-		closeCode := int(code)
-		if arh.websocketState == WS_STARTING {
-			arh.w.WriteHeader(403)
-			arh.done <- fmt.Errorf("websocket closed: %d '%s'", closeCode, reasonText)
-		} else if arh.websocketState == WS_CONNECTED {
-			arh.websocketState = WS_DISCONNECTED
-			closeMessage := websocket.FormatCloseMessage(closeCode, reasonText)
-			go func() {
-				if arh.websocketConn != nil {
-					arh.websocketConn.WriteControl(websocket.CloseMessage, closeMessage, time.Now().Add(5*time.Second))
-					arh.websocketConn.Close()
-					arh.done <- fmt.Errorf("websocket closed: %d '%s'", closeCode, reasonText)
-				}
-			}()
-		}
+	h := asgiState.GetHandler(uint64(requestID))
+	if h != nil {
+		h.CancelWebsocket(reason, code)
 	}
 }
