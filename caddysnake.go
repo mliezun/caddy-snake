@@ -1110,6 +1110,60 @@ func (h *AsgiRequestHandler) HandleHeaders(statusCode C.int, headers *C.MapKeyVa
 	}}
 }
 
+func (h *AsgiRequestHandler) SendResponse(body *C.char, bodyLen C.size_t, moreBody C.uint8_t, event *C.AsgiEvent) {
+	h.operations <- AsgiOperations{op: func() {
+		defer C.free(unsafe.Pointer(body))
+		bodyBytes := C.GoBytes(unsafe.Pointer(body), C.int(bodyLen))
+		h.accumulatedResponseSize += len(bodyBytes)
+		_, err := h.w.Write(bodyBytes)
+		if f, ok := h.w.(http.Flusher); ok {
+			f.Flush()
+		}
+		if err != nil {
+			h.done <- err
+		} else if int(moreBody) == 0 {
+			h.done <- nil
+		}
+
+		runtime.LockOSThread()
+		C.AsgiEvent_set(event, nil, 0, C.uint8_t(0), C.uint8_t(1))
+		runtime.UnlockOSThread()
+	}}
+}
+
+func (h *AsgiRequestHandler) SendResponseWebsocket(body *C.char, bodyLen C.size_t, messageType C.uint8_t, event *C.AsgiEvent) {
+	h.operations <- AsgiOperations{op: func() {
+		defer C.free(unsafe.Pointer(body))
+		var bodyBytes []byte
+		var wsMessageType int
+		if messageType == C.uint8_t(0) {
+			wsMessageType = websocket.TextMessage
+			bodyBytes = []byte(C.GoString(body))
+		} else {
+			wsMessageType = websocket.BinaryMessage
+			bodyBytes = C.GoBytes(unsafe.Pointer(body), C.int(bodyLen))
+		}
+		err := h.websocketConn.WriteMessage(wsMessageType, bodyBytes)
+		if err != nil {
+			h.websocketState = WS_DISCONNECTED
+			h.websocketConn.Close()
+			runtime.LockOSThread()
+			C.AsgiEvent_disconnect_websocket(event)
+			C.AsgiEvent_set(event, nil, 0, C.uint8_t(0), C.uint8_t(1))
+			runtime.UnlockOSThread()
+			return
+		}
+
+		runtime.LockOSThread()
+		C.AsgiEvent_set(event, nil, 0, C.uint8_t(0), C.uint8_t(1))
+		runtime.UnlockOSThread()
+	}}
+}
+
+func (h *AsgiRequestHandler) CancelRequest() {
+	h.done <- errors.New("request cancelled")
+}
+
 //export asgi_receive_start
 func asgi_receive_start(requestID C.uint64_t, event *C.AsgiEvent) C.uint8_t {
 	h := asgiState.GetHandler(uint64(requestID))
@@ -1140,75 +1194,25 @@ func asgi_set_headers(requestID C.uint64_t, statusCode C.int, headers *C.MapKeyV
 
 //export asgi_send_response
 func asgi_send_response(requestID C.uint64_t, body *C.char, bodyLen C.size_t, moreBody C.uint8_t, event *C.AsgiEvent) {
-	asgiState.RLock()
-	defer asgiState.RUnlock()
-	arh := asgiState.handlers[uint64(requestID)]
+	h := asgiState.GetHandler(uint64(requestID))
+	h.SetEvent(event)
 
-	arh.event = event
-
-	arh.operations <- AsgiOperations{op: func() {
-		defer C.free(unsafe.Pointer(body))
-		bodyBytes := C.GoBytes(unsafe.Pointer(body), C.int(bodyLen))
-		arh.accumulatedResponseSize += len(bodyBytes)
-		_, err := arh.w.Write(bodyBytes)
-		if f, ok := arh.w.(http.Flusher); ok {
-			f.Flush()
-		}
-		if err != nil {
-			arh.done <- err
-		} else if int(moreBody) == 0 {
-			arh.done <- nil
-		}
-
-		runtime.LockOSThread()
-		C.AsgiEvent_set(event, nil, 0, C.uint8_t(0), C.uint8_t(1))
-		runtime.UnlockOSThread()
-	}}
+	h.SendResponse(body, bodyLen, moreBody, event)
 }
 
 //export asgi_send_response_websocket
 func asgi_send_response_websocket(requestID C.uint64_t, body *C.char, bodyLen C.size_t, messageType C.uint8_t, event *C.AsgiEvent) {
-	asgiState.RLock()
-	defer asgiState.RUnlock()
-	arh := asgiState.handlers[uint64(requestID)]
+	h := asgiState.GetHandler(uint64(requestID))
+	h.SetEvent(event)
 
-	arh.event = event
-
-	arh.operations <- AsgiOperations{op: func() {
-		defer C.free(unsafe.Pointer(body))
-		var bodyBytes []byte
-		var wsMessageType int
-		if messageType == C.uint8_t(0) {
-			wsMessageType = websocket.TextMessage
-			bodyBytes = []byte(C.GoString(body))
-		} else {
-			wsMessageType = websocket.BinaryMessage
-			bodyBytes = C.GoBytes(unsafe.Pointer(body), C.int(bodyLen))
-		}
-		err := arh.websocketConn.WriteMessage(wsMessageType, bodyBytes)
-		if err != nil {
-			arh.websocketState = WS_DISCONNECTED
-			arh.websocketConn.Close()
-			runtime.LockOSThread()
-			C.AsgiEvent_disconnect_websocket(event)
-			C.AsgiEvent_set(event, nil, 0, C.uint8_t(0), C.uint8_t(1))
-			runtime.UnlockOSThread()
-			return
-		}
-
-		runtime.LockOSThread()
-		C.AsgiEvent_set(event, nil, 0, C.uint8_t(0), C.uint8_t(1))
-		runtime.UnlockOSThread()
-	}}
+	h.SendResponseWebsocket(body, bodyLen, messageType, event)
 }
 
 //export asgi_cancel_request
 func asgi_cancel_request(requestID C.uint64_t) {
-	asgiState.RLock()
-	defer asgiState.RUnlock()
-	arh, ok := asgiState.handlers[uint64(requestID)]
-	if ok {
-		arh.done <- errors.New("request cancelled")
+	h := asgiState.GetHandler(uint64(requestID))
+	if h != nil {
+		h.CancelRequest()
 	}
 }
 
