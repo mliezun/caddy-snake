@@ -16,6 +16,7 @@ static PyObject *wsgi_version;
 static PyObject *sys_stderr;
 static PyObject *BytesIO;
 static PyObject *task_queue_put;
+static PyThreadState *interp;
 
 // ASGI: global variables
 static PyObject *asgi_version;
@@ -222,13 +223,26 @@ static PyTypeObject ResponseType = {
     .tp_methods = Response_methods,
 };
 
+static PyThreadState *Interpreter_acquire(PyInterpreterState *interp) {
+  PyThreadState *ts = PyThreadState_New(interp);
+  PyEval_RestoreThread(ts);
+  return ts;
+}
+
+static void Interpreter_release(PyThreadState *ts) {
+  // clear ts
+  PyThreadState_Clear(ts);
+  // delete the current thread state and release the GIL
+  PyThreadState_DeleteCurrent();
+}
+
 WsgiApp *WsgiApp_import(const char *module_name, const char *app_name,
                         const char *working_dir, const char *venv_path) {
   WsgiApp *app = malloc(sizeof(WsgiApp));
   if (app == NULL) {
     return NULL;
   }
-  PyGILState_STATE gstate = PyGILState_Ensure();
+  PyThreadState *ts = Interpreter_acquire(interp->interp);
 
   // Add working_dir into sys.path list
   if (working_dir) {
@@ -245,7 +259,7 @@ WsgiApp *WsgiApp_import(const char *module_name, const char *app_name,
   PyObject *module = PyImport_ImportModule(module_name);
   if (module == NULL) {
     PyErr_Print();
-    PyGILState_Release(gstate);
+    Interpreter_release(ts);
     return NULL;
   }
 
@@ -254,25 +268,25 @@ WsgiApp *WsgiApp_import(const char *module_name, const char *app_name,
     if (PyErr_Occurred()) {
       PyErr_Print();
     }
-    PyGILState_Release(gstate);
+    Interpreter_release(ts);
     return NULL;
   }
 
-  PyGILState_Release(gstate);
+  Interpreter_release(ts);
   return app;
 }
 
 void WsgiApp_cleanup(WsgiApp *app) {
-  PyGILState_STATE gstate = PyGILState_Ensure();
+  PyThreadState *ts = Interpreter_acquire(interp->interp);
   Py_XDECREF(app->handler);
-  PyGILState_Release(gstate);
+  Interpreter_release(ts);
   free(app);
 }
 
 void WsgiApp_handle_request(WsgiApp *app, int64_t request_id,
                             MapKeyVal *headers, const char *body,
                             size_t body_len) {
-  PyGILState_STATE gstate = PyGILState_Ensure();
+  PyThreadState *ts = Interpreter_acquire(interp->interp);
 
   PyObject *environ = PyDict_New();
   for (size_t i = 0; i < headers->length; i++) {
@@ -306,7 +320,7 @@ void WsgiApp_handle_request(WsgiApp *app, int64_t request_id,
   r->request_environ = environ;
   PyObject_CallOneArg(task_queue_put, (PyObject *)r);
 
-  PyGILState_Release(gstate);
+  Interpreter_release(ts);
 }
 
 static PyObject *response_callback(PyObject *self, PyObject *args) {
@@ -1146,6 +1160,10 @@ void Py_init_and_release_gil(const char *setup_py) {
   }
   PyConfig_Clear(&config);
 
+  interp = Py_NewInterpreter();
+  PyThreadState *ts = PyThreadState_New(interp->interp);
+  PyThreadState_Swap(ts);
+
   // Configure python path to recognize modules in the current directory
   PyObject *sysPath = PySys_GetObject("path");
   PyList_Insert(sysPath, 0, PyUnicode_FromString(""));
@@ -1215,7 +1233,8 @@ void Py_init_and_release_gil(const char *setup_py) {
   // Py_DECREF(io_module);
   // Py_DECREF(caddysnake_module);
 
-  PyEval_ReleaseThread(PyGILState_GetThisThreadState());
+  PyThreadState_Clear(ts);
+  PyThreadState_DeleteCurrent();
   return;
 
 exception:
