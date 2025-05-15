@@ -954,7 +954,7 @@ func (h *AsgiRequestHandler) SetWebsocketError(event *C.AsgiEvent, err error) {
 	h.websocketState = WS_DISCONNECTED
 	h.websocketConn.Close()
 	runtime.LockOSThread()
-	C.AsgiEvent_disconnect_websocket(event)
+	C.AsgiEvent_websocket_set_disconnected(event)
 	C.AsgiEvent_set_websocket(event, bodyStr, bodyLen, C.uint8_t(0), C.uint8_t(0))
 	runtime.UnlockOSThread()
 	h.done <- fmt.Errorf("websocket closed: %d", closeCode)
@@ -982,7 +982,7 @@ func (h *AsgiRequestHandler) ReadWebsocketMessage(event *C.AsgiEvent) {
 
 func (h *AsgiRequestHandler) DisconnectWebsocket(event *C.AsgiEvent) {
 	runtime.LockOSThread()
-	C.AsgiEvent_disconnect_websocket(event)
+	C.AsgiEvent_websocket_set_disconnected(event)
 	C.AsgiEvent_set(event, nil, 0, C.uint8_t(0), C.uint8_t(0))
 	runtime.UnlockOSThread()
 	h.done <- errors.New("websocket closed - receive start")
@@ -991,7 +991,7 @@ func (h *AsgiRequestHandler) DisconnectWebsocket(event *C.AsgiEvent) {
 func (h *AsgiRequestHandler) ConnectWebsocket(event *C.AsgiEvent) {
 	h.websocketState = WS_STARTING
 	runtime.LockOSThread()
-	C.AsgiEvent_connect_websocket(event)
+	C.AsgiEvent_websocket_set_connected(event)
 	C.AsgiEvent_set(event, nil, 0, C.uint8_t(0), C.uint8_t(0))
 	runtime.UnlockOSThread()
 }
@@ -1055,7 +1055,7 @@ func (h *AsgiRequestHandler) UpgradeWebsockets(headers http.Header, event *C.Asg
 		h.websocketState = WS_DISCONNECTED
 		h.websocketConn.Close()
 		runtime.LockOSThread()
-		C.AsgiEvent_disconnect_websocket(event)
+		C.AsgiEvent_websocket_set_disconnected(event)
 		C.AsgiEvent_set(event, nil, 0, C.uint8_t(0), C.uint8_t(1))
 		runtime.UnlockOSThread()
 		return
@@ -1084,7 +1084,7 @@ func (h *AsgiRequestHandler) HandleWebsocketHeaders(statusCode C.int, headers *C
 		h.UpgradeWebsockets(wsHeaders, event)
 	case WS_DISCONNECTED:
 		runtime.LockOSThread()
-		C.AsgiEvent_disconnect_websocket(event)
+		C.AsgiEvent_websocket_set_disconnected(event)
 		C.AsgiEvent_set(event, nil, 0, C.uint8_t(0), C.uint8_t(1))
 		runtime.UnlockOSThread()
 	}
@@ -1148,7 +1148,7 @@ func (h *AsgiRequestHandler) SendResponseWebsocket(body *C.char, bodyLen C.size_
 			h.websocketState = WS_DISCONNECTED
 			h.websocketConn.Close()
 			runtime.LockOSThread()
-			C.AsgiEvent_disconnect_websocket(event)
+			C.AsgiEvent_websocket_set_disconnected(event)
 			C.AsgiEvent_set(event, nil, 0, C.uint8_t(0), C.uint8_t(1))
 			runtime.UnlockOSThread()
 			return
