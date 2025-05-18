@@ -158,6 +158,35 @@ What it does behind the scenes is to append `venv/lib/python3.x/site-packages` t
 > Disclaimer: Currently, when you provide a venv it gets added to the global `sys.path`, which in consequence
 > means all apps have access to those packages.
 
+## `working_dir` (optional)
+
+Sets the working directory from which your Python module will be resolved and executed.
+
+By default, Caddy uses its own process working directory (often / when run as a service) to resolve Python module imports. However, this default is not always appropriate, especially in modern project structures such as monorepos or deployment environments where Python applications live in subdirectories that are not importable from the root.
+
+The `working_dir` directive allows you to explicitly define the working directory that will be used for:
+
+- Importing the Python module
+- Resolving relative paths (e.g., for configuration files or static assets)
+- Ensuring consistent behavior across local development and production (e.g., when run under systemd, which defaults to / unless otherwise configured)
+
+```Caddyfile
+python {
+    module_wsgi "main:app"
+    venv "/var/www/myapp/venv"
+    working_dir "/var/www/myapp"
+}
+```
+
+This example tells Caddy to:
+
+- Load the app object from the main.py module
+- Use the virtual environment located at /var/www/myapp/venv
+- Switch to /var/www/myapp as the working directory before executing Python code
+
+This behavior is analogous to the "path" setting in NGINX Unit, or manually setting the working directory in a systemd service file. It provides flexibility in organizing your Python applications — especially when working within monorepos or containerized environments — and ensures your app runs with the correct context regardless of where Caddy itself is invoked.
+
+
 ## Hot reloading
 
 Currently the Python app is not reloaded by the plugin if a file changes. But it is possible to setup using [watchmedo](https://github.com/gorakhargosh/watchdog?tab=readme-ov-file#shell-utilities) to restart the Caddy process.
