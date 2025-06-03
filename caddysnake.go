@@ -1016,10 +1016,8 @@ func (h *AsgiRequestHandler) DisconnectWebsocket(event *C.AsgiEvent) {
 
 func (h *AsgiRequestHandler) ConnectWebsocket(event *C.AsgiEvent) {
 	h.websocketState = WS_STARTING
-	pythonMainThread.do(func() {
-		C.AsgiEvent_websocket_set_connected(event)
-		C.AsgiEvent_set(event, nil, 0, C.uint8_t(0), C.uint8_t(0))
-	})
+	C.AsgiEvent_websocket_set_connected(event)
+	C.AsgiEvent_set(event, nil, 0, C.uint8_t(0), C.uint8_t(0))
 }
 
 func (h *AsgiRequestHandler) HandleWebsocket(event *C.AsgiEvent) C.uint8_t {
@@ -1080,18 +1078,14 @@ func (h *AsgiRequestHandler) UpgradeWebsockets(headers http.Header, event *C.Asg
 	if err != nil {
 		h.websocketState = WS_DISCONNECTED
 		h.websocketConn.Close()
-		pythonMainThread.do(func() {
-			C.AsgiEvent_websocket_set_disconnected(event)
-			C.AsgiEvent_set(event, nil, 0, C.uint8_t(0), C.uint8_t(1))
-		})
+		C.AsgiEvent_websocket_set_disconnected(event)
+		C.AsgiEvent_set(event, nil, 0, C.uint8_t(0), C.uint8_t(1))
 		return
 	}
 	h.websocketState = WS_CONNECTED
 	h.websocketConn = wsConn
 
-	pythonMainThread.do(func() {
-		C.AsgiEvent_set(event, nil, 0, C.uint8_t(0), C.uint8_t(1))
-	})
+	C.AsgiEvent_set(event, nil, 0, C.uint8_t(0), C.uint8_t(1))
 }
 
 func (h *AsgiRequestHandler) HandleWebsocketHeaders(statusCode C.int, headers *C.MapKeyVal, event *C.AsgiEvent) {
@@ -1109,10 +1103,8 @@ func (h *AsgiRequestHandler) HandleWebsocketHeaders(statusCode C.int, headers *C
 	case WS_STARTING:
 		h.UpgradeWebsockets(wsHeaders, event)
 	case WS_DISCONNECTED:
-		pythonMainThread.do(func() {
-			C.AsgiEvent_websocket_set_disconnected(event)
-			C.AsgiEvent_set(event, nil, 0, C.uint8_t(0), C.uint8_t(1))
-		})
+		C.AsgiEvent_websocket_set_disconnected(event)
+		C.AsgiEvent_set(event, nil, 0, C.uint8_t(0), C.uint8_t(1))
 	}
 }
 
