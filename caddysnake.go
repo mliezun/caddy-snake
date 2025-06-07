@@ -15,7 +15,9 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"reflect"
 	"regexp"
+	"runtime/pprof"
 	"strconv"
 	"strings"
 	"sync"
@@ -29,12 +31,16 @@ import (
 	"github.com/caddyserver/caddy/v2/modules/caddyhttp"
 	"github.com/gorilla/websocket"
 	"go.uber.org/zap"
+
+	// debug on Linux
+	_ "github.com/ianlancetaylor/cgosymbolizer"
 )
 
 //go:embed caddysnake.py
 var caddysnake_py string
 
 var SIZE_OF_CHAR_POINTER = unsafe.Sizeof((*C.char)(nil))
+var SIZE_OF_INT_POINTER = unsafe.Sizeof(C.int(0))
 
 // MapKeyVal wraps the same structure defined in the C layer
 type MapKeyVal struct {
@@ -85,7 +91,25 @@ func (m *MapKeyVal) Get(pos int) (string, string) {
 	headerValuePtr := unsafe.Pointer(uintptr(unsafe.Pointer(m.m.values)) + uintptr(pos)*SIZE_OF_CHAR_POINTER)
 	headerName := *(**C.char)(headerNamePtr)
 	headerValue := *(**C.char)(headerValuePtr)
-	return C.GoString(headerName), C.GoString(headerValue)
+
+	headerNameLenPtr := unsafe.Pointer(uintptr(unsafe.Pointer(m.m.keysLen)) + uintptr(pos)*SIZE_OF_INT_POINTER)
+	headerValueLenPtr := unsafe.Pointer(uintptr(unsafe.Pointer(m.m.valuesLen)) + uintptr(pos)*SIZE_OF_INT_POINTER)
+	headerNameLen := int(*(*C.int)(headerNameLenPtr))
+	headerValueLen := int(*(*C.int)(headerValueLenPtr))
+
+	hdr := reflect.StringHeader{
+		Data: uintptr(unsafe.Pointer(headerName)),
+		Len:  headerNameLen,
+	}
+	headerNameStr := *(*string)(unsafe.Pointer(&hdr))
+
+	hdr2 := reflect.StringHeader{
+		Data: uintptr(unsafe.Pointer(headerValue)),
+		Len:  headerValueLen,
+	}
+	headerValueStr := *(*string)(unsafe.Pointer(&hdr2))
+
+	return headerNameStr, headerValueStr
 }
 
 func (m *MapKeyVal) Len() int {
@@ -314,6 +338,12 @@ func initWsgi() {
 }
 
 func init() {
+	cpu_profile, _ := os.Create("cpu_profile.pprof")
+	pprof.StartCPUProfile(cpu_profile)
+	go func() {
+		time.Sleep(time.Minute)
+		pprof.StopCPUProfile()
+	}()
 	initPythonMainThread()
 	caddy.RegisterModule(CaddySnake{})
 	httpcaddyfile.RegisterHandlerDirective("python", parsePythonDirective)
@@ -1038,21 +1068,20 @@ func (h *AsgiRequestHandler) SetEvent(event *C.AsgiEvent) {
 	h.event = event
 }
 
-func (h *AsgiRequestHandler) readBody(event *C.AsgiEvent) {
+func (h *AsgiRequestHandler) readBody(event *C.AsgiEvent, cbuf *C.char, cbufSize C.size_t) {
 	var bodyStr *C.char
 	var bodyLen C.size_t
 	var moreBody C.uint8_t
 	if !h.completedBody {
-		buffer := make([]byte, 1<<16)
+		buffer := unsafe.Slice((*byte)(unsafe.Pointer(cbuf)), cbufSize)
 		n, err := h.r.Body.Read(buffer)
 		if err != nil && err != io.EOF {
 			h.done <- err
 			return
 		}
 		h.completedBody = (err == io.EOF)
-		buffer = append(buffer[:n], 0)
-		bodyStr = (*C.char)(unsafe.Pointer(&buffer[0]))
-		bodyLen = C.size_t(len(buffer) - 1) // -1 to remove null-terminator
+		bodyStr = cbuf
+		bodyLen = C.size_t(n)
 	}
 
 	if h.completedBody {
@@ -1066,14 +1095,15 @@ func (h *AsgiRequestHandler) readBody(event *C.AsgiEvent) {
 	})
 }
 
-func (h *AsgiRequestHandler) ReceiveStart(event *C.AsgiEvent) C.uint8_t {
+func (h *AsgiRequestHandler) ReceiveStart(event *C.AsgiEvent, cbuf *C.char, cbufSize C.size_t) C.uint8_t {
 	h.operations <- AsgiOperations{op: func() {
-		h.readBody(event)
+		h.readBody(event, cbuf, cbufSize)
 	}}
 	return C.uint8_t(1)
 }
 
 func (h *AsgiRequestHandler) UpgradeWebsockets(headers http.Header, event *C.AsgiEvent) {
+	fmt.Println("should not execute")
 	wsConn, err := upgrader.Upgrade(h.w, h.r, headers)
 	if err != nil {
 		h.websocketState = WS_DISCONNECTED
@@ -1122,6 +1152,8 @@ func (h *AsgiRequestHandler) HandleHeaders(statusCode C.int, headers *C.MapKeyVa
 
 		h.w.WriteHeader(int(statusCode))
 
+		h.w.(http.Flusher).Flush()
+
 		pythonMainThread.do(func() {
 			C.AsgiEvent_set(event, nil, 0, C.uint8_t(0), C.uint8_t(1))
 		})
@@ -1131,7 +1163,7 @@ func (h *AsgiRequestHandler) HandleHeaders(statusCode C.int, headers *C.MapKeyVa
 func (h *AsgiRequestHandler) SendResponse(body *C.char, bodyLen C.size_t, moreBody C.uint8_t, event *C.AsgiEvent) {
 	h.operations <- AsgiOperations{op: func() {
 		defer C.free(unsafe.Pointer(body))
-		bodyBytes := C.GoBytes(unsafe.Pointer(body), C.int(bodyLen))
+		bodyBytes := unsafe.Slice((*byte)(unsafe.Pointer(body)), bodyLen)
 		h.accumulatedResponseSize += len(bodyBytes)
 		_, err := h.w.Write(bodyBytes)
 		if f, ok := h.w.(http.Flusher); ok {
@@ -1206,7 +1238,7 @@ func (h *AsgiRequestHandler) CancelWebsocket(reason *C.char, code C.int) {
 }
 
 //export asgi_receive_start
-func asgi_receive_start(requestID C.uint64_t, event *C.AsgiEvent) C.uint8_t {
+func asgi_receive_start(requestID C.uint64_t, event *C.AsgiEvent, cbuf *C.char, cbufSize C.size_t) C.uint8_t {
 	h := asgiState.GetHandler(uint64(requestID))
 	if h == nil || h.completedResponse {
 		return C.uint8_t(0)
@@ -1217,7 +1249,7 @@ func asgi_receive_start(requestID C.uint64_t, event *C.AsgiEvent) C.uint8_t {
 		return h.HandleWebsocket(event)
 	}
 
-	return h.ReceiveStart(event)
+	return h.ReceiveStart(event, cbuf, cbufSize)
 }
 
 //export asgi_set_headers

@@ -3,13 +3,16 @@
 # Endpoints: POST /pastes, GET /pastes/{id}, DELETE /pastes/{id}
 
 import os
+import uuid
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 import asyncpg
 
 DATABASE_URL = os.getenv(
-    "DATABASE_URL", "postgresql://postgres:postgres@db:5432/postgres"
+    "DATABASE_URL", "postgresql://newuser:newpass@127.0.0.1:5432/postgres"
 )
+
+MYDB = "mydb_" + str(uuid.uuid4()).replace("-", "")[:12]
 
 app = FastAPI()
 
@@ -27,6 +30,14 @@ class PasteOut(BaseModel):
 async def startup():
     app.state.pool = await asyncpg.create_pool(DATABASE_URL)
     async with app.state.pool.acquire() as conn:
+        await conn.execute(f"DROP DATABASE IF EXISTS {MYDB}")
+        await conn.execute(f"CREATE DATABASE {MYDB}")
+
+    await app.state.pool.close()
+    app.state.pool = await asyncpg.create_pool(
+        DATABASE_URL.replace("/postgres", f"/{MYDB}")
+    )
+    async with app.state.pool.acquire() as conn:
         await conn.execute("""
         CREATE TABLE IF NOT EXISTS pastes (
             id SERIAL PRIMARY KEY,
@@ -39,6 +50,13 @@ async def startup():
 async def shutdown():
     async with app.state.pool.acquire() as conn:
         await conn.execute("TRUNCATE TABLE pastes")
+        await conn.execute("DROP TABLE pastes")
+    await app.state.pool.close()
+
+    app.state.pool = await asyncpg.create_pool(DATABASE_URL)
+    async with app.state.pool.acquire() as conn:
+        await conn.execute(f"DROP DATABASE IF EXISTS {MYDB}")
+        await conn.execute("VACUUM FULL")
     await app.state.pool.close()
 
 

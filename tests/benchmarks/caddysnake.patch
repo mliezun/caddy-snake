@@ -1,0 +1,29 @@
+diff --git a/caddysnake.go b/caddysnake.go
+index bf24510..63f73af 100644
+--- a/caddysnake.go
++++ b/caddysnake.go
+@@ -16,6 +16,7 @@ import (
+ 	"os"
+ 	"path/filepath"
+ 	"regexp"
++	"runtime/pprof"
+ 	"strconv"
+ 	"strings"
+ 	"sync"
+@@ -169,6 +170,8 @@ func (CaddySnake) CaddyModule() caddy.ModuleInfo {
+ 
+ // Provision sets up the module.
+ func (f *CaddySnake) Provision(ctx caddy.Context) error {
++	cpu_prof, _ := os.Create("cpu_profile.pprof")
++	pprof.StartCPUProfile(cpu_prof)
+ 	f.logger = ctx.Logger(f)
+ 	if f.ModuleWsgi != "" {
+ 		w, err := NewWsgi(f.ModuleWsgi, f.WorkingDir, f.VenvPath)
+@@ -200,6 +203,7 @@ func (m *CaddySnake) Validate() error {
+ 
+ // Cleanup frees resources uses by module
+ func (m *CaddySnake) Cleanup() error {
++	defer pprof.StopCPUProfile()
+ 	if m != nil && m.app != nil {
+ 		m.logger.Info("cleaning up module")
+ 		return m.app.Cleanup()

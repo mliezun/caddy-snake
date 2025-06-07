@@ -36,7 +36,7 @@ function run_benchmark() {
 # Clean previous results
 rm -f "$RESULTS_FILE"
 
-run_benchmark "caddy run --config Caddyfile" "caddy" 9080
+run_benchmark "./caddy run --config Caddyfile" "caddy" 9080
 run_benchmark "uvicorn main:app --host 0.0.0.0 --port 9081" "uvicorn" 9081
 run_benchmark "hypercorn main:app --bind 0.0.0.0:9082" "hypercorn" 9082
 run_benchmark "granian --interface asgi --host 0.0.0.0 --port 9083 main:app" "granian" 9083

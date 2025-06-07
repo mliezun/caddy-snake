@@ -89,6 +89,8 @@ MapKeyVal *MapKeyVal_new(size_t capacity) {
   new_map->capacity = capacity;
   new_map->keys = malloc(sizeof(char *) * capacity);
   new_map->values = malloc(sizeof(char *) * capacity);
+  new_map->keysLen = malloc(sizeof(int) * capacity);
+  new_map->valuesLen = malloc(sizeof(int) * capacity);
   return new_map;
 }
 
@@ -105,6 +107,15 @@ void MapKeyVal_free(MapKeyVal *map) {
 static void MapKeyVal_append(MapKeyVal *map, char *key, char *value) {
   map->keys[map->length] = key;
   map->values[map->length] = value;
+  map->length++;
+}
+
+static void MapKeyVal_append_v2(MapKeyVal *map, char *key, int keyLen,
+                                char *value, int valueLen) {
+  map->keys[map->length] = key;
+  map->keysLen[map->length] = keyLen;
+  map->values[map->length] = value;
+  map->valuesLen[map->length] = valueLen;
   map->length++;
 }
 
@@ -605,6 +616,7 @@ void AsgiEvent_set(AsgiEvent *self, const char *body, size_t body_len,
       Py_DECREF(self->request_body);
     }
     self->request_body = PyBytes_FromStringAndSize(body, body_len);
+    free(body);
   }
   self->more_body = more_body;
   PyObject *set_fn = NULL;
@@ -726,8 +738,12 @@ static void AsgiEvent_websocket_disconnect(AsgiEvent *self, PyObject *data) {
 static PyObject *AsgiEvent_receive_start(AsgiEvent *self, PyObject *args) {
   PyObject *result = Py_False;
 
+  size_t cbuf_size = 1 << 13;
+  char *cbuf = malloc(cbuf_size);
+
   PyThreadState *_save = PyEval_SaveThread();
-  uint8_t receive_result = asgi_receive_start(self->request_id, self);
+  uint8_t receive_result =
+      asgi_receive_start(self->request_id, self, cbuf, cbuf_size);
   PyEval_RestoreThread(_save);
 
   if (receive_result == 1) {
@@ -828,7 +844,8 @@ static void AsgiEvent_response_start(AsgiEvent *self, PyObject *data) {
   MapKeyVal *http_headers = MapKeyVal_new(headers_count);
 
   PyObject *key, *value, *item;
-  size_t len = 0;
+  size_t keyLen = 0;
+  size_t valueLen = 0;
   while ((item = PyIter_Next(iterator))) {
     // if (!PyTuple_Check(item) || PyTuple_Size(item) != 2) {
     //   PyErr_SetString(PyExc_RuntimeError,
@@ -842,8 +859,9 @@ static void AsgiEvent_response_start(AsgiEvent *self, PyObject *data) {
     // }
     key = PyTuple_GetItem(item, 0);
     value = PyTuple_GetItem(item, 1);
-    MapKeyVal_append(http_headers, copy_pybytes(key, &len),
-                     copy_pybytes(value, &len));
+    char *keyBuf = copy_pybytes(key, &keyLen);
+    char *valueBuf = copy_pybytes(value, &valueLen);
+    MapKeyVal_append_v2(http_headers, keyBuf, keyLen, valueBuf, valueLen);
     Py_DECREF(item);
   }
   Py_DECREF(iterator);

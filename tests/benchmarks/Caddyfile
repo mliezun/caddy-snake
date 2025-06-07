@@ -1,14 +1,16 @@
 {
 	http_port 9080
-	https_port 9443
+	admin off
+	auto_https off
 	log {
 		level info
 	}
 }
-localhost:9080 {
+:9080 {
 	route /* {
 		python {
 			module_asgi "main:app"
+			venv "./venv"
 			lifespan on
 		}
 	}

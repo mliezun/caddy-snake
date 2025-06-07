@@ -13,6 +13,8 @@ typedef struct {
   size_t capacity;
   char **keys;
   char **values;
+  int *keysLen;
+  int *valuesLen;
 } MapKeyVal;
 MapKeyVal *MapKeyVal_new(size_t);
 void MapKeyVal_free(MapKeyVal *map);
@@ -43,7 +45,7 @@ void AsgiEvent_websocket_set_disconnected(AsgiEvent *);
 void AsgiEvent_cleanup(AsgiEvent *);
 void AsgiApp_cleanup(AsgiApp *);
 
-extern uint8_t asgi_receive_start(uint64_t, AsgiEvent *);
+extern uint8_t asgi_receive_start(uint64_t, AsgiEvent *, char *, size_t);
 extern void asgi_send_response(uint64_t, char *, size_t, uint8_t, AsgiEvent *);
 extern void asgi_send_response_websocket(uint64_t, char *, size_t, uint8_t,
                                          AsgiEvent *);
