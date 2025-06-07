@@ -725,12 +725,7 @@ static void AsgiEvent_websocket_disconnect(AsgiEvent *self, PyObject *data) {
 
 static PyObject *AsgiEvent_receive_start(AsgiEvent *self, PyObject *args) {
   PyObject *result = Py_False;
-
-  PyThreadState *_save = PyEval_SaveThread();
-  uint8_t receive_result = asgi_receive_start(self->request_id, self);
-  PyEval_RestoreThread(_save);
-
-  if (receive_result == 1) {
+  if (asgi_receive_start(self->request_id, self) == 1) {
     Py_INCREF(self->event_ts_receive);
     result = self->event_ts_receive;
   }
@@ -861,10 +856,7 @@ static void AsgiEvent_write_body(AsgiEvent *self, PyObject *data) {
   PyObject *pybody = PyDict_GetItemString(data, "body");
   size_t body_len = 0;
   char *body = copy_pybytes(pybody, &body_len);
-
-  PyThreadState *_save = PyEval_SaveThread();
   asgi_send_response(self->request_id, body, body_len, send_more_body, self);
-  PyEval_RestoreThread(_save);
 }
 
 static void AsgiEvent_websocket_accept(AsgiEvent *self, PyObject *data) {
