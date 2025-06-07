@@ -37,6 +37,8 @@ async def startup():
 
 @app.on_event("shutdown")
 async def shutdown():
+    async with app.state.pool.acquire() as conn:
+        await conn.execute("TRUNCATE TABLE pastes")
     await app.state.pool.close()
 
 
