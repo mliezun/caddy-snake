@@ -128,7 +128,7 @@ Images are available both in Docker Hub and Github Container Registry:
 
 ### Build with Docker
 
-There's a template file in the project: [builder.Dockerfile](../../builder.Dockerfile). It supports build arguments to configure which Python or Go version is desired for the build.
+There's a template file in the project: [builder.Dockerfile](https://github.com/mliezun/caddy-snake/blob/main/builder.Dockerfile). It supports build arguments to configure which Python or Go version is desired for the build.
 
 Make sure to use the same Python version as you have installed in your system.
 

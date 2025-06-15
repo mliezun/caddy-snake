@@ -75,8 +75,17 @@ const config = {
     ({
       // Replace with your project's social card
       image: 'img/docusaurus-social-card.jpg',
+      colorMode: {
+        defaultMode: 'light',
+        disableSwitch: false,
+        respectPrefersColorScheme: true,
+      },
       navbar: {
         title: 'Caddy Snake',
+        logo: {
+          alt: 'Caddy Snake Logo',
+          src: 'img/caddysnake-512x512.png',
+        },
         items: [
           {
             type: 'docSidebar',
