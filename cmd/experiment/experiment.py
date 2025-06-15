@@ -37,3 +37,9 @@ def create_process():
     )
     proc4.start()
     return pipe_write, pipe_write2, pipe_write3, pipe_write4
+
+
+def write_bytes(bytes):
+    logs_file = f"logs_{multiprocessing.current_process().pid}.txt"
+    with open(logs_file, "a") as f:
+        f.write(f"{len(bytes)=}\n")
