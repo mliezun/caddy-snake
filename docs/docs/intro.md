@@ -191,9 +191,17 @@ This behavior is analogous to the "path" setting in NGINX Unit, or manually sett
 
 Currently the Python app is not reloaded by the plugin if a file changes. But it is possible to setup using [watchmedo](https://github.com/gorakhargosh/watchdog?tab=readme-ov-file#shell-utilities) to restart the Caddy process.
 
+#### Install watchdog
 ```bash
-# Install on Debian and Ubuntu.
+# Install globally on Debian and Ubuntu.
 sudo apt-get install python3-watchdog
+
+# Or install with pip
+pip install watchdog
+```
+
+#### Autorestart caddy server when dev files change
+```bash
 watchmedo auto-restart -d . -p "*.py" --recursive \
     -- caddy run --config Caddyfile
 ```
