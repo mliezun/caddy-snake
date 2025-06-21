@@ -1077,7 +1077,6 @@ func (h *AsgiRequestHandler) UpgradeWebsockets(headers http.Header, event *C.Asg
 	wsConn, err := upgrader.Upgrade(h.w, h.r, headers)
 	if err != nil {
 		h.websocketState = WS_DISCONNECTED
-		h.websocketConn.Close()
 		C.AsgiEvent_websocket_set_disconnected(event)
 		C.AsgiEvent_set(event, nil, 0, C.uint8_t(0), C.uint8_t(1))
 		return
