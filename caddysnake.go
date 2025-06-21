@@ -825,7 +825,12 @@ var (
 	asgiStateOnce sync.Once
 )
 
-var upgrader = websocket.Upgrader{} // use default options
+var upgrader = websocket.Upgrader{
+	// Allow all origins
+	CheckOrigin: func(r *http.Request) bool {
+		return true
+	},
+}
 
 func getRemoteHostPort(r *http.Request) (string, int) {
 	host, port, _ := net.SplitHostPort(r.RemoteAddr)
