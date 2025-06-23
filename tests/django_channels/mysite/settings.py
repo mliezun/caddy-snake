@@ -25,7 +25,8 @@ SECRET_KEY = "django-insecure-m3rh3ez5y=i$t+i4$2jsp=k7-sk4(wonb)e6jqyomcau%btmfz
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
 
-ALLOWED_HOSTS = []
+ALLOWED_HOSTS = ["*"]
+ALLOWED_ORIGINS = ["*"]
 
 # Adjust upload size for tests
 DATA_UPLOAD_MAX_MEMORY_SIZE = 256 * 2**20  # 256MB
@@ -75,7 +76,16 @@ WSGI_APPLICATION = "mysite.wsgi.application"
 ASGI_APPLICATION = "mysite.asgi.application"
 
 # Channels
-CHANNEL_LAYERS = {"default": {"BACKEND": "channels.layers.InMemoryChannelLayer"}}
+CHANNEL_LAYERS = {
+    "default": {
+        "BACKEND": "channels.layers.InMemoryChannelLayer",
+        "CAPACITY": 1000,
+        "GROUP_CAPACITY": 100,
+    }
+}
+
+# WebSocket configuration for larger messages
+CHANNELS_WS_MESSAGE_SIZE_LIMIT = 1024 * 1024 * 10  # 10MB limit
 
 
 # Database

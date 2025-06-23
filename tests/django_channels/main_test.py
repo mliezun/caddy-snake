@@ -12,7 +12,8 @@ item_count = 0
 BASE_URL = "ws://localhost:9080"
 WS_ENDPOINT = f"{BASE_URL}/ws/items/"
 
-BIG_BLOB = base64.b64encode(os.urandom(4 * 2**20)).decode("utf")
+# 512KB
+BIG_BLOB = base64.b64encode(os.urandom(2**19)).decode("utf")
 
 
 def get_dummy_item() -> dict:
@@ -130,6 +131,6 @@ if __name__ == "__main__":
     import sys
 
     count = (
-        int(sys.argv[1]) if len(sys.argv) > 1 else 100
+        int(sys.argv[1]) if len(sys.argv) > 1 else 2500
     )  # Reduced default for WebSocket tests
     make_objects(max_workers=4, count=count)
