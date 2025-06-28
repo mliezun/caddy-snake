@@ -11,6 +11,6 @@ typing_extensions==4.12.2
 requests==2.31.0
 certifi==2024.7.4
 charset-normalizer==3.3.2
-urllib3==2.2.1
+urllib3==2.5.0
 psutil==5.9.8
 python_multipart==0.0.20
