@@ -1,0 +1,26 @@
+{
+	http_port 9080
+	https_port 9443
+	log {
+		level info
+	}
+}
+localhost:9080 {
+	route /ws/* {
+		python {
+			module_asgi "mysite.asgi:application"
+			venv "./venv"
+		}
+	}
+
+	route /item/* {
+		python {
+			module_asgi "mysite.asgi:application"
+			venv "./venv"
+		}
+	}
+
+	route / {
+		respond 404
+	}
+}
