@@ -1,10 +1,6 @@
 module github.com/mliezun/caddy-snake
 
-<<<<<<< HEAD
-go 1.24.0
-=======
 go 1.24.1
->>>>>>> main
 
 require (
 	github.com/caddyserver/caddy/v2 v2.10.0
