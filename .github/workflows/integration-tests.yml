@@ -44,7 +44,7 @@ jobs:
         run: |
           export DEBIAN_FRONTEND=noninteractive
           sudo apt-get update -yyqq
-          sudo apt-get install -yyqq software-properties-common valgrind curl
+          sudo apt-get install -yyqq software-properties-common valgrind curl gcc build-essential
           curl https://bootstrap.pypa.io/get-pip.py -o get-pip.py
           sudo add-apt-repository -y ppa:deadsnakes/ppa
           sudo apt-get install -yyqq python${{ matrix.python-version }} python3.13-dev
