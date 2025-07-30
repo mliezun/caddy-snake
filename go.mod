@@ -1,4 +1,4 @@
-module github.com/mliezun/caddy-snake
+module github.com/zarif-ahnaf/caddy-snake
 
 go 1.24.1
 
