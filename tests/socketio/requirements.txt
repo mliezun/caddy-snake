@@ -3,7 +3,7 @@ certifi==2024.7.4
 charset-normalizer==3.3.2
 h11==0.14.0
 idna==3.7
-psutil==6.0.0
+psutil==7.0.0
 python-engineio==4.9.1
 python-socketio==5.11.3
 requests==2.32.3

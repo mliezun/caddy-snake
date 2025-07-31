@@ -825,13 +825,6 @@ var (
 	asgiStateOnce sync.Once
 )
 
-var upgrader = websocket.Upgrader{
-	// Allow all origins
-	CheckOrigin: func(r *http.Request) bool {
-		return true
-	},
-}
-
 func getRemoteHostPort(r *http.Request) (string, int) {
 	host, port, _ := net.SplitHostPort(r.RemoteAddr)
 	portN, _ := strconv.Atoi(port)
@@ -1079,6 +1072,13 @@ func (h *AsgiRequestHandler) ReceiveStart(event *C.AsgiEvent) C.uint8_t {
 }
 
 func (h *AsgiRequestHandler) UpgradeWebsockets(headers http.Header, event *C.AsgiEvent) {
+	upgrader := websocket.Upgrader{
+		HandshakeTimeout:  time.Minute,
+		EnableCompression: true,
+		CheckOrigin: func(r *http.Request) bool {
+			return true
+		},
+	}
 	wsConn, err := upgrader.Upgrade(h.w, h.r, headers)
 	if err != nil {
 		h.websocketState = WS_DISCONNECTED
