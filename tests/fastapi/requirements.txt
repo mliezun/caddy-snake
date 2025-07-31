@@ -12,5 +12,5 @@ requests==2.31.0
 certifi==2024.7.4
 charset-normalizer==3.3.2
 urllib3==2.2.1
-psutil==5.9.8
+psutil==7.0.0
 python_multipart==0.0.20
