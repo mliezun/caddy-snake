@@ -43,7 +43,8 @@ jobs:
       - name: Run integration tests
         working-directory: tests/${{ matrix.tool-name }}/
         run: |
-          echo "bash -c './caddy run --config Caddyfile > caddy.log 2>&1'" > caddy.sh
+          echo '#!/bin/bash' > caddy.sh
+          echo "./caddy run --config Caddyfile &> caddy.log" >> caddy.sh
           chmod +x caddy.sh
           time -v ./caddy.sh > memory_report.txt 2>&1 &
           timeout 60 bash -c 'while ! grep -q "finished cleaning storage units" caddy.log; do sleep 1; done'
