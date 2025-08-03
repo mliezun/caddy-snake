@@ -43,15 +43,7 @@ jobs:
       - name: Run integration tests
         working-directory: tests/${{ matrix.tool-name }}/
         run: |
-          # Write a proper Bash script that contains redirection inside
-          echo '#!/bin/bash' > caddy.sh
-          echo '/usr/bin/time -v ./caddy run --config Caddyfile > caddy.log 2> memory_report.txt' >> caddy.sh
-          chmod +x caddy.sh
-
-          # Run the script in background
-          ./caddy.sh &
-
-          # Wait until Caddy is ready or timeout
+          time -v ./caddy run --config Caddyfile > caddy.log 2>&1 &
           timeout 60 bash -c 'while ! grep -q "finished cleaning storage units" caddy.log; do sleep 1; done'
           source venv/bin/activate
           python main_test.py
@@ -62,4 +54,3 @@ jobs:
           name: caddy-logs-${{ matrix.tool-name }}-${{ matrix.python-version }}
           path: |
             tests/${{ matrix.tool-name }}/caddy.log
-            tests/${{ matrix.tool-name }}/memory_report.txt
