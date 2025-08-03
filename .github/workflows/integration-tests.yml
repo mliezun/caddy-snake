@@ -43,7 +43,7 @@ jobs:
       - name: Run integration tests
         working-directory: tests/${{ matrix.tool-name }}/
         run: |
-          time -v ./caddy run --config Caddyfile > caddy.log 2>&1 &
+          /usr/bin/time -v ./caddy run --config Caddyfile > caddy.log 2>&1 &
           timeout 60 bash -c 'while ! grep -q "finished cleaning storage units" caddy.log; do sleep 1; done'
           source venv/bin/activate
           python main_test.py
