@@ -2,6 +2,7 @@
 
 [![Integration Tests](https://github.com/mliezun/caddy-snake/actions/workflows/integration-tests.yml/badge.svg)](https://github.com/mliezun/caddy-snake/actions/workflows/integration_tests.yaml)
 [![Go Coverage](https://github.com/mliezun/caddy-snake/wiki/coverage.svg)](https://raw.githack.com/wiki/mliezun/caddy-snake/coverage.html)
+[![Documentation](https://img.shields.io/badge/docs-latest-blue)](https://caddy-snake.readthedocs.io/en/latest/)
 
 > [Caddy](https://github.com/caddyserver/caddy) is a powerful, enterprise-ready, open source web server with automatic HTTPS written in Go.
 
@@ -217,4 +218,4 @@ Note that this will restart Caddy when new `.py` files are created. If your venv
 
 ## LICENSE
 
-[AGPLv3 License](/LICENSE).
+[MIT License](/LICENSE).

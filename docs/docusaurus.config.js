@@ -11,7 +11,7 @@ import {themes as prismThemes} from 'prism-react-renderer';
 /** @type {import('@docusaurus/types').Config} */
 const config = {
   title: 'Caddy Snake',
-  // tagline: 'Embed python webserver',
+  tagline: 'Embed Python WSGI/ASGI applications into Caddy',
   favicon: 'img/favicon.ico',
 
   // Set the production url of your site here
@@ -75,8 +75,17 @@ const config = {
     ({
       // Replace with your project's social card
       image: 'img/docusaurus-social-card.jpg',
+      colorMode: {
+        defaultMode: 'light',
+        disableSwitch: false,
+        respectPrefersColorScheme: true,
+      },
       navbar: {
         title: 'Caddy Snake',
+        logo: {
+          alt: 'Caddy Snake Logo',
+          src: 'img/caddysnake-512x512.png',
+        },
         items: [
           {
             type: 'docSidebar',

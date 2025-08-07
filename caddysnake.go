@@ -17,7 +17,6 @@ import (
 	"path/filepath"
 	"reflect"
 	"regexp"
-	"runtime/pprof"
 	"strconv"
 	"strings"
 	"sync"
@@ -338,12 +337,6 @@ func initWsgi() {
 }
 
 func init() {
-	cpu_profile, _ := os.Create("cpu_profile.pprof")
-	pprof.StartCPUProfile(cpu_profile)
-	go func() {
-		time.Sleep(time.Minute)
-		pprof.StopCPUProfile()
-	}()
 	initPythonMainThread()
 	caddy.RegisterModule(CaddySnake{})
 	httpcaddyfile.RegisterHandlerDirective("python", parsePythonDirective)
@@ -855,8 +848,6 @@ var (
 	asgiStateOnce sync.Once
 )
 
-var upgrader = websocket.Upgrader{} // use default options
-
 func getRemoteHostPort(r *http.Request) (string, int) {
 	host, port, _ := net.SplitHostPort(r.RemoteAddr)
 	portN, _ := strconv.Atoi(port)
@@ -1103,7 +1094,13 @@ func (h *AsgiRequestHandler) ReceiveStart(event *C.AsgiEvent, cbuf *C.char, cbuf
 }
 
 func (h *AsgiRequestHandler) UpgradeWebsockets(headers http.Header, event *C.AsgiEvent) {
-	fmt.Println("should not execute")
+	upgrader := websocket.Upgrader{
+		HandshakeTimeout:  time.Minute,
+		EnableCompression: true,
+		CheckOrigin: func(r *http.Request) bool {
+			return true
+		},
+	}
 	wsConn, err := upgrader.Upgrade(h.w, h.r, headers)
 	if err != nil {
 		h.websocketState = WS_DISCONNECTED

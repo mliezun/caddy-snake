@@ -17,6 +17,8 @@ function HomepageHeader() {
           {siteConfig.title}
         </Heading>
         <p className="hero__subtitle">{siteConfig.tagline}</p>
+        <p className="hero__subtitle">Automatic HTTPS configuration</p>
+        <p className="hero__subtitle">Supports HTTP/2 and HTTP/3</p>
         <img src={CaddysnakeLogo} alt="Caddy Snake logo" width={200} />
         <div className={styles.buttons}>
           <Link

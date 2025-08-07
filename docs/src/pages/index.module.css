@@ -10,6 +10,12 @@
   overflow: hidden;
 }
 
+/* Add styles for better text contrast in dark mode */
+:global([data-theme='dark']) .heroBanner :global(.hero__title),
+:global([data-theme='dark']) .heroBanner :global(.hero__subtitle) {
+  color: #ffffff;
+}
+
 @media screen and (max-width: 996px) {
   .heroBanner {
     padding: 2rem;

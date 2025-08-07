@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "caddysnake"
-version = "0.1.7"
+version = "0.1.9a"
 description = "Python WSGI/ASGI server powered by Caddy"
 authors = [
     {name = "Miguel Liezun", email = "liezun.js@gmail.com"},
