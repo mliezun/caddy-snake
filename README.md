@@ -218,4 +218,4 @@ Note that this will restart Caddy when new `.py` files are created. If your venv
 
 ## LICENSE
 
-[AGPLv3 License](/LICENSE).
+[MIT License](/LICENSE).
