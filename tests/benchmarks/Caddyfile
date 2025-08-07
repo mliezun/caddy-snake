@@ -1,0 +1,17 @@
+{
+	http_port 9080
+	admin off
+	auto_https off
+	log {
+		level info
+	}
+}
+:9080 {
+	route /* {
+		python {
+			module_asgi "main:app"
+			venv "./venv"
+			lifespan on
+		}
+	}
+}
