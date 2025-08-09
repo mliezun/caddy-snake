@@ -41,7 +41,7 @@
             working-directory: tests/${{ matrix.tool-name }}/
             run: |
               $env:CGO_ENABLED = "1"
-              mv C:/hostedtoolcache/windows/Python/3.13.5/x64/lib/pkgconfig/python-3.13-embed.pc C:/hostedtoolcache/windows/Python/3.13.5/x64/lib/pkgconfig/python3-embed.pc
+              pkg-config --list-all
               xcaddy build --with github.com/mliezun/caddy-snake=../..
             shell: pwsh
           - name: Run integration tests
