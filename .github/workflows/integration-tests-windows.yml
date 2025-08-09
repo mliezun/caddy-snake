@@ -37,23 +37,32 @@
               python -m pip install --upgrade pip
               pip install -r requirements.txt
             shell: pwsh
-          - name: Prepare Python pkg-config
+          - name: Install MSYS2 pkg-config
             run: |
-              mkdir -p C:/a/pkgconfig
-              @"
-              prefix=C:/hostedtoolcache/windows/Python/3.13.5/x64
+              choco install pkgconfiglite -y
+              echo "C:\Program Files (x86)\pkgconfiglite\bin" >> $env:GITHUB_PATH
+            shell: pwsh
+    
+          - name: Create python3-embed.pc
+            run: |
+              $pythonPath = (python -c "import sys; print(sys.base_prefix)").Replace("\", "/")
+              $includeDir = "$pythonPath/include"
+              $libDir = "$pythonPath/libs"
+              $pcContent = @"
+              prefix=$pythonPath
               exec_prefix=\${prefix}
               libdir=\${prefix}/libs
               includedir=\${prefix}/include
-          
-              Name: Python 3.13 Embedded
+    
+              Name: Python 3 Embed
               Description: Python language library (embedding)
-              Version: 3.13
+              Version: $(python -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
               Cflags: -I\${includedir}
-              Libs: -L\${libdir} -lpython313
-              "@ | Out-File -Encoding ascii C:/a/pkgconfig/python3-embed.pc
+              Libs: -L\${libdir} -lpython$($(python -c "import sys; print(f'{sys.version_info.major}{sys.version_info.minor}')"))
+              "@
+              New-Item -ItemType Directory -Force -Path C:/a/pkgconfig | Out-Null
+              $pcContent | Out-File -Encoding ascii C:/a/pkgconfig/python3-embed.pc
             shell: pwsh
-          
           - name: Set env
             run: |
               $env:CGO_ENABLED = "1"
