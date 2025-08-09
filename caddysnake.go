@@ -325,11 +325,11 @@ func init() {
 // findSitePackagesInVenv searches for the site-packages directory in a given venv.
 // It returns the absolute path to the site-packages directory if found, or an error otherwise.
 func findSitePackagesInVenv(venvPath string) (string, error) {
-	libPath := filepath.Join(venvPath, "lib")
 	var sitePackagesPath string
 	if runtime.GOOS == "windows" {
 		sitePackagesPath = filepath.Join(venvPath, "Lib\\site-packages")
 	} else {
+		libPath := filepath.Join(venvPath, "lib")
 		pythonDir, err := findPythonDirectory(libPath)
 		if err != nil {
 			return "", err
