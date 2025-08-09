@@ -16,6 +16,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -325,11 +326,16 @@ func init() {
 // It returns the absolute path to the site-packages directory if found, or an error otherwise.
 func findSitePackagesInVenv(venvPath string) (string, error) {
 	libPath := filepath.Join(venvPath, "lib")
-	pythonDir, err := findPythonDirectory(libPath)
-	if err != nil {
-		return "", err
+	var sitePackagesPath string
+	if runtime.GOOS == "windows" {
+		sitePackagesPath = filepath.Join(venvPath, "Lib\\site-packages")
+	} else {
+		pythonDir, err := findPythonDirectory(libPath)
+		if err != nil {
+			return "", err
+		}
+		sitePackagesPath = filepath.Join(libPath, pythonDir, "site-packages")
 	}
-	sitePackagesPath := filepath.Join(libPath, pythonDir, "site-packages")
 	fileInfo, err := os.Stat(sitePackagesPath)
 	if err != nil {
 		if os.IsNotExist(err) {
