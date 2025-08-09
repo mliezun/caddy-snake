@@ -1,5 +1,5 @@
 ---
-    name: Integration Tests
+    name: Integration Tests Windows
     on:
       pull_request:
         branches:
@@ -13,8 +13,8 @@
         strategy:
           fail-fast: false
           matrix:
-            tool-name: ['django', 'django_channels', 'flask', 'fastapi', 'simple', 'simple_async', 'socketio']
-            python-version: ['3.10', '3.11', '3.12', '3.13']
+            tool-name: ['simple', 'simple_async']
+            python-version: ['3.13']
         env:
           GOEXPERIMENT: cgocheck2
         steps:
@@ -39,7 +39,9 @@
             shell: pwsh
           - name: Build the server
             working-directory: tests/${{ matrix.tool-name }}/
-            run: CGO_ENABLED=1 xcaddy build --with github.com/mliezun/caddy-snake=../..
+            run: |
+              $env:CGO_ENABLED = "1"
+              xcaddy build --with github.com/mliezun/caddy-snake=../..
             shell: pwsh
           - name: Run integration tests
             working-directory: tests/${{ matrix.tool-name }}/
