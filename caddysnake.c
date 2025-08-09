@@ -274,18 +274,18 @@ void WsgiApp_handle_request(WsgiApp *app, int64_t request_id,
                             size_t body_len) {
   PyGILState_STATE gstate = PyGILState_Ensure();
 
-  PyObject *env_dict = PyDict_New();
+  PyObject *environ = PyDict_New();
   for (size_t i = 0; i < headers->length; i++) {
     PyObject *key = PyUnicode_FromString(headers->keys[i]);
     PyObject *value = PyUnicode_FromString(headers->values[i]);
-    PyDict_SetItem(env_dict, key, value);
+    PyDict_SetItem(environ, key, value);
     Py_DECREF(key);
     Py_DECREF(value);
   }
   PyObject *input_key = PyUnicode_FromString("wsgi.input");
   PyObject *bytes = PyBytes_FromStringAndSize(body, body_len);
   PyObject *bytes_file = PyObject_CallOneArg(BytesIO, bytes);
-  PyDict_SetItem(env_dict, input_key, bytes_file);
+  PyDict_SetItem(environ, input_key, bytes_file);
   Py_DECREF(input_key);
   Py_DECREF(bytes);
   Py_DECREF(bytes_file);
@@ -296,14 +296,14 @@ void WsgiApp_handle_request(WsgiApp *app, int64_t request_id,
                               sys_stderr};
   for (size_t i = 0; i < 5; i++) {
     PyObject *key = PyUnicode_FromString(extra_keys[i]);
-    PyDict_SetItem(env_dict, key, extra_values[i]);
+    PyDict_SetItem(environ, key, extra_values[i]);
     Py_DECREF(key);
   }
   RequestResponse *r =
       (RequestResponse *)PyObject_CallObject((PyObject *)&ResponseType, NULL);
   r->app = app;
   r->request_id = request_id;
-  r->request_environ = env_dict;
+  r->request_environ = environ;
   PyObject_CallOneArg(task_queue_put, (PyObject *)r);
 
   PyGILState_Release(gstate);
