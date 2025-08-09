@@ -44,19 +44,19 @@
               New-Item -ItemType Directory -Force -Path $pcDir | Out-Null
 
               @"
-              prefix=C:/hostedtoolcache/windows/Python/${env:PYTHON_VERSION}/x64
+              prefix=C:/hostedtoolcache/windows/Python/3.13.5/x64
               exec_prefix=\${prefix}
               libdir=\${exec_prefix}/libs
               includedir=\${prefix}/include
 
               Name: Python 3 Embed
               Description: Embed Python interpreter
-              Version: ${env:PYTHON_VERSION}
+              Version: 3.13
               Cflags: -I\${includedir}
-              Libs: -L\${libdir} -lpython313
+              Libs: -LC:/hostedtoolcache/windows/Python/3.13.5/x64/libs -lpython313
               "@ | Out-File -Encoding ascii "$pcDir\python3-embed.pc"
 
-              echo "PKG_CONFIG_PATH=$pcDir" >> $env:GITHUB_ENV
+              $env:PKG_CONFIG_PATH = $pcDir
           - name: Build the server
             working-directory: tests/${{ matrix.tool-name }}/
             run: |
