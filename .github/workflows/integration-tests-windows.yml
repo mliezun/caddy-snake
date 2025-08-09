@@ -63,7 +63,8 @@
               New-Item -ItemType Directory -Force -Path C:/a/pkgconfig | Out-Null
               $pcContent | Out-File -Encoding ascii C:/a/pkgconfig/python3-embed.pc
             shell: pwsh
-          - name: Set env
+          - name: Build caddy
+            working-directory: tests/${{ matrix.tool-name }}/
             run: |
               $env:CGO_ENABLED = "1"
               $env:PKG_CONFIG_PATH = "C:/a/pkgconfig"
