@@ -37,32 +37,28 @@
               python -m pip install --upgrade pip
               pip install -r requirements.txt
             shell: pwsh
-          - name: Create python3-embed.pc
-            shell: pwsh
+          - name: Prepare Python pkg-config
             run: |
-              $pcDir = "C:\pkgconfig"
-              New-Item -ItemType Directory -Force -Path $pcDir | Out-Null
-
+              mkdir -p C:/a/pkgconfig
               @"
               prefix=C:/hostedtoolcache/windows/Python/3.13.5/x64
               exec_prefix=\${prefix}
-              libdir=\${exec_prefix}/libs
+              libdir=\${prefix}/libs
               includedir=\${prefix}/include
-
-              Name: Python 3 Embed
-              Description: Embed Python interpreter
+          
+              Name: Python 3.13 Embedded
+              Description: Python language library (embedding)
               Version: 3.13
               Cflags: -I\${includedir}
-              Libs: -LC:/hostedtoolcache/windows/Python/3.13.5/x64/libs -lpython313
-              "@ | Out-File -Encoding ascii "$pcDir\python3-embed.pc"
-
-              $env:PKG_CONFIG_PATH = $pcDir
-          - name: Build the server
-            working-directory: tests/${{ matrix.tool-name }}/
+              Libs: -L\${libdir} -lpython313
+              "@ | Out-File -Encoding ascii C:/a/pkgconfig/python3-embed.pc
+            shell: pwsh
+          
+          - name: Set env
             run: |
               $env:CGO_ENABLED = "1"
-              pkg-config --list-all
-              xcaddy build --with github.com/mliezun/caddy-snake=../..
+              $env:PKG_CONFIG_PATH = "C:/a/pkgconfig"
+              xcaddy build --with github.com/mliezun/caddy-snake=../.
             shell: pwsh
           - name: Run integration tests
             working-directory: tests/${{ matrix.tool-name }}/
