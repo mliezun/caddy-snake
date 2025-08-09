@@ -66,7 +66,6 @@
           - name: Build caddy
             working-directory: tests/${{ matrix.tool-name }}/
             run: |
-              pkg-config --list-all
               $env:CGO_ENABLED = "1"
               $env:PKG_CONFIG_PATH = "C:/a/pkgconfig"
               xcaddy build --with github.com/mliezun/caddy-snake=../..
