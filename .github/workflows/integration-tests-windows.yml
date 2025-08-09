@@ -37,6 +37,26 @@
               python -m pip install --upgrade pip
               pip install -r requirements.txt
             shell: pwsh
+          - name: Create python3-embed.pc
+            shell: pwsh
+            run: |
+              $pcDir = "C:\pkgconfig"
+              New-Item -ItemType Directory -Force -Path $pcDir | Out-Null
+
+              @"
+              prefix=C:/hostedtoolcache/windows/Python/${env:PYTHON_VERSION}/x64
+              exec_prefix=\${prefix}
+              libdir=\${exec_prefix}/libs
+              includedir=\${prefix}/include
+
+              Name: Python 3 Embed
+              Description: Embed Python interpreter
+              Version: ${env:PYTHON_VERSION}
+              Cflags: -I\${includedir}
+              Libs: -L\${libdir} -lpython313
+              "@ | Out-File -Encoding ascii "$pcDir\python3-embed.pc"
+
+              echo "PKG_CONFIG_PATH=$pcDir" >> $env:GITHUB_ENV
           - name: Build the server
             working-directory: tests/${{ matrix.tool-name }}/
             run: |
