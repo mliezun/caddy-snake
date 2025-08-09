@@ -74,7 +74,7 @@
           - name: Run integration tests
             working-directory: tests/${{ matrix.tool-name }}/
             run: |
-              Start-Process -FilePath ".\caddy.exe" -ArgumentList "run", "--config", "Caddyfile" -RedirectStandardOutput "caddy.log" -RedirectStandardError "caddy.log"
+              .\caddy.exe run --config Caddyfile *> caddy.log
               $timeout = 60
               while ($timeout -gt 0 -and -not (Select-String "finished cleaning storage units" -Path "caddy.log")) {
                 Start-Sleep -Seconds 1
