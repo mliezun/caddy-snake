@@ -13,7 +13,7 @@
         strategy:
           fail-fast: false
           matrix:
-            tool-name: ['django', 'fastapi']
+            tool-name: ['simple', 'simple_async']
             python-version: ['3.13']
         env:
           GOEXPERIMENT: cgocheck2
@@ -34,9 +34,6 @@
             run: |
               python -m venv venv
               .\venv\Scripts\activate
-              dir .\venv\
-              dir .\venv\Lib
-              dir .\venv\Lib\site-packages
               python -m pip install --upgrade pip
               pip install -r requirements.txt
             shell: pwsh
