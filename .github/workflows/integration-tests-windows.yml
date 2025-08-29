@@ -13,7 +13,7 @@
         strategy:
           fail-fast: false
           matrix:
-            tool-name: ['simple', 'simple_async']
+            tool-name: ['django', 'fastapi']
             python-version: ['3.13']
         env:
           GOEXPERIMENT: cgocheck2
