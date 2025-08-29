@@ -34,9 +34,9 @@
             run: |
               python -m venv venv
               .\venv\Scripts\activate
-              dir /a venv
-              dir /a venv/Lib
-              dir /a venv/Lib/site-packages
+              dir /a .\venv\
+              dir /a .\venv\Lib
+              dir /a .\venv\Lib\site-packages
               python -m pip install --upgrade pip
               pip install -r requirements.txt
             shell: pwsh
