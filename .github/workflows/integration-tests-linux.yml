@@ -39,7 +39,7 @@ jobs:
           pip install -r requirements.txt
       - name: Build the server
         working-directory: tests/${{ matrix.tool-name }}/
-        run: CGO_ENABLED=1 xcaddy build --with github.com/mliezun/caddy-snake=../..
+        run: CGO_ENABLED=1 XCADDY_GO_BUILD_FLAGS="-asan" xcaddy build --with github.com/mliezun/caddy-snake=../..
       - name: Run integration tests
         working-directory: tests/${{ matrix.tool-name }}/
         run: |
