@@ -18,7 +18,7 @@ CGO_ENABLED=1 xcaddy build --with github.com/mliezun/caddy-snake
 
 - Python >= 3.10 + dev files
 - C compiler and build tools
-- Go >= 1.21 and [Xcaddy](https://github.com/caddyserver/xcaddy)
+- Go >= 1.25 and [Xcaddy](https://github.com/caddyserver/xcaddy)
 
 
 ### Example usage: FastAPI
@@ -110,14 +110,14 @@ There are docker images available with the following Python versions: `3.10`, `3
 Example usage:
 
 ```Dockerfile
-FROM mliezun/caddy-snake:latest-py3.12
+FROM mliezun/caddy-snake:latest-py3.13
 
 WORKDIR /app
 
 # Copy your project into app
 COPY . /app
 
-# Caddy snake is already installed and has support for Python 3.12
+# Caddy snake is already installed and has support for Python 3.13
 CMD ["caddy", "run", "--config", "/app/Caddyfile"]
 ```
 
