@@ -9,6 +9,7 @@ localhost:9080 {
 	route /item/* {
 		python {
 			module_wsgi "mysite.wsgi:application"
+			workers 1
 			venv "./venv"
 		}
 	}

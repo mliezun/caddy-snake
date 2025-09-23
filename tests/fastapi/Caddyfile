@@ -10,6 +10,7 @@ localhost:9080 {
 		python {
 			module_asgi "main:app"
 			lifespan on
+			workers 1
 			venv "./venv"
 		}
 	}
@@ -18,6 +19,7 @@ localhost:9080 {
 		python {
 			module_asgi "main:app"
 			lifespan on
+			workers 1
 			venv "./venv"
 		}
 	}
@@ -26,6 +28,7 @@ localhost:9080 {
 		python {
 			module_asgi "main:app"
 			lifespan on
+			workers 1
 			venv "./venv"
 		}
 	}

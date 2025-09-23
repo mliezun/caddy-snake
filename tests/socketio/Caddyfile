@@ -9,6 +9,7 @@ localhost:9080 {
 	route /socket.io/* {
 		python {
 			module_asgi "main:app"
+			workers 1
 			venv "./venv"
 		}
 	}
