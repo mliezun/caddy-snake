@@ -13,8 +13,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        tool-name: ['fastapi']
-        python-version: ['3.13']
+        tool-name: ['django', 'django_channels', 'flask', 'fastapi', 'simple', 'simple_async', 'socketio']
+        python-version: ['3.10', '3.11', '3.12', '3.13']
     env:
       GOEXPERIMENT: cgocheck2
     steps:
@@ -43,44 +43,9 @@ jobs:
           python${{ matrix.python-version }} -m venv venv
           source venv/bin/activate
           pip install -r requirements.txt
-      - name: Debug Python and Pydantic installation
-        working-directory: tests/${{ matrix.tool-name }}/
-        run: |
-          echo "=== Python version ==="
-          python --version
-          python -c "import sys; print(sys.version)"
-          
-          echo "=== Virtual environment info ==="
-          which python
-          ls -la venv/
-          ls -la venv/bin/
-          ls -la venv/lib/python*/site-packages/ | head -20
-          
-          echo "=== Pydantic installation check ==="
-          ls -la venv/lib/python*/site-packages/pydantic/
-          cat venv/lib/python*/site-packages/pydantic/__init__.py
-          
-          echo "=== Test import directly ==="
-          source venv/bin/activate
-          python -c "import pydantic; print(pydantic.__version__)"
-          python -c "from pydantic import BaseModel; print('BaseModel imported successfully')"
-          
-          echo "=== Test FastAPI import step by step ==="
-          python -c "import fastapi"
-          python -c "from fastapi import FastAPI"
-          python -c "from fastapi import FastAPI, UploadFile"
-          
-          echo "=== Check for conflicting packages ==="
-          pip list | grep -i pydantic
-          pip show pydantic
       - name: Build the server
         working-directory: tests/${{ matrix.tool-name }}/
-        run: |
-          export CC=clang
-          export CGO_ENABLED=1
-          export CGO_CFLAGS="-fsanitize=address"
-          export XCADDY_GO_BUILD_FLAGS="-asan"
-          xcaddy build --with github.com/mliezun/caddy-snake=../..
+        run: CGO_ENABLED=1 xcaddy build --with github.com/mliezun/caddy-snake=../..
       - name: Run integration tests
         working-directory: tests/${{ matrix.tool-name }}/
         run: |
@@ -92,6 +57,6 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: caddy-logs-${{ matrix.tool-name }}-${{ matrix.python-version }}
+          name: caddy-integration-tests-logs-${{ matrix.tool-name }}-${{ matrix.python-version }}
           path: |
             tests/${{ matrix.tool-name }}/caddy.log
