@@ -2,9 +2,9 @@ import sys
 from typing import Optional
 from contextlib import asynccontextmanager
 
-from pydantic import BaseModel
 from fastapi import FastAPI, UploadFile
 from fastapi.responses import Response, StreamingResponse
+from pydantic import BaseModel
 
 
 @asynccontextmanager
