@@ -19,7 +19,7 @@ jobs:
       matrix:
         python-version: ['3.10', '3.11', '3.12', '3.13']
 
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
       packages: write
@@ -27,7 +27,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: Install cosign
         if: github.event_name != 'pull_request'
