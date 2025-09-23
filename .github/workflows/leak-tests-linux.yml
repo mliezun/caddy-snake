@@ -65,4 +65,3 @@
               name: caddy-leak-tests-logs-${{ matrix.tool-name }}-${{ matrix.python-version }}
               path: |
                 tests/${{ matrix.tool-name }}/caddy.log
-    
