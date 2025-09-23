@@ -9,7 +9,7 @@ on:
       - main
 jobs:
   tests:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-22.04
     strategy:
       fail-fast: false
       matrix:
@@ -18,12 +18,7 @@ jobs:
     env:
       GOEXPERIMENT: cgocheck2
     steps:
-      - uses: actions/checkout@v4
-      - name: Set up Clang
-        uses: egor-tensin/setup-clang@v1
-        with:
-          version: latest
-          platform: x64
+      - uses: actions/checkout@v3
       - uses: actions/setup-go@v5
         with:
           go-version: '1.25'
