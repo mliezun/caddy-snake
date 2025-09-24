@@ -10,6 +10,7 @@ localhost:9080 {
 		python {
 			module_wsgi "mysite.wsgi:application"
 			workers 1
+			workers_runtime thread
 			venv "./venv"
 		}
 	}
