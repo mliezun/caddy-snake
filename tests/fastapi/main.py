@@ -5,6 +5,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, UploadFile
 from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel
+from sqlitedict import SqliteDict
 
 
 @asynccontextmanager
@@ -16,7 +17,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(lifespan=lifespan)
 
-db = {}
+db = SqliteDict("items.db", autocommit=True)
 
 
 class Item(BaseModel):

@@ -13,3 +13,4 @@ charset-normalizer==3.3.2
 urllib3==2.2.1
 psutil==5.9.8
 python_multipart==0.0.20
+sqlitedict==2.1.0

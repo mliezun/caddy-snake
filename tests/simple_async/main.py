@@ -1,6 +1,8 @@
 import json
 
-db = {}
+from sqlitedict import SqliteDict
+
+db = SqliteDict("items.db", autocommit=True)
 
 
 def store_item(id: str, content: dict):
