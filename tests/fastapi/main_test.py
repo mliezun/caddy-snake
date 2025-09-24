@@ -115,11 +115,12 @@ def check_lifespan_events_on_logs(logs: str):
     with open(logs, "r") as fd:
         for line in fd:
             event = line.strip()
-            if event in events_count:
-                events_count[event] += 1
+            for event_key in events_count.keys():
+                if event_key in event:
+                    events_count[event_key] += 1
     for event, count in events_count.items():
-        assert count == 1, (
-            f"Expected '{event}' to only be seen once, but seen {count} times"
+        assert count == 3, (
+            f"Expected '{event}' to only be seen 3 times, but seen {count} times"
         )
 
 

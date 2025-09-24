@@ -1,3 +1,4 @@
+import os
 import sys
 from typing import Optional
 from contextlib import asynccontextmanager
@@ -10,9 +11,9 @@ from sqlitedict import SqliteDict
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    print("Lifespan startup", file=sys.stderr)
+    print(f"Lifespan startup (PID: {os.getpid()})", file=sys.stderr)
     yield
-    print("Lifespan shutdown", file=sys.stderr)
+    print(f"Lifespan shutdown (PID: {os.getpid()})", file=sys.stderr)
 
 
 app = FastAPI(lifespan=lifespan)
