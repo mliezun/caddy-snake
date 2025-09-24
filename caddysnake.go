@@ -110,14 +110,15 @@ type AppServer interface {
 
 // CaddySnake module that communicates with a Python app
 type CaddySnake struct {
-	ModuleWsgi string `json:"module_wsgi,omitempty"`
-	ModuleAsgi string `json:"module_asgi,omitempty"`
-	Lifespan   string `json:"lifespan,omitempty"`
-	WorkingDir string `json:"working_dir,omitempty"`
-	VenvPath   string `json:"venv_path,omitempty"`
-	Workers    string `json:"workers,omitempty"`
-	logger     *zap.Logger
-	app        AppServer
+	ModuleWsgi     string `json:"module_wsgi,omitempty"`
+	ModuleAsgi     string `json:"module_asgi,omitempty"`
+	Lifespan       string `json:"lifespan,omitempty"`
+	WorkingDir     string `json:"working_dir,omitempty"`
+	VenvPath       string `json:"venv_path,omitempty"`
+	Workers        string `json:"workers,omitempty"`
+	WorkersRuntime string `json:"workers_runtime,omitempty"`
+	logger         *zap.Logger
+	app            AppServer
 }
 
 // UnmarshalCaddyfile implements caddyfile.Unmarshaler.
@@ -153,6 +154,10 @@ func (f *CaddySnake) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 					if !d.Args(&f.Workers) {
 						return d.Errf("expected exactly one argument for workers")
 					}
+				case "workers_runtime":
+					if !d.Args(&f.WorkersRuntime) || (f.WorkersRuntime != "thread" && f.WorkersRuntime != "process") {
+						return d.Errf("expected exactly one argument for workers_runtime: thread|process")
+					}
 				default:
 					return d.Errf("unknown subdirective: %s", d.Val())
 				}
@@ -180,8 +185,21 @@ func (f *CaddySnake) Provision(ctx caddy.Context) error {
 	if workers <= 0 {
 		workers = runtime.GOMAXPROCS(0)
 	}
+	workersRuntime := f.WorkersRuntime
+	if workersRuntime == "" && runtime.GOOS != "windows" {
+		f.logger.Info("workers_runtime not specified, using process", zap.String("workers_runtime", workersRuntime))
+		workersRuntime = "process"
+	}
+	if workersRuntime != "thread" && runtime.GOOS == "windows" {
+		f.logger.Warn("workers_runtime forced to thread on windows", zap.String("workers_runtime", workersRuntime))
+		workersRuntime = "thread"
+	}
+	if workersRuntime == "thread" && workers > 1 {
+		f.logger.Warn("workers attribute is ignored when workers_runtime is thread, only 1 worker will be used", zap.String("workers_runtime", workersRuntime), zap.Int("workers", workers))
+		workers = 1
+	}
 	if f.ModuleWsgi != "" {
-		if workers == 100 {
+		if workersRuntime == "thread" {
 			initPythonMainThread()
 			initWsgi()
 			f.app, err = NewWsgi(f.ModuleWsgi, f.WorkingDir, f.VenvPath)
@@ -195,11 +213,11 @@ func (f *CaddySnake) Provision(ctx caddy.Context) error {
 			}
 		}
 		if f.Lifespan != "" {
-			f.logger.Warn("lifespan is only used in ASGI mode", zap.String("lifespan", f.Lifespan))
+			f.logger.Warn("lifespan attribute is ignored in WSGI mode", zap.String("lifespan", f.Lifespan))
 		}
-		f.logger.Info("imported wsgi app", zap.String("module_wsgi", f.ModuleWsgi), zap.String("working_dir", f.WorkingDir), zap.String("venv_path", f.VenvPath))
+		f.logger.Info("serving wsgi app", zap.String("module_wsgi", f.ModuleWsgi), zap.String("working_dir", f.WorkingDir), zap.String("venv_path", f.VenvPath))
 	} else if f.ModuleAsgi != "" {
-		if workers == 100 {
+		if workersRuntime == "thread" {
 			initPythonMainThread()
 			initAsgi()
 			f.app, err = NewAsgi(f.ModuleAsgi, f.WorkingDir, f.VenvPath, f.Lifespan == "on", f.logger)
@@ -212,7 +230,7 @@ func (f *CaddySnake) Provision(ctx caddy.Context) error {
 				return err
 			}
 		}
-		f.logger.Info("imported asgi app", zap.String("module_asgi", f.ModuleAsgi), zap.String("working_dir", f.WorkingDir), zap.String("venv_path", f.VenvPath))
+		f.logger.Info("serving asgi app", zap.String("module_asgi", f.ModuleAsgi), zap.String("working_dir", f.WorkingDir), zap.String("venv_path", f.VenvPath))
 	} else {
 		return errors.New("asgi or wsgi app needs to be specified")
 	}
@@ -383,6 +401,7 @@ func cmdPythonWorker(fs caddycmd.Flags) (int, error) {
 	if _, err := os.Stat(socket); err == nil {
 		os.Remove(socket)
 	}
+	defer os.Remove(socket)
 
 	// Listen on the Unix domain socket
 	listener, err := net.Listen("unix", socket)

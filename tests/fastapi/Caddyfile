@@ -11,6 +11,7 @@ localhost:9080 {
 			module_asgi "main:app"
 			lifespan on
 			workers 1
+			workers_runtime thread
 			venv "./venv"
 		}
 	}
@@ -20,6 +21,7 @@ localhost:9080 {
 			module_asgi "main:app"
 			lifespan on
 			workers 1
+			workers_runtime thread
 			venv "./venv"
 		}
 	}
@@ -29,6 +31,7 @@ localhost:9080 {
 			module_asgi "main:app"
 			lifespan on
 			workers 1
+			workers_runtime thread
 			venv "./venv"
 		}
 	}
