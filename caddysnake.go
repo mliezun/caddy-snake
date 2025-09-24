@@ -180,7 +180,7 @@ func (f *CaddySnake) Provision(ctx caddy.Context) error {
 		workers = runtime.GOMAXPROCS(0)
 	}
 	if f.ModuleWsgi != "" {
-		if workers == 1 {
+		if workers == 100 {
 			initPythonMainThread()
 			initWsgi()
 			f.app, err = NewWsgi(f.ModuleWsgi, f.WorkingDir, f.VenvPath)
@@ -198,7 +198,7 @@ func (f *CaddySnake) Provision(ctx caddy.Context) error {
 		}
 		f.logger.Info("imported wsgi app", zap.String("module_wsgi", f.ModuleWsgi), zap.String("working_dir", f.WorkingDir), zap.String("venv_path", f.VenvPath))
 	} else if f.ModuleAsgi != "" {
-		if workers == 1 {
+		if workers == 100 {
 			initPythonMainThread()
 			initAsgi()
 			f.app, err = NewAsgi(f.ModuleAsgi, f.WorkingDir, f.VenvPath, f.Lifespan == "on", f.logger)
