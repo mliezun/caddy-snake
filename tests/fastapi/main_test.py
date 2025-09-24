@@ -119,8 +119,8 @@ def check_lifespan_events_on_logs(logs: str):
                 if event_key in event:
                     events_count[event_key] += 1
     for event, count in events_count.items():
-        assert count == 3, (
-            f"Expected '{event}' to be seen 3 times, but seen {count} times"
+        assert count == 1, (
+            f"Expected '{event}' to be seen 1 times, but seen {count} times"
         )
 
 

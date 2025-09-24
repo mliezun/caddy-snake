@@ -10,7 +10,7 @@
 
 Caddy Snake is a plugin that provides native support for Python apps built-in the Caddy web server.
 
-It embeds the Python interpreter inside Caddy and serves requests directly without going through a reverse proxy.
+It uses the Python C API to run applications directly inside Caddy, avoiding the need for an extra layer of HTTP proxy.
 
 Supports both WSGI and ASGI, which means you can run all types of frameworks like Flask, Django and FastAPI.
 
