@@ -14,6 +14,7 @@ import (
 	"net/http/httputil"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"regexp"
 	"runtime"
@@ -395,9 +396,21 @@ func cmdPythonWorker(fs caddycmd.Flags) (int, error) {
 		handler.HandleRequest(w, r)
 	})
 
-	// Serve HTTP over the Unix socket
-	err = http.Serve(listener, nil)
-	if err != nil {
+	cancelChan := make(chan os.Signal, 1)
+	errChan := make(chan error, 1)
+	// catch SIGETRM or SIGINTERRUPT
+	signal.Notify(cancelChan, syscall.SIGTERM, syscall.SIGINT)
+	go func() {
+		// Serve HTTP over the Unix socket
+		err = http.Serve(listener, nil)
+		if err != nil {
+			errChan <- err
+		}
+	}()
+	select {
+	case <-cancelChan:
+		listener.Close()
+	case err := <-errChan:
 		return caddy.ExitCodeFailedStartup, err
 	}
 
