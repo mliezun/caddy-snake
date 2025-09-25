@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/caddyserver/caddy/v2"
@@ -22,72 +23,53 @@ import (
 	"github.com/caddyserver/caddy/v2/modules/caddyhttp/encode"
 	_ "github.com/caddyserver/caddy/v2/modules/caddyhttp/encode/gzip"
 	_ "github.com/caddyserver/caddy/v2/modules/caddyhttp/encode/zstd"
+	_ "github.com/caddyserver/caddy/v2/modules/caddyhttp/fileserver"
 )
 
 func main() {
 	caddycmd.RegisterCommand(caddycmd.Command{
-		Name:  "wsgi-server",
-		Usage: "[--domain <example.com>] [--app <module>] [--listen <addr>] [--debug] [--access-logs]",
-		Short: "Spins up a Python wsgi server",
+		Name:  "python-server",
+		Usage: "[--domain <example.com>] [--app <module>] [--listen <addr>] [--workers <count>] [--workers_runtime <runtime>] [--static-path <path>] [--static-route <route>] [--debug] [--access-logs]",
+		Short: "Spins up a Python server",
 		Long: `
-A Python WSGI server designed for synchronous apps and frameworks (no async/await).
+A Python WSGI or ASGI server designed for apps and frameworks.
 
-You can specify a custom socket address using the '--listen' option.
+You can specify a custom socket address using the '--listen' option. You can also specify the number of workers to spawn and the runtime to use for the workers.
 
 Providing a domain name with the '--domain' flag enables HTTPS and sets the listener to the appropriate secure port.
 Ensure DNS A/AAAA records are correctly set up if using a public domain for secure connections.
 `,
 		CobraFunc: func(cmd *cobra.Command) {
+			cmd.Flags().StringP("server-type", "t", "asgi", "The type of server to use: wsgi|asgi")
 			cmd.Flags().StringP("domain", "d", "", "Domain name at which to serve the files")
 			cmd.Flags().StringP("app", "a", "", "App module to be imported")
 			cmd.Flags().StringP("listen", "l", "", "The address to which to bind the listener")
+			cmd.Flags().StringP("workers", "w", "0", "The number of workers to spawn")
+			cmd.Flags().StringP("workers_runtime", "r", "process", "The runtime to use for the workers: thread|process")
+			cmd.Flags().String("static-path", "", "Path to a static directory to serve: path/to/static")
+			cmd.Flags().String("static-route", "/static", "Route to serve the static directory: /static")
 			cmd.Flags().Bool("debug", false, "Enable debug logs")
 			cmd.Flags().Bool("access-logs", false, "Enable access logs")
-			cmd.RunE = caddycmd.WrapCommandFuncForCobra(cmdWsgiServer)
-		},
-	})
-
-	caddycmd.RegisterCommand(caddycmd.Command{
-		Name:  "asgi-server",
-		Usage: "[--domain <example.com>] [--app <module>] [--listen <addr>] [--debug] [--access-logs]",
-		Short: "Spins up a Python asgi server",
-		Long: `
-A Python ASGI server designed for asynchronous apps and frameworks (use of async/await).
-
-You can specify a custom socket address using the '--listen' option.
-
-Providing a domain name with the '--domain' flag enables HTTPS and sets the listener to the appropriate secure port.
-Ensure DNS A/AAAA records are correctly set up if using a public domain for secure connections.
-`,
-		CobraFunc: func(cmd *cobra.Command) {
-			cmd.Flags().StringP("domain", "d", "", "Domain name at which to serve the files")
-			cmd.Flags().StringP("app", "a", "", "App module to be imported")
-			cmd.Flags().StringP("listen", "l", "", "The address to which to bind the listener")
-			cmd.Flags().Bool("debug", false, "Enable debug logs")
-			cmd.Flags().Bool("access-logs", false, "Enable access logs")
-			cmd.RunE = caddycmd.WrapCommandFuncForCobra(cmdAsgiServer)
+			cmd.RunE = caddycmd.WrapCommandFuncForCobra(pythonServer)
 		},
 	})
 	caddycmd.Main()
 }
 
-func cmdWsgiServer(fs caddycmd.Flags) (int, error) {
-	return pythonServer("wsgi", fs)
-}
-
-func cmdAsgiServer(fs caddycmd.Flags) (int, error) {
-	return pythonServer("asgi", fs)
-}
-
 // pythonServer is inspired on the php-server command of the Frankenphp project (MIT License)
-func pythonServer(server_type string, fs caddycmd.Flags) (int, error) {
+func pythonServer(fs caddycmd.Flags) (int, error) {
 	caddy.TrapSignals()
 
 	domain := fs.String("domain")
 	app := fs.String("app")
 	listen := fs.String("listen")
+	workers := fs.String("workers")
+	workersRuntime := fs.String("workers_runtime")
 	debug := fs.Bool("debug")
 	accessLogs := fs.Bool("access-logs")
+	staticPath := fs.String("static-path")
+	staticRoute := fs.String("static-route")
+	serverType := fs.String("server-type")
 
 	if app == "" {
 		return caddy.ExitCodeFailedStartup, errors.New("--app is required")
@@ -110,7 +92,7 @@ func pythonServer(server_type string, fs caddycmd.Flags) (int, error) {
 	prefer := []string{"zstd", "gzip"}
 
 	pythonHandler := caddysnake.CaddySnake{}
-	if server_type == "wsgi" {
+	if serverType == "wsgi" {
 		pythonHandler.ModuleWsgi = app
 	} else {
 		pythonHandler.ModuleAsgi = app
@@ -119,6 +101,40 @@ func pythonServer(server_type string, fs caddycmd.Flags) (int, error) {
 		pythonHandler.VenvPath = venv
 	}
 
+	pythonHandler.Workers = workers
+	pythonHandler.WorkersRuntime = workersRuntime
+
+	// Create routes list
+	routes := caddyhttp.RouteList{}
+
+	// Add static file route if staticPath is provided
+	if staticPath != "" {
+		if strings.HasSuffix(staticRoute, "/") {
+			staticRoute = staticRoute + "*"
+		} else if !strings.HasSuffix(staticRoute, "/*") {
+			staticRoute = staticRoute + "/*"
+		}
+		staticRoute := caddyhttp.Route{
+			MatcherSetsRaw: []caddy.ModuleMap{
+				{
+					"path": caddyconfig.JSON(caddyhttp.MatchPath{staticRoute}, nil),
+				},
+			},
+			HandlersRaw: []json.RawMessage{
+				caddyconfig.JSONModuleObject(encode.Encode{
+					EncodingsRaw: encodings,
+					Prefer:       prefer,
+				}, "handler", "encode", nil),
+				caddyconfig.JSON(map[string]interface{}{
+					"handler": "file_server",
+					"root":    staticPath,
+				}, nil),
+			},
+		}
+		routes = append(routes, staticRoute)
+	}
+
+	// Add main Python route
 	mainRoute := caddyhttp.Route{
 		MatcherSetsRaw: []caddy.ModuleMap{
 			{
@@ -133,9 +149,10 @@ func pythonServer(server_type string, fs caddycmd.Flags) (int, error) {
 			caddyconfig.JSONModuleObject(pythonHandler, "handler", "python", nil),
 		},
 	}
+	routes = append(routes, mainRoute)
 
 	subroute := caddyhttp.Subroute{
-		Routes: caddyhttp.RouteList{mainRoute},
+		Routes: routes,
 	}
 
 	route := caddyhttp.Route{
