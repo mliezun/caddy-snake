@@ -400,6 +400,9 @@ func (w *PythonWorker) HandleRequest(rw http.ResponseWriter, req *http.Request) 
 }
 
 func cmdPythonWorker(fs caddycmd.Flags) (int, error) {
+	var handler AppServer
+	var err error
+
 	iface := fs.String("interface")
 	app := fs.String("app")
 	workingDir := fs.String("working-dir")
@@ -407,8 +410,17 @@ func cmdPythonWorker(fs caddycmd.Flags) (int, error) {
 	lifespan := fs.String("lifespan")
 	socket := fs.String("socket")
 
-	var handler AppServer
-	var err error
+	if _, err := os.Stat(socket); err == nil {
+		os.Remove(socket)
+	}
+	defer os.Remove(socket)
+
+	// Listen on the Unix domain socket
+	listener, err := net.Listen("unix", socket)
+	if err != nil {
+		return caddy.ExitCodeFailedStartup, err
+	}
+	defer listener.Close()
 
 	initPythonMainThread()
 
@@ -429,18 +441,6 @@ func cmdPythonWorker(fs caddycmd.Flags) (int, error) {
 		return caddy.ExitCodeFailedStartup, errors.New("invalid interface: " + iface)
 	}
 	defer handler.Cleanup()
-
-	if _, err := os.Stat(socket); err == nil {
-		os.Remove(socket)
-	}
-	defer os.Remove(socket)
-
-	// Listen on the Unix domain socket
-	listener, err := net.Listen("unix", socket)
-	if err != nil {
-		return caddy.ExitCodeFailedStartup, err
-	}
-	defer listener.Close()
 
 	// Define a simple HTTP handler
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
