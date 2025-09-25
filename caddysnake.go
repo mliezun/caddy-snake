@@ -20,6 +20,7 @@ import (
 	"runtime"
 	"strconv"
 	"syscall"
+	"time"
 	"unsafe"
 
 	"github.com/caddyserver/caddy/v2"
@@ -314,7 +315,7 @@ func (w *PythonWorker) Start() error {
 
 	w.Transport = &http.Transport{
 		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
-			return net.Dial("unix", w.Socket.Name())
+			return w.dialWithRetry(ctx, network, addr)
 		},
 	}
 	w.Proxy = &httputil.ReverseProxy{
@@ -344,6 +345,37 @@ func (w *PythonWorker) Start() error {
 	w.Cmd.Stderr = os.Stderr
 
 	return w.Cmd.Start()
+}
+
+// dialWithRetry attempts to establish a connection with retry logic
+func (w *PythonWorker) dialWithRetry(ctx context.Context, network, addr string) (net.Conn, error) {
+	const maxRetries = 5
+	const baseDelay = 100 * time.Millisecond
+
+	for attempt := 0; attempt < maxRetries; attempt++ {
+		conn, err := net.Dial("unix", w.Socket.Name())
+		if err == nil {
+			return conn, nil
+		}
+
+		// If this is the last attempt, return the error
+		if attempt == maxRetries-1 {
+			return nil, fmt.Errorf("failed to connect after %d attempts: %w", maxRetries, err)
+		}
+
+		// Calculate delay with exponential backoff
+		delay := baseDelay * time.Duration(1<<attempt) // 100ms, 200ms, 400ms
+
+		// Check if context is cancelled
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(delay):
+			// Continue to next attempt
+		}
+	}
+
+	return nil, fmt.Errorf("unexpected error in dialWithRetry")
 }
 
 func (w *PythonWorker) Cleanup() error {
