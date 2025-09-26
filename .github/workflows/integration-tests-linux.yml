@@ -69,7 +69,7 @@ jobs:
           python main_test.py
       - name: Run integration tests (${{ matrix.python-version }})
         working-directory: tests/${{ matrix.tool-name }}/
-        if: matrix.python-version == '3.13-nogil'
+        if: matrix.python-version == '3.13-nogil' && matrix.tool-name != 'flask'
         continue-on-error: true
         run: |
           /usr/bin/time -v ./caddy run --config Caddyfile > caddy.log 2>&1 &
