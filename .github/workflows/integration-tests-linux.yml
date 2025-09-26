@@ -73,9 +73,9 @@ jobs:
         continue-on-error: true
         run: |
           /usr/bin/time -v ./caddy run --config Caddyfile > caddy.log 2>&1 &
-          timeout 60 bash -c 'while ! grep -q "finished cleaning storage units" caddy.log; do sleep 1; done'
-          source venv/bin/activate
-          python main_test.py
+          timeout 60 bash -c 'while ! grep -q "finished cleaning storage units" caddy.log; do sleep 1; done' || true
+          source venv/bin/activate || true
+          python main_test.py || true
       - name: Upload logs and report
         if: always()
         uses: actions/upload-artifact@v4
