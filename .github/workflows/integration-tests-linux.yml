@@ -39,7 +39,7 @@ jobs:
           python${{ matrix.python-version }} -m venv venv
           source venv/bin/activate
           pip install -r requirements.txt
-      - name: Set up Python ${{ matrix.python-version }}
+      - name: Set up Python (nogil)
         working-directory: tests/${{ matrix.tool-name }}/
         if: matrix.python-version == '3.13-nogil'
         continue-on-error: true
@@ -67,7 +67,7 @@ jobs:
           timeout 60 bash -c 'while ! grep -q "finished cleaning storage units" caddy.log; do sleep 1; done'
           source venv/bin/activate
           python main_test.py
-      - name: Run integration tests (${{ matrix.python-version }})
+      - name: Run integration tests (nogil)
         working-directory: tests/${{ matrix.tool-name }}/
         if: matrix.python-version == '3.13-nogil' && matrix.tool-name != 'flask'
         continue-on-error: true
