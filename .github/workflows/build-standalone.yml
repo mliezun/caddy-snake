@@ -63,10 +63,18 @@ jobs:
           go build main.go
           mv main caddy
       - name: Upload caddy standalone
-        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: caddy-standalone-${{ matrix.python-version }}-linux
+          name: caddy-standalone-${{ matrix.python-version }}-x86_64_v2-unknown-linux-gnu
           path: |
             cmd/embed/caddy
+      - name: Package caddy standalone
+        run: |
+          tar -czf caddy-standalone-${{ matrix.python-version }}-x86_64_v2-unknown-linux-gnu.tar.gz cmd/embed/caddy
+      - name: Upload to release
+        if: github.event_name == 'release'
+        run: |
+          gh release upload ${{ github.event.release.tag_name }} caddy-standalone-${{ matrix.python-version }}-x86_64_v2-unknown-linux-gnu.tar.gz --repo ${{ github.repository }} --clobber
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
   
