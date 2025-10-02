@@ -1,0 +1,73 @@
+---
+name: Caddy Standalone Linux
+on:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.10', '3.11', '3.12', '3.13', '3.13-nogil']
+    env:
+      GOEXPERIMENT: cgocheck2
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+          cache: false
+      - name: Install Xcaddy
+        run: go install github.com/caddyserver/xcaddy/cmd/xcaddy@latest
+      - name: Set up Python ${{ matrix.python-version }}
+        if: matrix.python-version != '3.13-nogil'
+        run: |
+          export DEBIAN_FRONTEND=noninteractive
+          sudo apt-get update -yyqq
+          sudo apt-get install -yyqq software-properties-common valgrind time
+          sudo add-apt-repository -y ppa:deadsnakes/ppa
+          sudo apt-get install -yyqq python${{ matrix.python-version }}-dev python${{ matrix.python-version }}-venv
+          sudo mv /usr/lib/x86_64-linux-gnu/pkgconfig/python-${{ matrix.python-version }}-embed.pc /usr/lib/x86_64-linux-gnu/pkgconfig/python3-embed.pc
+          rm -rf venv
+          python${{ matrix.python-version }} -m venv venv
+          source venv/bin/activate
+          pip install -r requirements.txt
+      - name: Set up Python (nogil)
+        if: matrix.python-version == '3.13-nogil'
+        continue-on-error: true
+        run: |
+          export DEBIAN_FRONTEND=noninteractive
+          sudo apt-get update -yyqq
+          sudo apt-get install -yyqq software-properties-common valgrind curl gcc build-essential
+          curl https://bootstrap.pypa.io/get-pip.py -o get-pip.py
+          sudo add-apt-repository -y ppa:deadsnakes/ppa
+          sudo apt-get install -yyqq python${{ matrix.python-version }} python3.13-dev
+          sudo mv /usr/lib/x86_64-linux-gnu/pkgconfig/python-${{ matrix.python-version }}-embed.pc /usr/lib/x86_64-linux-gnu/pkgconfig/python3-embed.pc
+          python${{ matrix.python-version }} -m venv --without-pip venv
+          source venv/bin/activate
+          echo $(which python)
+          python get-pip.py
+          pip install -r requirements.txt
+      - name: Build the server
+        working-directory: cmd/embed
+        run: CGO_ENABLED=1 xcaddy build --with github.com/mliezun/caddy-snake=../..
+      - name: Retrive python build standalone
+        working-directory: cmd/embed
+        run: |
+          python3 pybs.py latest --python-version ${{ matrix.python-version }} --architecture x86_64-unknown-linux-gnu --build-config pgo+lto --content-type install_only_stripped
+          mv cpython-*.tar.gz python-standalone.tar.gz
+          go build main.go
+          mv main caddy
+      - name: Upload logs and report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: caddy-standalone-${{ matrix.python-version }}-linux
+          path: |
+            caddy
+  
