@@ -62,11 +62,11 @@ jobs:
           tar -czf python-standalone.tar.gz python
           go build main.go
           mv main caddy
-      - name: Upload logs and report
+      - name: Upload caddy standalone
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: caddy-standalone-${{ matrix.python-version }}-linux
           path: |
-            caddy
+            cmd/embed/caddy
   
