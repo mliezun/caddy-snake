@@ -511,8 +511,8 @@ func (wg *PythonWorkerGroup) Cleanup() error {
 }
 
 func (wg *PythonWorkerGroup) HandleRequest(rw http.ResponseWriter, req *http.Request) error {
-	wg.Workers[wg.RoundRobin].HandleRequest(rw, req)
 	wg.RoundRobin = (wg.RoundRobin + 1) % len(wg.Workers)
+	wg.Workers[wg.RoundRobin].HandleRequest(rw, req)
 	return nil
 }
 
