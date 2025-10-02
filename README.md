@@ -8,13 +8,29 @@
 
 [![Caddy Snake logo](docs/static/img/caddysnake-512x512.png)](https://caddy-snake.readthedocs.io/en/latest/docs/intro)
 
-Caddy Snake is a plugin that provides native support for Python apps built-in the Caddy web server.
+A plugin that allows you to serve Python apps directly from the Caddy web server.
 
 It uses the Python C API to run applications directly inside Caddy, avoiding the need for an extra layer of HTTP proxy.
 
 Supports both WSGI and ASGI, which means you can run all types of frameworks like Flask, Django and FastAPI.
 
-## Quickstart
+## Download a pre-compiled package
+
+Easiest way to get started on Linux is to download one of our pre-compiled caddy binaries from the [latest release](https://github.com/mliezun/caddy-snake/releases).
+
+You can download a `caddy` binary with your preferred version Python included and run it easily. Example:
+
+```bash
+./caddy python-server --app main:app --server-type wsgi
+```
+
+This will start a server that listens on port 9080 and serves your WSGI app. See `./caddy python-server --help` for more instructions.
+
+The `python-server` command is added to caddy by the plugin and is a shorthand that creates a `Caddyfile` for you and manages configurations for you.
+
+## Build from source
+
+Alternatively you can build `caddy` from source and bundle it with the caddy-snake plugin:
 
 ```
 CGO_ENABLED=1 xcaddy build --with github.com/mliezun/caddy-snake
