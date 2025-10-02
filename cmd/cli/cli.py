@@ -9,15 +9,15 @@ import click
     "--server-type",
     "-t",
     type=click.Choice(["wsgi", "asgi"], case_sensitive=False),
-    default="asgi",
-    help="The type of server to use: wsgi|asgi",
+    required=True,
+    help="Required. The type of server to use: wsgi|asgi",
 )
 @click.option(
     "--domain",
     "-d",
     help="Domain name at which to serve the files. Enables HTTPS and sets the listener to the appropriate secure port.",
 )
-@click.option("--app", "-a", required=True, help="App module to be imported (required)")
+@click.option("--app", "-a", required=True, help="Required. App module to be imported")
 @click.option("--listen", "-l", help="The address to which to bind the listener")
 @click.option(
     "--workers",
