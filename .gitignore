@@ -22,5 +22,6 @@ cmd/cli/dummy.*
 # macOS
 .DS_Store
 
-# Django
+# Sqlite
 db.sqlite3
+items.db

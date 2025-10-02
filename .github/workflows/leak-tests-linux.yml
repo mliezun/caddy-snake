@@ -51,7 +51,7 @@
               export CGO_CFLAGS="-fsanitize=address"
               export XCADDY_GO_BUILD_FLAGS="-asan"
               xcaddy build --with github.com/mliezun/caddy-snake=../..
-          - name: Run integration tests
+          - name: Run leak integration tests
             working-directory: tests/${{ matrix.tool-name }}/
             run: |
               /usr/bin/time -v ./caddy run --config Caddyfile > caddy.log 2>&1 &

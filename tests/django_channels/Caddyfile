@@ -9,6 +9,7 @@ localhost:9080 {
 	route /ws/* {
 		python {
 			module_asgi "mysite.asgi:application"
+			workers 1
 			venv "./venv"
 		}
 	}
@@ -16,6 +17,7 @@ localhost:9080 {
 	route /item/* {
 		python {
 			module_asgi "mysite.asgi:application"
+			workers 1
 			venv "./venv"
 		}
 	}

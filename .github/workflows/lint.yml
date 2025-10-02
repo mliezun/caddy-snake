@@ -28,7 +28,7 @@ jobs:
         uses: pre-commit/action@v3.0.0
       - name: Go vet
         run: |
-          go vet -unsafeptr=false ./...
+          go vet -unsafeptr=false .
       - name: Clang format
         run: |
           clang-format --dry-run --Werror caddysnake.c caddysnake.h

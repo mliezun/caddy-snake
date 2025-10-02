@@ -37,7 +37,7 @@
           - name: Install global python dependencies
             run: sudo pip install requests
           - name: Run module tests
-            run: go test -race -v ./...
+            run: go test -race -v .
           - name: Update coverage report
             uses: ncruces/go-coverage-report@v0
             continue-on-error: true

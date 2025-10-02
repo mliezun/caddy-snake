@@ -11,3 +11,4 @@ requests==2.31.0
 certifi==2024.7.4
 charset-normalizer==3.3.2
 urllib3==2.2.1
+sqlitedict==2.1.0

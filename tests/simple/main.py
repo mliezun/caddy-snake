@@ -1,8 +1,9 @@
 from typing import Callable
 import json
 import wsgiref.validate
+from sqlitedict import SqliteDict
 
-db = {}
+db = SqliteDict("items.db", autocommit=True)
 
 CHUNK_SIZE = 256 * 2**20
 

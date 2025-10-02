@@ -9,3 +9,4 @@ requests==2.32.3
 sqlparse==0.5.2
 urllib3==2.2.3
 websockets==12.0
+sqlitedict==2.1.0
