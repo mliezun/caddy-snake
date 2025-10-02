@@ -6,7 +6,21 @@ sidebar_position: 1
 
 Let's discover **Caddy Snake in less than 5 minutes**.
 
-## Getting Started
+## Download a pre-compiled package
+
+Easiest way to get started on Linux is to download one of our pre-compiled caddy binaries from the [latest release](https://github.com/mliezun/caddy-snake/releases).
+
+You can download a `caddy` binary with your preferred version Python included and run it easily. Example:
+
+```bash
+./caddy python-server --app main:app --server-type wsgi
+```
+
+This will start a server that listens on port 9080 and serves your WSGI app. See `./caddy python-server --help` for more instructions.
+
+The `python-server` command is added to caddy by the plugin and is a shorthand that creates a `Caddyfile` for you and manages configurations for you.
+
+## Building from source
 
 Get started by **building from source**. You can also [build with Docker](#build-with-docker).
 

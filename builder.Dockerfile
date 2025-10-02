@@ -1,4 +1,4 @@
-FROM ubuntu:20.04
+FROM ubuntu:22.04
 
 ARG GO_VERSION=1.25.0
 ARG PY_VERSION=3.13
@@ -15,7 +15,7 @@ RUN export DEBIAN_FRONTEND=noninteractive &&\
     tar -C /usr/local -xzf go*.linux-amd64.tar.gz && \
     rm go*.linux-amd64.tar.gz
 
-ENV PATH=$PATH:/usr/local/go/bin
+ENV PATH=/usr/local/go/bin:$PATH
 
 RUN go install github.com/caddyserver/xcaddy/cmd/xcaddy@latest &&\
     cd /usr/local/bin &&\
