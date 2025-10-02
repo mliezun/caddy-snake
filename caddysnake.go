@@ -536,7 +536,7 @@ A Python worker designed for ASGI and WSGI apps.
 	})
 	caddycmd.RegisterCommand(caddycmd.Command{
 		Name:  "python-server",
-		Usage: "[--domain <example.com>] [--app <module>] [--listen <addr>] [--workers <count>] [--workers_runtime <runtime>] [--static-path <path>] [--static-route <route>] [--debug] [--access-logs]",
+		Usage: "--server-type wsgi|asgi --app <module> [--domain <example.com>] [--listen <addr>] [--workers <count>] [--workers_runtime <runtime>] [--static-path <path>] [--static-route <route>] [--debug] [--access-logs]",
 		Short: "Spins up a Python server",
 		Long: `
 A Python WSGI or ASGI server designed for apps and frameworks.
@@ -547,9 +547,9 @@ Providing a domain name with the '--domain' flag enables HTTPS and sets the list
 Ensure DNS A/AAAA records are correctly set up if using a public domain for secure connections.
 `,
 		CobraFunc: func(cmd *cobra.Command) {
-			cmd.Flags().StringP("server-type", "t", "asgi", "The type of server to use: wsgi|asgi")
+			cmd.Flags().StringP("server-type", "t", "", "Required. The type of server to use: wsgi|asgi")
+			cmd.Flags().StringP("app", "a", "", "Required. App module to be imported")
 			cmd.Flags().StringP("domain", "d", "", "Domain name at which to serve the files")
-			cmd.Flags().StringP("app", "a", "", "App module to be imported")
 			cmd.Flags().StringP("listen", "l", "", "The address to which to bind the listener")
 			cmd.Flags().StringP("workers", "w", "0", "The number of workers to spawn")
 			cmd.Flags().StringP("workers-runtime", "r", "process", "The runtime to use for the workers: thread|process")
@@ -577,6 +577,9 @@ func pythonServer(fs caddycmd.Flags) (int, error) {
 	staticRoute := fs.String("static-route")
 	serverType := fs.String("server-type")
 
+	if serverType == "" {
+		return caddy.ExitCodeFailedStartup, errors.New("--server-type is required")
+	}
 	if app == "" {
 		return caddy.ExitCodeFailedStartup, errors.New("--app is required")
 	}
