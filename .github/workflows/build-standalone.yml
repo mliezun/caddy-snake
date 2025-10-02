@@ -69,6 +69,7 @@ jobs:
           path: |
             cmd/embed/caddy
       - name: Package caddy standalone
+        if: github.event_name == 'release'
         run: |
           tar -czf caddy-standalone-${{ matrix.python-version }}-x86_64_v2-unknown-linux-gnu.tar.gz cmd/embed/caddy
       - name: Upload to release
