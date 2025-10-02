@@ -3,6 +3,7 @@ package main
 import (
 	"archive/tar"
 	"bytes"
+	"compress/gzip"
 	_ "embed"
 	"fmt"
 	"io"
@@ -10,19 +11,17 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
-
-	"github.com/klauspost/compress/zstd"
 )
 
-//go:embed python-standalone.tar.zst
+//go:embed python-standalone.tar.gz
 var pythonStandalonePkg []byte
 
 //go:embed caddy
 var caddyBinary []byte
 
-// extractTarZst extracts an embedded tar.zst into a target directory
-func extractTarZst(data []byte, targetDir string) error {
-	zsr, err := zstd.NewReader(bytes.NewReader(data))
+// extractTarGz extracts an embedded tar.gz into a target directory
+func extractTarGz(data []byte, targetDir string) error {
+	zsr, err := gzip.NewReader(bytes.NewReader(data))
 	if err != nil {
 		return err
 	}
@@ -77,7 +76,7 @@ func run() int {
 	}
 	defer os.RemoveAll(tmpDirPkg)
 
-	if err := extractTarZst(pythonStandalonePkg, tmpDirPkg); err != nil {
+	if err := extractTarGz(pythonStandalonePkg, tmpDirPkg); err != nil {
 		fmt.Println("Error extracting Python standalone package:", err)
 		return 1
 	}
