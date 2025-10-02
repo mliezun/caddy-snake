@@ -7,6 +7,28 @@ import urllib.error
 import os
 from pathlib import Path
 
+
+def levenshtein_distance(s1: str, s2: str) -> int:
+    """Calculate the Levenshtein distance between two strings."""
+    if len(s1) < len(s2):
+        return levenshtein_distance(s2, s1)
+
+    if len(s2) == 0:
+        return len(s1)
+
+    previous_row = list(range(len(s2) + 1))
+    for i, c1 in enumerate(s1):
+        current_row = [i + 1]
+        for j, c2 in enumerate(s2):
+            insertions = previous_row[j + 1] + 1
+            deletions = current_row[j] + 1
+            substitutions = previous_row[j] + (c1 != c2)
+            current_row.append(min(insertions, deletions, substitutions))
+        previous_row = current_row
+
+    return previous_row[-1]
+
+
 GITHUB_API = "https://api.github.com/repos/astral-sh/python-build-standalone/releases"
 
 # Supported architectures
@@ -31,6 +53,12 @@ ARCHITECTURES = {
 
 # Build configurations
 BUILD_CONFIGS = {
+    "freethreaded": "Free-threaded (PEP 703) build without GIL",
+    "freethreaded+debug": "Free-threaded build with debug symbols",
+    "freethreaded+pgo+lto": "Free-threaded build with profile guided optimization and link-time optimization",
+    "freethreaded+lto": "Free-threaded build with link-time optimization",
+    "freethreaded+noopt": "Free-threaded build with normal optimization",
+    "freethreaded+pgo": "Free-threaded build with profile guided optimization",
     "pgo+lto": "Profile guided optimization and Link-time optimization (fastest)",
     "pgo": "Profile guided optimization only",
     "lto": "Link-time optimization only",
@@ -505,10 +533,25 @@ Examples:
             file=sys.stderr,
         )
         print("Available assets in this release:", file=sys.stderr)
-        for asset in release_json["assets"][:10]:  # Show first 10 assets
-            print(f"  {asset['name']}", file=sys.stderr)
-        if len(release_json["assets"]) > 10:
-            print(f"  ... and {len(release_json['assets']) - 10} more", file=sys.stderr)
+
+        # Create target string for comparison
+        target_string = f"cpython-{args.python_version}-{args.architecture}"
+        if args.windows_variant:
+            target_string += f"-{args.windows_variant}"
+        target_string += f"-{args.build_config}-{args.content_type}"
+
+        # Calculate Levenshtein distance for each asset and sort
+        assets_with_distance = []
+        for asset in release_json["assets"]:
+            distance = levenshtein_distance(asset["name"], target_string)
+            assets_with_distance.append((distance, asset["name"]))
+
+        # Sort by distance (ascending) and show first 10
+        assets_with_distance.sort(key=lambda x: x[0])
+        for distance, asset_name in assets_with_distance[:10]:
+            print(f"  {asset_name}", file=sys.stderr)
+        if len(assets_with_distance) > 10:
+            print(f"  ... and {len(assets_with_distance) - 10} more", file=sys.stderr)
         sys.exit(1)
 
     print(f"Downloading {filename} from release {tag}...")
