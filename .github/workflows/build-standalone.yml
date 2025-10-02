@@ -59,7 +59,7 @@ jobs:
         run: |
           python3 pybs.py latest --python-version 3.13 --architecture x86_64_v2-unknown-linux-gnu --build-config freethreaded+pgo+lto --content-type full
           tar -xf cpython-*.tar.zst
-          tar -xzf python-standalone.tar.gz python
+          tar -czf python-standalone.tar.gz python
           go build main.go
           mv main caddy
       - name: Upload logs and report
