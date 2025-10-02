@@ -536,7 +536,7 @@ A Python worker designed for ASGI and WSGI apps.
 	})
 	caddycmd.RegisterCommand(caddycmd.Command{
 		Name:  "python-server",
-		Usage: "--server-type wsgi|asgi --app <module> [--domain <example.com>] [--listen <addr>] [--workers <count>] [--workers_runtime <runtime>] [--static-path <path>] [--static-route <route>] [--debug] [--access-logs]",
+		Usage: "--server-type wsgi|asgi --app <module> [--domain <example.com>] [--listen <addr>] [--workers <count>] [--workers-runtime <runtime>] [--static-path <path>] [--static-route <route>] [--debug] [--access-logs]",
 		Short: "Spins up a Python server",
 		Long: `
 A Python WSGI or ASGI server designed for apps and frameworks.
