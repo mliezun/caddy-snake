@@ -104,10 +104,11 @@ func run() int {
 	env := []string{}
 	ld_library_path := ""
 	for _, e := range os.Environ() {
-		if !strings.HasPrefix(e, "PYTHONHOME=") {
-			env = append(env, e)
-		} else if strings.HasPrefix(e, "LD_LIBRARY_PATH=") {
+		if strings.HasPrefix(e, "LD_LIBRARY_PATH=") {
 			ld_library_path = strings.Split(e, "=")[1]
+		}
+		if !strings.HasPrefix(e, "PYTHONHOME=") && !strings.HasPrefix(e, "LD_LIBRARY_PATH=") {
+			env = append(env, e)
 		}
 	}
 	env = append(env, fmt.Sprintf("PYTHONHOME=%s", filepath.Join(tmpDirPkg, "python")))
