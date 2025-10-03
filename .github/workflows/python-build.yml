@@ -32,7 +32,7 @@ jobs:
           cd cmd/cli/
           touch dummy.c
           python -m pip install cibuildwheel==2.22.0
-          export CIBW_BUILD=cp$(echo ${{ matrix.python-version }} | tr -d .)-manylinux_x86_64
+          export CIBW_BUILD=cp$(echo ${{ matrix.python-version }} | tr -d .)-manylinux_2_28_x86_64
           echo $CIBW_BUILD
           CIBW_BUILD_VERBOSITY=1 python -m cibuildwheel
       - name: Publish package
