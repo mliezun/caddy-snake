@@ -1,4 +1,5 @@
-FROM ubuntu:22.04
+# Keep ubuntu 20.04 to make sure we can build on older machines
+FROM ubuntu:20.04
 
 ARG GO_VERSION=1.25.0
 ARG PY_VERSION=3.13
