@@ -1,6 +1,6 @@
 [build-system]
-requires = ["setuptools>=61.0", "wheel"]
-build-backend = "setuptools.build_meta"
+requires = ["maturin>=1.0,<2.0"]
+build-backend = "maturin"
 
 [project]
 name = "caddysnake"
@@ -31,21 +31,13 @@ dependencies = [
 Homepage = "https://caddy-snake.readthedocs.io"
 Repository = "https://github.com/mliezun/caddy-snake.git"
 
-[tool.setuptools]
-packages = ["caddysnake"]
-include-package-data = true
-ext-modules = [
-    {name = "caddysnake.dummy", sources = ["dummy.c"]}
+[tool.maturin]
+python-source = "."
+module-name = "caddysnake"
+include = [
+    "caddysnake-cli",
+    "caddysnake_cli.py"
 ]
 
-[tool.setuptools.package-dir]
-caddysnake = "."
-
-[tool.setuptools.package-data]
-caddysnake = ["caddysnake-cli"]
-
 [project.scripts]
-caddysnake = "caddysnake.cli:main"
-
-[tool.cibuildwheel]
-before-all = "uname -a"
+caddysnake = "caddysnake_cli:main"

@@ -26,18 +26,19 @@ jobs:
         run: |
           docker build -f builder.Dockerfile --build-arg PY_VERSION=${{ matrix.python-version }} -t caddy-snake-builder .
           docker run --rm -v $(pwd):/output caddy-snake-builder
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ matrix.python-version }}
       - name: Build the CLI
         run: |
           mv caddy cmd/cli/caddysnake-cli
           cd cmd/cli/
-          touch dummy.c
-          python -m pip install cibuildwheel==2.22.0
-          export CIBW_BUILD=cp$(echo ${{ matrix.python-version }} | tr -d .)-manylinux_2_28_x86_64
-          echo $CIBW_BUILD
-          CIBW_BUILD_VERBOSITY=1 python -m cibuildwheel
+          python${{ matrix.python-version }} -m pip install maturin
+          python${{ matrix.python-version }} -m maturin build --release
       - name: Publish package
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
-          packages-dir: cmd/cli/wheelhouse
+          packages-dir: cmd/cli/target/wheels
           user: __token__
           password: ${{ secrets.PYPI_API_TOKEN }}

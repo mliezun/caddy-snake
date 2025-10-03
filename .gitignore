@@ -17,6 +17,8 @@ cmd/cli/*.egg-info
 cmd/cli/dist
 cmd/cli/caddysnake-cli
 cmd/cli/dummy.*
+cmd/cli/target
+cmd/cli/build
 
 
 # macOS

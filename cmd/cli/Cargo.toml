@@ -1,0 +1,11 @@
+[package]
+name = "caddysnake"
+version = "0.2.0"
+edition = "2021"
+
+[lib]
+name = "caddysnake"
+crate-type = ["cdylib"]
+
+[dependencies]
+pyo3 = { version = "0.26", features = ["extension-module"] }
