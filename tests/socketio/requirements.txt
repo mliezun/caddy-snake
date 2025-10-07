@@ -5,7 +5,7 @@ h11==0.14.0
 idna==3.7
 psutil==6.0.0
 python-engineio==4.9.1
-python-socketio==5.11.3
+python-socketio==5.14.0
 requests==2.32.3
 simple-websocket==1.0.0
 urllib3==2.2.2
