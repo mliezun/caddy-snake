@@ -14,7 +14,7 @@ jobs:
       fail-fast: false
       matrix:
         tool-name: ['django', 'django_channels', 'flask', 'fastapi', 'simple', 'simple_async', 'socketio']
-        python-version: ['3.10', '3.11', '3.12', '3.13', '3.13-nogil']
+        python-version: ['3.10', '3.11', '3.12', '3.13', '3.13-nogil', '3.14']
     env:
       GOEXPERIMENT: cgocheck2
     steps:
