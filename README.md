@@ -136,7 +136,7 @@ See how to setup [Hot Reloading](#hot-reloading)
 
 ## Use docker image
 
-There are docker images available with the following Python versions: `3.10`, `3.11`, `3.12`, `3.13`.
+There are docker images available with the following Python versions: `3.10`, `3.11`, `3.12`, `3.13` or `3.14`.
 
 Example usage:
 
