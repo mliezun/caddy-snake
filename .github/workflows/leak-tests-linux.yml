@@ -13,7 +13,7 @@
         strategy:
           fail-fast: false
           matrix:
-            tool-name: ['django', 'fastapi']
+            tool-name: ['django', 'socketio']
             python-version: ['3.13']
         env:
           GOEXPERIMENT: cgocheck2
