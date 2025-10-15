@@ -14,7 +14,7 @@
           fail-fast: false
           matrix:
             tool-name: ['django', 'fastapi']
-            python-version: ['3.12']
+            python-version: ['3.13']
         env:
           GOEXPERIMENT: cgocheck2
         steps:
