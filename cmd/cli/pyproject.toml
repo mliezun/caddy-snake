@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "caddysnake"
-version = "0.2.0"
+version = "0.2.1"
 description = "Python WSGI/ASGI server powered by Caddy"
 authors = [
     {name = "Miguel Liezun", email = "liezun.js@gmail.com"},
