@@ -3,8 +3,8 @@
 #include <stdio.h>
 #include <string.h>
 
-#if PY_MAJOR_VERSION != 3 || PY_MINOR_VERSION < 10 || PY_MINOR_VERSION > 13
-#error "This code requires Python 3.10, 3.11, 3.12 or 3.13"
+#if PY_MAJOR_VERSION != 3 || PY_MINOR_VERSION < 10 || PY_MINOR_VERSION > 14
+#error "This code requires Python 3.10, 3.11, 3.12, 3.13 or 3.14"
 #endif
 
 struct WsgiApp {

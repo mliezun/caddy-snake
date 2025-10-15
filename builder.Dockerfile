@@ -1,7 +1,7 @@
 FROM ubuntu:22.04
 
 ARG GO_VERSION=1.25.0
-ARG PY_VERSION=3.13
+ARG PY_VERSION=3.14
 
 RUN export DEBIAN_FRONTEND=noninteractive &&\
     apt-get update -yyqq &&\
