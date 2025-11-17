@@ -24,16 +24,7 @@
             with:
               version: latest
               platform: x64
-          - name: Set up Python ${{ matrix.python-version }}
-            working-directory: tests/${{ matrix.tool-name }}/
-            run: |
-              bash ../../scripts/setup-python-and-build.sh \
-                --python-version ${{ matrix.python-version }}
-              rm -rf venv
-              python${{ matrix.python-version }} -m venv venv
-              source venv/bin/activate
-              pip install -r requirements.txt
-          - name: Build the server
+          - name: Set up Python and build server ${{ matrix.python-version }}
             working-directory: tests/${{ matrix.tool-name }}/
             run: |
               export CC=clang
@@ -41,10 +32,14 @@
               export CGO_CFLAGS="-fsanitize=address"
               export XCADDY_GO_BUILD_FLAGS="-asan"
               bash ../../scripts/setup-python-and-build.sh \
-                --skip-python-setup \
-                --no-install-xcaddy \
+                --python-version ${{ matrix.python-version }} \
                 --build-caddy \
                 --caddy-snake-path ../..
+              rm -rf venv
+              python${{ matrix.python-version }} -m venv venv
+              source venv/bin/activate
+              pip install --upgrade pip setuptools wheel
+              pip install -r requirements.txt
           - name: Run leak integration tests
             working-directory: tests/${{ matrix.tool-name }}/
             run: |
