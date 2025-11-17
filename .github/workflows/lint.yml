@@ -16,10 +16,6 @@ jobs:
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
-        with:
-          go-version: '1.25'
-          cache: false
       - name: Install deps
         run: |
           sudo apt-get update -yyqq
