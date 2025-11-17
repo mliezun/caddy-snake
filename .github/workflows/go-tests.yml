@@ -41,6 +41,10 @@
               sudo apt-get install -yyqq python${{ matrix.python-version }}-dev python${{ matrix.python-version }}-venv
               if [ "${{ matrix.architecture }}" = "x86_64" ]; then
                 sudo mv /usr/lib/x86_64-linux-gnu/pkgconfig/python-${{ matrix.python-version }}-embed.pc /usr/lib/x86_64-linux-gnu/pkgconfig/python3-embed.pc
+              elif [ "${{ matrix.architecture }}" = "arm64" ]; then
+                if [ -f /usr/lib/aarch64-linux-gnu/pkgconfig/python-${{ matrix.python-version }}-embed.pc ]; then
+                  sudo mv /usr/lib/aarch64-linux-gnu/pkgconfig/python-${{ matrix.python-version }}-embed.pc /usr/lib/aarch64-linux-gnu/pkgconfig/python3-embed.pc
+                fi
               fi
           - name: Install global python dependencies
             run: sudo pip install requests
