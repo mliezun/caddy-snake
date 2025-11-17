@@ -92,12 +92,12 @@ def retry_with_backoff(func, *args, **kwargs):
             if is_rate_limit_error(e):
                 last_exception = e
                 retry_after = get_retry_after(e)
-                
+
                 if retry_after is not None:
                     wait_time = min(retry_after, MAX_BACKOFF)
                 else:
                     wait_time = min(backoff, MAX_BACKOFF)
-                
+
                 if attempt < MAX_RETRIES - 1:
                     print(
                         f"Rate limited. Retrying in {wait_time:.1f} seconds... "

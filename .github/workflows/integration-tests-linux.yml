@@ -37,6 +37,11 @@ jobs:
           export DEBIAN_FRONTEND=noninteractive
           sudo apt-get update -yyqq
           sudo apt-get install -yyqq gcc-aarch64-linux-gnu
+          # Enable multiarch to install ARM64 packages
+          sudo dpkg --add-architecture arm64
+          sudo apt-get update -yyqq
+          # Install ARM64 Python development packages
+          sudo apt-get install -yyqq python${{ matrix.python-version }}-dev:arm64 libpython${{ matrix.python-version }}-dev:arm64 || echo "ARM64 Python packages not available, will use cross-compilation workaround"
       - name: Set up Python ${{ matrix.python-version }}
         working-directory: tests/${{ matrix.tool-name }}/
         if: matrix.python-version != '3.13-nogil'
@@ -88,6 +93,21 @@ jobs:
             export GOOS=linux
             export CGO_ENABLED=1
             export CC=aarch64-linux-gnu-gcc
+            # Prevent pkg-config from finding x86_64 system Python headers
+            export PKG_CONFIG_PATH=""
+            export PKG_CONFIG_LIBDIR=""
+            # Use ARM64 Python headers if available via multiarch
+            if [ -d "/usr/include/aarch64-linux-gnu/python${{ matrix.python-version }}" ]; then
+              export CGO_CFLAGS="-I/usr/include/aarch64-linux-gnu/python${{ matrix.python-version }}"
+              export CGO_LDFLAGS="-L/usr/lib/aarch64-linux-gnu -lpython${{ matrix.python-version }}"
+            elif [ -d "/usr/lib/aarch64-linux-gnu/pkgconfig" ] && [ -f "/usr/lib/aarch64-linux-gnu/pkgconfig/python3-embed.pc" ]; then
+              # Use pkg-config from ARM64 location
+              export PKG_CONFIG_PATH="/usr/lib/aarch64-linux-gnu/pkgconfig"
+              export PKG_CONFIG_LIBDIR="/usr/lib/aarch64-linux-gnu/pkgconfig"
+            else
+              # Fallback: try to build without Python (will likely fail, but let's see the error)
+              echo "Warning: ARM64 Python headers not found, build may fail"
+            fi
           else
             export CGO_ENABLED=1
           fi
