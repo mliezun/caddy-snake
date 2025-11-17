@@ -32,6 +32,12 @@
             uses: docker/setup-qemu-action@v3
             with:
               platforms: arm64
+          - name: Install cross-compilation toolchain
+            if: matrix.architecture == 'arm64'
+            run: |
+              export DEBIAN_FRONTEND=noninteractive
+              sudo apt-get update -yyqq
+              sudo apt-get install -yyqq gcc-aarch64-linux-gnu
           - name: Set up Python ${{ matrix.python-version }}
             run: |
               export DEBIAN_FRONTEND=noninteractive
@@ -49,10 +55,26 @@
           - name: Install global python dependencies
             run: sudo pip install requests
           - name: Run module tests
-            run: go test -race -v .
+            run: |
+              if [ "${{ matrix.architecture }}" = "arm64" ]; then
+                export GOARCH=arm64
+                export GOOS=linux
+                export CGO_ENABLED=1
+                export CC=aarch64-linux-gnu-gcc
+              fi
+              go test -race -v .
           - name: Update coverage report
             uses: ncruces/go-coverage-report@v0
             continue-on-error: true
           - name: Build the server
-            run: CGO_ENABLED=1 xcaddy build --with github.com/mliezun/caddy-snake=.
+            run: |
+              if [ "${{ matrix.architecture }}" = "arm64" ]; then
+                export GOARCH=arm64
+                export GOOS=linux
+                export CGO_ENABLED=1
+                export CC=aarch64-linux-gnu-gcc
+              else
+                export CGO_ENABLED=1
+              fi
+              xcaddy build --with github.com/mliezun/caddy-snake=.
           
