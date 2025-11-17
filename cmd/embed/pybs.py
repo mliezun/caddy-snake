@@ -5,6 +5,7 @@ import json
 import urllib.request
 import urllib.error
 import os
+import time
 from pathlib import Path
 
 
@@ -30,6 +31,105 @@ def levenshtein_distance(s1: str, s2: str) -> int:
 
 
 GITHUB_API = "https://api.github.com/repos/astral-sh/python-build-standalone/releases"
+
+# Retry configuration
+MAX_RETRIES = 5
+INITIAL_BACKOFF = 1  # seconds
+MAX_BACKOFF = 60  # seconds
+
+
+def is_rate_limit_error(e: urllib.error.HTTPError) -> bool:
+    """Check if the error is a rate limit error."""
+    if e.code == 429:
+        return True
+    if e.code == 403:
+        # Check for rate limit in headers
+        headers = e.headers or {}
+        if "X-RateLimit-Remaining" in headers:
+            remaining = headers.get("X-RateLimit-Remaining", "1")
+            try:
+                if int(remaining) == 0:
+                    return True
+            except ValueError:
+                pass
+        # Check for rate limit message in response
+        if "rate limit" in str(e.reason).lower():
+            return True
+    return False
+
+
+def get_retry_after(e: urllib.error.HTTPError) -> int | None:
+    """Extract retry-after delay from rate limit error."""
+    headers = e.headers or {}
+    # Check Retry-After header
+    if "Retry-After" in headers:
+        try:
+            return int(headers["Retry-After"])
+        except ValueError:
+            pass
+    # Check X-RateLimit-Reset header
+    if "X-RateLimit-Reset" in headers:
+        try:
+            reset_time = int(headers["X-RateLimit-Reset"])
+            current_time = int(time.time())
+            delay = reset_time - current_time
+            if delay > 0:
+                return delay
+        except (ValueError, TypeError):
+            pass
+    return None
+
+
+def retry_with_backoff(func, *args, **kwargs):
+    """Execute a function with exponential backoff retry on rate limit errors."""
+    backoff = INITIAL_BACKOFF
+    last_exception = None
+    
+    for attempt in range(MAX_RETRIES):
+        try:
+            return func(*args, **kwargs)
+        except urllib.error.HTTPError as e:
+            if is_rate_limit_error(e):
+                last_exception = e
+                retry_after = get_retry_after(e)
+                
+                if retry_after is not None:
+                    wait_time = min(retry_after, MAX_BACKOFF)
+                else:
+                    wait_time = min(backoff, MAX_BACKOFF)
+                
+                if attempt < MAX_RETRIES - 1:
+                    print(
+                        f"Rate limited. Retrying in {wait_time:.1f} seconds... "
+                        f"(attempt {attempt + 1}/{MAX_RETRIES})",
+                        file=sys.stderr
+                    )
+                    time.sleep(wait_time)
+                    backoff *= 2  # Exponential backoff
+                else:
+                    break
+            else:
+                # Not a rate limit error, re-raise immediately
+                raise
+        except urllib.error.URLError as e:
+            # Network errors might be transient, retry with backoff
+            last_exception = e
+            if attempt < MAX_RETRIES - 1:
+                wait_time = min(backoff, MAX_BACKOFF)
+                print(
+                    f"Network error: {e.reason}. Retrying in {wait_time:.1f} seconds... "
+                    f"(attempt {attempt + 1}/{MAX_RETRIES})",
+                    file=sys.stderr
+                )
+                time.sleep(wait_time)
+                backoff *= 2
+            else:
+                break
+    
+    # If we get here, all retries failed
+    if last_exception:
+        raise last_exception
+    raise Exception("Failed after all retries")
 
 # Supported architectures
 ARCHITECTURES = {
@@ -80,15 +180,20 @@ WINDOWS_VARIANTS = {
 }
 
 
+def _fetch_release(url: str):
+    """Internal function to fetch release data (used with retry logic)."""
+    with urllib.request.urlopen(url) as response:
+        if response.status != 200:
+            raise urllib.error.HTTPError(
+                url, response.status, "HTTP Error", response.headers, None
+            )
+        return json.loads(response.read().decode("utf-8"))
+
+
 def get_release(tag: str | None):
     url = f"{GITHUB_API}/latest" if tag == "latest" else f"{GITHUB_API}/tags/{tag}"
     try:
-        with urllib.request.urlopen(url) as response:
-            if response.status != 200:
-                raise urllib.error.HTTPError(
-                    url, response.status, "HTTP Error", response.headers, None
-                )
-            return json.loads(response.read().decode("utf-8"))
+        return retry_with_backoff(_fetch_release, url)
     except urllib.error.HTTPError as e:
         print(f"HTTP Error {e.code}: {e.reason}", file=sys.stderr)
         sys.exit(1)
@@ -333,25 +438,40 @@ def select_asset(
     return None, None
 
 
+def _download_asset_chunk(url: str, dest_path: Path):
+    """Internal function to download asset (used with retry logic)."""
+    # Clean up any existing partial download before starting
+    if dest_path.exists():
+        dest_path.unlink()
+    
+    with urllib.request.urlopen(url) as response:
+        if response.status != 200:
+            raise urllib.error.HTTPError(
+                url, response.status, "HTTP Error", response.headers, None
+            )
+        with open(dest_path, "wb") as f:
+            while True:
+                chunk = response.read(8192)
+                if not chunk:
+                    break
+                f.write(chunk)
+
+
 def download_asset(url, filename, dest):
     dest_path = Path(dest) / filename
     try:
-        with urllib.request.urlopen(url) as response:
-            if response.status != 200:
-                raise urllib.error.HTTPError(
-                    url, response.status, "HTTP Error", response.headers, None
-                )
-            with open(dest_path, "wb") as f:
-                while True:
-                    chunk = response.read(8192)
-                    if not chunk:
-                        break
-                    f.write(chunk)
+        retry_with_backoff(_download_asset_chunk, url, dest_path)
     except urllib.error.HTTPError as e:
         print(f"HTTP Error {e.code}: {e.reason}", file=sys.stderr)
+        # Clean up partial download on error
+        if dest_path.exists():
+            dest_path.unlink()
         sys.exit(1)
     except urllib.error.URLError as e:
         print(f"URL Error: {e.reason}", file=sys.stderr)
+        # Clean up partial download on error
+        if dest_path.exists():
+            dest_path.unlink()
         sys.exit(1)
     return dest_path
 
