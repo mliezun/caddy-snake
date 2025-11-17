@@ -151,9 +151,10 @@ if [ "$SKIP_PYTHON_SETUP" = false ] && [ -n "$PYTHON_VERSION" ]; then
     $SUDO apt-get update -yyqq
     
     # If building caddy, we need gcc, build-essential, and pkg-config for CGO
+    # Also need libffi-dev for Python extensions like pydantic_core
     BUILD_PACKAGES=""
     if [ "$BUILD_CADDY" = true ]; then
-      BUILD_PACKAGES="gcc build-essential pkg-config"
+      BUILD_PACKAGES="gcc build-essential pkg-config libffi-dev"
     fi
     
     # Default extra packages if not explicitly set, or if explicitly set to non-empty
@@ -354,12 +355,27 @@ if [ "$BUILD_CADDY" = true ]; then
     export PKG_CONFIG_PATH="${PKG_CONFIG_DIR}:${PKG_CONFIG_PATH}"
   fi
   
+  # Preserve CGO environment variables if they're set (e.g., for ASan builds)
+  BUILD_ENV="CGO_ENABLED=1"
+  if [ -n "$PKG_CONFIG_PATH" ]; then
+    BUILD_ENV="${BUILD_ENV} PKG_CONFIG_PATH=${PKG_CONFIG_PATH}"
+  fi
+  if [ -n "$CGO_CFLAGS" ]; then
+    BUILD_ENV="${BUILD_ENV} CGO_CFLAGS=${CGO_CFLAGS}"
+  fi
+  if [ -n "$CGO_LDFLAGS" ]; then
+    BUILD_ENV="${BUILD_ENV} CGO_LDFLAGS=${CGO_LDFLAGS}"
+  fi
+  if [ -n "$XCADDY_GO_BUILD_FLAGS" ]; then
+    BUILD_ENV="${BUILD_ENV} XCADDY_GO_BUILD_FLAGS=${XCADDY_GO_BUILD_FLAGS}"
+  fi
+  
   if [ -z "$CADDY_SNAKE_PATH" ] || [ "$CADDY_SNAKE_PATH" = "." ]; then
     # Download from GitHub
-    CGO_ENABLED=1 PKG_CONFIG_PATH="${PKG_CONFIG_PATH}" $XCADDY_BIN build --with github.com/mliezun/caddy-snake
+    eval "${BUILD_ENV} $XCADDY_BIN build --with github.com/mliezun/caddy-snake"
   else
     # Use local path
-    CGO_ENABLED=1 PKG_CONFIG_PATH="${PKG_CONFIG_PATH}" $XCADDY_BIN build --with github.com/mliezun/caddy-snake=${CADDY_SNAKE_PATH}
+    eval "${BUILD_ENV} $XCADDY_BIN build --with github.com/mliezun/caddy-snake=${CADDY_SNAKE_PATH}"
   fi
   
   # Move caddy binary to output path if specified
