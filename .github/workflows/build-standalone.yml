@@ -66,16 +66,30 @@ jobs:
             # Install a minimal Python for running pybs.py script
             sudo apt-get install -yyqq python3 python3-pip
           fi
-      - name: Build the server
-        if: matrix.architecture == 'x86_64_v2-unknown-linux-gnu'
-        working-directory: cmd/embed
-        run: CGO_ENABLED=1 xcaddy build --with github.com/mliezun/caddy-snake=../..
       - name: Retrive python build standalone
         if: matrix.python-version != '3.13-nogil'
         working-directory: cmd/embed
         run: |
           python3 pybs.py latest --python-version ${{ matrix.python-version }} --architecture ${{ matrix.architecture }} --build-config pgo+lto --content-type install_only_stripped
           mv cpython-*.tar.gz python-standalone.tar.gz
+          tar -xzf python-standalone.tar.gz
+      - name: Build the server
+        working-directory: cmd/embed
+        run: |
+          if [ "${{ matrix.architecture }}" = "aarch64-unknown-linux-gnu" ]; then
+            export GOARCH=arm64
+            export GOOS=linux
+            export CGO_ENABLED=1
+            export CC=aarch64-linux-gnu-gcc
+            export PKG_CONFIG_PATH=$(pwd)/python/lib/pkgconfig
+          else
+            export CGO_ENABLED=1
+          fi
+          xcaddy build --with github.com/mliezun/caddy-snake=../..
+      - name: Build embedded binary
+        if: matrix.python-version != '3.13-nogil'
+        working-directory: cmd/embed
+        run: |
           if [ "${{ matrix.architecture }}" = "aarch64-unknown-linux-gnu" ]; then
             export GOARCH=arm64
             export GOOS=linux
@@ -95,6 +109,24 @@ jobs:
           rm -rf python
           mv install python
           tar -czf python-standalone.tar.gz python
+      - name: Build the server (nogil)
+        if: matrix.python-version == '3.13-nogil'
+        working-directory: cmd/embed
+        run: |
+          if [ "${{ matrix.architecture }}" = "aarch64-unknown-linux-gnu" ]; then
+            export GOARCH=arm64
+            export GOOS=linux
+            export CGO_ENABLED=1
+            export CC=aarch64-linux-gnu-gcc
+            export PKG_CONFIG_PATH=$(pwd)/python/lib/pkgconfig
+          else
+            export CGO_ENABLED=1
+          fi
+          xcaddy build --with github.com/mliezun/caddy-snake=../..
+      - name: Build embedded binary (nogil)
+        if: matrix.python-version == '3.13-nogil'
+        working-directory: cmd/embed
+        run: |
           if [ "${{ matrix.architecture }}" = "aarch64-unknown-linux-gnu" ]; then
             export GOARCH=arm64
             export GOOS=linux
