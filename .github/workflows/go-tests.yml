@@ -16,6 +16,7 @@
           fail-fast: false
           matrix:
             python-version: ['3.10', '3.11', '3.12', '3.13', '3.14']
+            architecture: ['x86_64', 'arm64']
         env:
           GOEXPERIMENT: cgocheck2
         steps:
@@ -26,6 +27,11 @@
               cache: false
           - name: Install Xcaddy
             run: go install github.com/caddyserver/xcaddy/cmd/xcaddy@latest
+          - name: Set up QEMU
+            if: matrix.architecture == 'arm64'
+            uses: docker/setup-qemu-action@v3
+            with:
+              platforms: arm64
           - name: Set up Python ${{ matrix.python-version }}
             run: |
               export DEBIAN_FRONTEND=noninteractive
@@ -33,7 +39,11 @@
               sudo apt-get install -yyqq software-properties-common
               sudo add-apt-repository -y ppa:deadsnakes/ppa
               sudo apt-get install -yyqq python${{ matrix.python-version }}-dev python${{ matrix.python-version }}-venv
-              sudo mv /usr/lib/x86_64-linux-gnu/pkgconfig/python-${{ matrix.python-version }}-embed.pc /usr/lib/x86_64-linux-gnu/pkgconfig/python3-embed.pc
+              if [ "${{ matrix.architecture }}" = "x86_64" ]; then
+                sudo mv /usr/lib/x86_64-linux-gnu/pkgconfig/python-${{ matrix.python-version }}-embed.pc /usr/lib/x86_64-linux-gnu/pkgconfig/python3-embed.pc
+              else
+                sudo mv /usr/lib/aarch64-linux-gnu/pkgconfig/python-${{ matrix.python-version }}-embed.pc /usr/lib/aarch64-linux-gnu/pkgconfig/python3-embed.pc
+              fi
           - name: Install global python dependencies
             run: sudo pip install requests
           - name: Run module tests

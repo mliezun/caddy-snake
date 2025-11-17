@@ -14,6 +14,7 @@ jobs:
       fail-fast: false
       matrix:
         python-version: ['3.10', '3.11', '3.12', '3.13', '3.13-nogil', '3.14']
+        architecture: ['x86_64_v2-unknown-linux-gnu', 'aarch64-unknown-linux-gnu']
     env:
       GOEXPERIMENT: cgocheck2
     steps:
@@ -22,6 +23,17 @@ jobs:
         with:
           go-version: '1.25'
           cache: false
+      - name: Set up QEMU
+        if: matrix.architecture == 'aarch64-unknown-linux-gnu'
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+      - name: Install cross-compilation toolchain
+        if: matrix.architecture == 'aarch64-unknown-linux-gnu'
+        run: |
+          export DEBIAN_FRONTEND=noninteractive
+          sudo apt-get update -yyqq
+          sudo apt-get install -yyqq gcc-aarch64-linux-gnu
       - name: Install Xcaddy
         run: go install github.com/caddyserver/xcaddy/cmd/xcaddy@latest
       - name: Set up Python ${{ matrix.python-version }}
@@ -30,55 +42,82 @@ jobs:
           export DEBIAN_FRONTEND=noninteractive
           sudo apt-get update -yyqq
           sudo apt-get install -yyqq software-properties-common valgrind time
-          sudo add-apt-repository -y ppa:deadsnakes/ppa
-          sudo apt-get install -yyqq python${{ matrix.python-version }}-dev python${{ matrix.python-version }}-venv
-          sudo mv /usr/lib/x86_64-linux-gnu/pkgconfig/python-${{ matrix.python-version }}-embed.pc /usr/lib/x86_64-linux-gnu/pkgconfig/python3-embed.pc
+          if [ "${{ matrix.architecture }}" = "x86_64_v2-unknown-linux-gnu" ]; then
+            sudo add-apt-repository -y ppa:deadsnakes/ppa
+            sudo apt-get install -yyqq python${{ matrix.python-version }}-dev python${{ matrix.python-version }}-venv
+            sudo mv /usr/lib/x86_64-linux-gnu/pkgconfig/python-${{ matrix.python-version }}-embed.pc /usr/lib/x86_64-linux-gnu/pkgconfig/python3-embed.pc
+          else
+            # For ARM64, we'll use the embedded Python from the standalone build
+            # Install a minimal Python for running pybs.py script
+            sudo apt-get install -yyqq python3 python3-pip
+          fi
       - name: Set up Python (nogil)
         if: matrix.python-version == '3.13-nogil'
         run: |
           export DEBIAN_FRONTEND=noninteractive
           sudo apt-get update -yyqq
           sudo apt-get install -yyqq software-properties-common valgrind gcc build-essential
-          sudo add-apt-repository -y ppa:deadsnakes/ppa
-          sudo apt-get install -yyqq python${{ matrix.python-version }} python3.13-dev
-          sudo mv /usr/lib/x86_64-linux-gnu/pkgconfig/python-${{ matrix.python-version }}-embed.pc /usr/lib/x86_64-linux-gnu/pkgconfig/python3-embed.pc
+          if [ "${{ matrix.architecture }}" = "x86_64_v2-unknown-linux-gnu" ]; then
+            sudo add-apt-repository -y ppa:deadsnakes/ppa
+            sudo apt-get install -yyqq python${{ matrix.python-version }} python3.13-dev
+            sudo mv /usr/lib/x86_64-linux-gnu/pkgconfig/python-${{ matrix.python-version }}-embed.pc /usr/lib/x86_64-linux-gnu/pkgconfig/python3-embed.pc
+          else
+            # For ARM64, we'll use the embedded Python from the standalone build
+            # Install a minimal Python for running pybs.py script
+            sudo apt-get install -yyqq python3 python3-pip
+          fi
       - name: Build the server
+        if: matrix.architecture == 'x86_64_v2-unknown-linux-gnu'
         working-directory: cmd/embed
         run: CGO_ENABLED=1 xcaddy build --with github.com/mliezun/caddy-snake=../..
       - name: Retrive python build standalone
         if: matrix.python-version != '3.13-nogil'
         working-directory: cmd/embed
         run: |
-          python3 pybs.py latest --python-version ${{ matrix.python-version }} --architecture x86_64_v2-unknown-linux-gnu --build-config pgo+lto --content-type install_only_stripped
+          python3 pybs.py latest --python-version ${{ matrix.python-version }} --architecture ${{ matrix.architecture }} --build-config pgo+lto --content-type install_only_stripped
           mv cpython-*.tar.gz python-standalone.tar.gz
+          if [ "${{ matrix.architecture }}" = "aarch64-unknown-linux-gnu" ]; then
+            export GOARCH=arm64
+            export GOOS=linux
+            export CGO_ENABLED=1
+            export CC=aarch64-linux-gnu-gcc
+            export PKG_CONFIG_PATH=$(pwd)/python/lib/pkgconfig
+          fi
           go build main.go
           mv main caddy
       - name: Retrive python build standalone (nogil)
         if: matrix.python-version == '3.13-nogil'
         working-directory: cmd/embed
         run: |
-          python3 pybs.py latest --python-version 3.13 --architecture x86_64_v2-unknown-linux-gnu --build-config freethreaded+pgo+lto --content-type full
+          python3 pybs.py latest --python-version 3.13 --architecture ${{ matrix.architecture }} --build-config freethreaded+pgo+lto --content-type full
           tar -xf cpython-*.tar.zst
           mv python/install .
           rm -rf python
           mv install python
           tar -czf python-standalone.tar.gz python
+          if [ "${{ matrix.architecture }}" = "aarch64-unknown-linux-gnu" ]; then
+            export GOARCH=arm64
+            export GOOS=linux
+            export CGO_ENABLED=1
+            export CC=aarch64-linux-gnu-gcc
+            export PKG_CONFIG_PATH=$(pwd)/python/lib/pkgconfig
+          fi
           go build main.go
           mv main caddy
       - name: Upload caddy standalone
         uses: actions/upload-artifact@v4
         with:
-          name: caddy-standalone-${{ matrix.python-version }}-x86_64_v2-unknown-linux-gnu
+          name: caddy-standalone-${{ matrix.python-version }}-${{ matrix.architecture }}
           path: |
             cmd/embed/caddy
       - name: Package caddy standalone
         if: github.event_name == 'release'
         run: |
-          tar -czf caddy-standalone-${{ matrix.python-version }}-x86_64_v2-unknown-linux-gnu.tar.gz cmd/embed/caddy
+          tar -czf caddy-standalone-${{ matrix.python-version }}-${{ matrix.architecture }}.tar.gz cmd/embed/caddy
       - name: Upload to release
         if: github.event_name == 'release'
         run: |
-          gh release upload ${{ github.event.release.tag_name }} caddy-standalone-${{ matrix.python-version }}-x86_64_v2-unknown-linux-gnu.tar.gz --repo ${{ github.repository }} --clobber
+          gh release upload ${{ github.event.release.tag_name }} caddy-standalone-${{ matrix.python-version }}-${{ matrix.architecture }}.tar.gz --repo ${{ github.repository }} --clobber
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
   
