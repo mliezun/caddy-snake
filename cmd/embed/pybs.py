@@ -102,7 +102,7 @@ def retry_with_backoff(func, *args, **kwargs):
                     print(
                         f"Rate limited. Retrying in {wait_time:.1f} seconds... "
                         f"(attempt {attempt + 1}/{MAX_RETRIES})",
-                        file=sys.stderr
+                        file=sys.stderr,
                     )
                     time.sleep(wait_time)
                     backoff *= 2  # Exponential backoff
@@ -119,17 +119,18 @@ def retry_with_backoff(func, *args, **kwargs):
                 print(
                     f"Network error: {e.reason}. Retrying in {wait_time:.1f} seconds... "
                     f"(attempt {attempt + 1}/{MAX_RETRIES})",
-                    file=sys.stderr
+                    file=sys.stderr,
                 )
                 time.sleep(wait_time)
                 backoff *= 2
             else:
                 break
-    
+
     # If we get here, all retries failed
     if last_exception:
         raise last_exception
     raise Exception("Failed after all retries")
+
 
 # Supported architectures
 ARCHITECTURES = {
@@ -443,7 +444,7 @@ def _download_asset_chunk(url: str, dest_path: Path):
     # Clean up any existing partial download before starting
     if dest_path.exists():
         dest_path.unlink()
-    
+
     with urllib.request.urlopen(url) as response:
         if response.status != 200:
             raise urllib.error.HTTPError(
