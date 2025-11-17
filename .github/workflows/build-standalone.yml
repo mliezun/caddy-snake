@@ -114,6 +114,38 @@ jobs:
           rm -rf python
           mv install python
           tar -czf python-standalone.tar.gz python
+      - name: Setup pkg-config for nogil (ARM64)
+        if: matrix.python-version == '3.13-nogil' && matrix.architecture == 'aarch64-unknown-linux-gnu'
+        working-directory: cmd/embed
+        run: |
+          # Ensure pkgconfig directory exists
+          mkdir -p python/lib/pkgconfig
+          # Check if python3-embed.pc exists, if not create it
+          if [ ! -f python/lib/pkgconfig/python3-embed.pc ]; then
+            # Try to find existing pkg-config file in the extracted archive
+            EXISTING_PC=$(find python -name "python3-embed.pc" -o -name "python3.13-embed.pc" | head -1)
+            if [ -n "$EXISTING_PC" ]; then
+              cp "$EXISTING_PC" python/lib/pkgconfig/python3-embed.pc
+            else
+              # Create the pkg-config file
+              cat > python/lib/pkgconfig/python3-embed.pc << 'EOF'
+          prefix=/python
+          exec_prefix=${prefix}
+          libdir=${exec_prefix}/lib
+          includedir=${prefix}/include/python3.13
+
+          Name: Python
+          Description: Python library
+          Requires:
+          Version: 3.13
+          Libs.private: -lpthread -ldl -lutil -lm
+          Libs: -L${libdir} -lpython3.13
+          Cflags: -I${includedir} -I${includedir}
+          EOF
+              # Update the prefix to use absolute path
+              sed -i "s|prefix=/python|prefix=$(pwd)/python|g" python/lib/pkgconfig/python3-embed.pc
+            fi
+          fi
       - name: Build the server (nogil)
         if: matrix.python-version == '3.13-nogil'
         working-directory: cmd/embed
