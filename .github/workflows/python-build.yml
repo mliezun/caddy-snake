@@ -18,16 +18,20 @@ jobs:
       GOEXPERIMENT: cgocheck2
     steps:
       - uses: actions/checkout@v4
-      # Use builder.Dockerfile from the root of the repo
-      # to build caddy with the caddy-snake module.
-      # We need to setup docker and then use the following commands to build
-      # docker build -f builder.Dockerfile --build-arg PY_VERSION=3.11 -t caddy-snake .
-      # docker run --rm -v $(pwd):/output caddy-snake
+      - name: Choose architecture
+        id: choose-arch
+        run: |
+          if [ "${{ matrix.os }}" == "ubuntu-22.04-arm" ]; then
+            DOCKER_PLATFORM=linux/arm64
+          else
+            DOCKER_PLATFORM=linux/amd64
+          fi
+          echo "DOCKER_PLATFORM=${DOCKER_PLATFORM}" >> $GITHUB_OUTPUT
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@f95db51fddba0c2d1ec667646a06c2ce06100226
       - name: Build Caddy with caddy-snake module
         run: |
-          docker build -f builder.Dockerfile --build-arg PY_VERSION=${{ matrix.python-version }} -t caddy-snake-builder .
+          docker build -f builder.Dockerfile --platform ${{ steps.choose-arch.outputs.DOCKER_PLATFORM }} --build-arg PY_VERSION=${{ matrix.python-version }} -t caddy-snake-builder .
           docker run --rm -v $(pwd):/output caddy-snake-builder
       - name: Setup Python
         uses: actions/setup-python@v4
