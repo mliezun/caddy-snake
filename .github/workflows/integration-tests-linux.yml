@@ -83,6 +83,6 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: caddy-integration-tests-logs-${{ matrix.tool-name }}-${{ matrix.python-version }}
+          name: caddy-integration-tests-logs-${{ matrix.tool-name }}-${{ matrix.python-version }}-${{ matrix.os }}
           path: |
             tests/${{ matrix.tool-name }}/caddy.log
