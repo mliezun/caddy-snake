@@ -179,46 +179,31 @@ if [ "$SKIP_PYTHON_SETUP" = false ] && [ -n "$PYTHON_VERSION" ]; then
     PC_FILE=""
     TARGET_PC="${PKG_CONFIG_DIR}/python3-embed.pc"
     
-    # Check if target already exists
+    # Check if target already exists and is correct
     if [ -f "$TARGET_PC" ]; then
       echo "pkgconfig file already exists at $TARGET_PC"
     else
       # Try to find source pkgconfig file
       for pc_path in "${PKG_CONFIG_DIR}/python-${PYTHON_VERSION}-embed.pc" \
-                     "${PKG_CONFIG_DIR}/python3-embed.pc" \
                      "/usr/lib/python${PYTHON_VERSION}/config-${PYTHON_VERSION}/python-embed.pc" \
                      "/usr/lib/python${PYTHON_VERSION}/config-${PYTHON_VERSION}*/python-embed.pc"; do
         # Handle glob patterns
         for found_file in $pc_path; do
-          if [ -f "$found_file" ]; then
-            # Check if this is the same file as target (using realpath if available, or simple comparison)
-            if [ "$found_file" = "$TARGET_PC" ]; then
-              echo "Source and destination are the same file, skipping copy"
-              PC_FILE=""
-              break 2
-            else
+          if [ -f "$found_file" ] && [ "$found_file" != "$pc_path" ] || [ -f "$pc_path" ]; then
+            if [ -f "$found_file" ]; then
               PC_FILE="$found_file"
-              break 2
+            elif [ -f "$pc_path" ]; then
+              PC_FILE="$pc_path"
             fi
+            break 2
           fi
         done
       done
       
       if [ -n "$PC_FILE" ] && [ -f "$PC_FILE" ]; then
-        # Double-check source and destination are different (handle symlinks)
+        # Check if source and destination are the same file
         if [ "$PC_FILE" != "$TARGET_PC" ]; then
-          # Use realpath if available to check if they're the same file
-          if command -v realpath >/dev/null 2>&1; then
-            REAL_SOURCE=$(realpath "$PC_FILE" 2>/dev/null || echo "$PC_FILE")
-            REAL_TARGET=$(realpath "$TARGET_PC" 2>/dev/null || echo "$TARGET_PC")
-            if [ "$REAL_SOURCE" = "$REAL_TARGET" ]; then
-              echo "Source and destination are the same file (via symlink), skipping copy"
-            else
-              $SUDO cp "$PC_FILE" "$TARGET_PC"
-            fi
-          else
-            $SUDO cp "$PC_FILE" "$TARGET_PC"
-          fi
+          $SUDO cp "$PC_FILE" "$TARGET_PC"
         else
           echo "Source and destination are the same file, skipping copy"
         fi
