@@ -95,26 +95,8 @@ while [[ $# -gt 0 ]]; do
 done
 
 # Set working directory if specified
-ORIGINAL_DIR=$(pwd)
 if [ -n "$WORKING_DIR" ]; then
   cd "$WORKING_DIR"
-fi
-
-# Convert CADDY_SNAKE_PATH to absolute path if it's relative
-if [ -n "$CADDY_SNAKE_PATH" ] && [ "$CADDY_SNAKE_PATH" != "." ]; then
-  if [ "${CADDY_SNAKE_PATH#/}" = "$CADDY_SNAKE_PATH" ]; then
-    # Path is relative, convert to absolute from original directory
-    CADDY_SNAKE_PATH="$ORIGINAL_DIR/$CADDY_SNAKE_PATH"
-  fi
-  # Clean up the path (resolve .. and .)
-  if [ -d "$CADDY_SNAKE_PATH" ]; then
-    CADDY_SNAKE_PATH=$(cd "$CADDY_SNAKE_PATH" && pwd)
-  elif [ -f "$CADDY_SNAKE_PATH" ]; then
-    CADDY_SNAKE_PATH=$(cd "$(dirname "$CADDY_SNAKE_PATH")" && pwd)/$(basename "$CADDY_SNAKE_PATH")
-  else
-    # Path doesn't exist yet, just resolve parent and append basename
-    CADDY_SNAKE_PATH=$(cd "$(dirname "$CADDY_SNAKE_PATH")" 2>/dev/null && pwd)/$(basename "$CADDY_SNAKE_PATH") || echo "$CADDY_SNAKE_PATH"
-  fi
 fi
 
 # Detect if this is a nogil version
@@ -396,36 +378,27 @@ if [ "$BUILD_CADDY" = true ]; then
     eval "${BUILD_ENV} $XCADDY_BIN build --with github.com/mliezun/caddy-snake=${CADDY_SNAKE_PATH}"
   fi
   
-  # Find and move caddy binary
-  CADDY_FOUND=""
-  # Try common locations where xcaddy builds caddy
-  for caddy_path in "/tmp/caddy" \
-                    "./caddy" \
-                    "/root/go/bin/caddy" \
-                    "$HOME/go/bin/caddy" \
-                    "$(pwd)/caddy"; do
-    if [ -f "$caddy_path" ]; then
-      # Check if it's actually a binary (not a script or old binary)
-      if file "$caddy_path" | grep -qE "(ELF|executable|binary)"; then
-        CADDY_FOUND="$caddy_path"
-        break
-      fi
-    fi
-  done
-  
-  # If not found in common locations, search for it
-  if [ -z "$CADDY_FOUND" ]; then
-    for caddy_path in $(find /tmp /root "$(pwd)" -maxdepth 3 -name "caddy" -type f 2>/dev/null); do
-      if file "$caddy_path" | grep -qE "(ELF|executable|binary)"; then
+  # Move caddy binary to output path if specified
+  if [ -n "$OUTPUT_CADDY_PATH" ]; then
+    CADDY_FOUND=""
+    # Try common locations where xcaddy builds caddy
+    for caddy_path in "./caddy" \
+                      "/root/go/bin/caddy" \
+                      "$HOME/go/bin/caddy" \
+                      "$(pwd)/caddy"; do
+      if [ -f "$caddy_path" ]; then
         CADDY_FOUND="$caddy_path"
         break
       fi
     done
-  fi
-  
-  if [ -n "$CADDY_FOUND" ] && [ -f "$CADDY_FOUND" ]; then
-    if [ -n "$OUTPUT_CADDY_PATH" ]; then
-      # Move to specified output path
+    
+    # If not found in common locations, search for it
+    if [ -z "$CADDY_FOUND" ]; then
+      CADDY_FOUND=$(find /root /tmp "$(pwd)" -maxdepth 3 -name "caddy" -type f 2>/dev/null | head -1)
+    fi
+    
+    if [ -n "$CADDY_FOUND" ] && [ -f "$CADDY_FOUND" ]; then
+      # Create parent directory if it doesn't exist
       OUTPUT_DIR=$(dirname "$OUTPUT_CADDY_PATH")
       if [ ! -d "$OUTPUT_DIR" ]; then
         $SUDO mkdir -p "$OUTPUT_DIR"
@@ -434,21 +407,7 @@ if [ "$BUILD_CADDY" = true ]; then
       $SUDO chmod +x "$OUTPUT_CADDY_PATH"
       echo "Caddy binary moved to: $OUTPUT_CADDY_PATH"
     else
-      # Move to current directory
-      if [ "$CADDY_FOUND" != "./caddy" ] && [ "$CADDY_FOUND" != "$(pwd)/caddy" ]; then
-        # Remove old binary if it exists
-        rm -f "./caddy"
-        mv "$CADDY_FOUND" "./caddy"
-        chmod +x "./caddy"
-        echo "Caddy binary moved to: ./caddy"
-      else
-        chmod +x "./caddy"
-        echo "Caddy binary is at: ./caddy"
-      fi
-    fi
-  else
-    echo "Warning: Could not find caddy binary"
-    if [ -n "$OUTPUT_CADDY_PATH" ]; then
+      echo "Warning: Could not find caddy binary to move to $OUTPUT_CADDY_PATH"
       exit 1
     fi
   fi
