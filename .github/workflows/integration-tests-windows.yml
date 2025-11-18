@@ -14,7 +14,7 @@
           fail-fast: false
           matrix:
             tool-name: ['simple', 'simple_async']
-            python-version: ['3.13', '3.14']
+            python-version: ['3.14']
         env:
           GOEXPERIMENT: cgocheck2
         steps:
