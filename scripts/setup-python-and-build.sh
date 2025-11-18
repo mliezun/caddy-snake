@@ -139,12 +139,8 @@ if [ "$SKIP_PYTHON_SETUP" = false ] && [ -n "$PYTHON_VERSION" ]; then
     $SUDO apt-get install -yyqq $BASE_PACKAGES valgrind gcc build-essential $EXTRA_PACKAGES
     $SUDO add-apt-repository -y ppa:deadsnakes/ppa
     $SUDO apt-get install -yyqq python${PYTHON_VERSION} python3.13-dev
-    SOURCE_PC="${PKG_CONFIG_DIR}/python-${PYTHON_VERSION}-embed.pc"
-    TARGET_PC="${PKG_CONFIG_DIR}/python3-embed.pc"
-    if [ -f "$SOURCE_PC" ] && [ "$SOURCE_PC" != "$TARGET_PC" ]; then
-      $SUDO mv "$SOURCE_PC" "$TARGET_PC"
-    elif [ -f "$TARGET_PC" ]; then
-      echo "pkgconfig file already exists at $TARGET_PC"
+    if [ -f "${PKG_CONFIG_DIR}/python-${PYTHON_VERSION}-embed.pc" ]; then
+      $SUDO mv "${PKG_CONFIG_DIR}/python-${PYTHON_VERSION}-embed.pc" "${PKG_CONFIG_DIR}/python3-embed.pc"
     fi
   else
     # Standard Python setup
@@ -177,49 +173,36 @@ if [ "$SKIP_PYTHON_SETUP" = false ] && [ -n "$PYTHON_VERSION" ]; then
     $SUDO mkdir -p "${PKG_CONFIG_DIR}"
     # Try to find and copy the pkgconfig file
     PC_FILE=""
-    TARGET_PC="${PKG_CONFIG_DIR}/python3-embed.pc"
-    
-    # Check if target already exists and is correct
-    if [ -f "$TARGET_PC" ]; then
-      echo "pkgconfig file already exists at $TARGET_PC"
-    else
-      # Try to find source pkgconfig file
-      for pc_path in "${PKG_CONFIG_DIR}/python-${PYTHON_VERSION}-embed.pc" \
-                     "/usr/lib/python${PYTHON_VERSION}/config-${PYTHON_VERSION}/python-embed.pc" \
-                     "/usr/lib/python${PYTHON_VERSION}/config-${PYTHON_VERSION}*/python-embed.pc"; do
-        # Handle glob patterns
-        for found_file in $pc_path; do
-          if [ -f "$found_file" ] && [ "$found_file" != "$pc_path" ] || [ -f "$pc_path" ]; then
-            if [ -f "$found_file" ]; then
-              PC_FILE="$found_file"
-            elif [ -f "$pc_path" ]; then
-              PC_FILE="$pc_path"
-            fi
-            break 2
+    for pc_path in "${PKG_CONFIG_DIR}/python-${PYTHON_VERSION}-embed.pc" \
+                   "/usr/lib/python${PYTHON_VERSION}/config-${PYTHON_VERSION}/python-embed.pc" \
+                   "/usr/lib/python${PYTHON_VERSION}/config-${PYTHON_VERSION}*/python-embed.pc"; do
+      # Handle glob patterns
+      for found_file in $pc_path; do
+        if [ -f "$found_file" ] && [ "$found_file" != "$pc_path" ] || [ -f "$pc_path" ]; then
+          if [ -f "$found_file" ]; then
+            PC_FILE="$found_file"
+          elif [ -f "$pc_path" ]; then
+            PC_FILE="$pc_path"
           fi
-        done
-      done
-      
-      if [ -n "$PC_FILE" ] && [ -f "$PC_FILE" ]; then
-        # Check if source and destination are the same file
-        if [ "$PC_FILE" != "$TARGET_PC" ]; then
-          $SUDO cp "$PC_FILE" "$TARGET_PC"
-        else
-          echo "Source and destination are the same file, skipping copy"
+          break 2
         fi
-      else
-        # Create pkgconfig file manually using python-config
-        PYTHON_BIN="/usr/bin/python${PYTHON_VERSION}"
-        if [ -f "$PYTHON_BIN" ]; then
-          PREFIX=$($PYTHON_BIN -c "import sys; print(sys.prefix)" 2>/dev/null || echo "/usr")
-          VERSION=$($PYTHON_BIN -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')" 2>/dev/null || echo "${PYTHON_VERSION}")
-          LIBDIR="${PREFIX}/lib"
-          INCLUDEDIR="${PREFIX}/include/python${VERSION}"
-          # Try to find actual lib directory
-          if [ -d "${PREFIX}/lib/python${VERSION}/config-${VERSION}" ]; then
-            LIBDIR="${PREFIX}/lib/python${VERSION}/config-${VERSION}"
-          fi
-          $SUDO sh -c "cat > ${PKG_CONFIG_DIR}/python3-embed.pc << 'EOF'
+      done
+    done
+    if [ -n "$PC_FILE" ] && [ -f "$PC_FILE" ]; then
+      $SUDO cp "$PC_FILE" "${PKG_CONFIG_DIR}/python3-embed.pc"
+    else
+      # Create pkgconfig file manually using python-config
+      PYTHON_BIN="/usr/bin/python${PYTHON_VERSION}"
+      if [ -f "$PYTHON_BIN" ]; then
+        PREFIX=$($PYTHON_BIN -c "import sys; print(sys.prefix)" 2>/dev/null || echo "/usr")
+        VERSION=$($PYTHON_BIN -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')" 2>/dev/null || echo "${PYTHON_VERSION}")
+        LIBDIR="${PREFIX}/lib"
+        INCLUDEDIR="${PREFIX}/include/python${VERSION}"
+        # Try to find actual lib directory
+        if [ -d "${PREFIX}/lib/python${VERSION}/config-${VERSION}" ]; then
+          LIBDIR="${PREFIX}/lib/python${VERSION}/config-${VERSION}"
+        fi
+        $SUDO sh -c "cat > ${PKG_CONFIG_DIR}/python3-embed.pc << 'EOF'
 prefix=${PREFIX}
 exec_prefix=\${prefix}
 libdir=\${prefix}/lib
@@ -231,7 +214,6 @@ Version: ${VERSION}
 Libs: -L\${libdir} -lpython${VERSION}
 Cflags: -I${INCLUDEDIR}
 EOF"
-        fi
       fi
     fi
     # Set PKG_CONFIG_PATH so pkg-config can find the file
