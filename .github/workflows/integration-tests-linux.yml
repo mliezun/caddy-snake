@@ -19,36 +19,38 @@ jobs:
       GOEXPERIMENT: cgocheck2
     steps:
       - uses: actions/checkout@v3
-      - name: Set up Python and build server ${{ matrix.python-version }}
+      - name: Set up Python ${{ matrix.python-version }}
         working-directory: tests/${{ matrix.tool-name }}/
         if: matrix.python-version != '3.13-nogil'
         run: |
           bash ../../scripts/setup-python-and-build.sh \
-            --python-version ${{ matrix.python-version }} \
-            --build-caddy \
-            --caddy-snake-path ../..
+            --python-version ${{ matrix.python-version }}
           rm -rf venv
           python${{ matrix.python-version }} -m venv venv
           source venv/bin/activate
-          pip install --upgrade pip setuptools wheel
           pip install -r requirements.txt
-      - name: Set up Python (nogil) and build server
+      - name: Set up Python (nogil)
         working-directory: tests/${{ matrix.tool-name }}/
         if: matrix.python-version == '3.13-nogil'
         continue-on-error: true
         run: |
           bash ../../scripts/setup-python-and-build.sh \
             --python-version ${{ matrix.python-version }} \
-            --extra-packages "curl" \
-            --build-caddy \
-            --caddy-snake-path ../..
+            --extra-packages "curl"
           curl https://bootstrap.pypa.io/get-pip.py -o get-pip.py
           python${{ matrix.python-version }} -m venv --without-pip venv
           source venv/bin/activate
           echo $(which python)
           python get-pip.py
-          pip install --upgrade pip setuptools wheel
           pip install -r requirements.txt
+      - name: Build the server
+        working-directory: tests/${{ matrix.tool-name }}/
+        run: |
+          bash ../../scripts/setup-python-and-build.sh \
+            --skip-python-setup \
+            --no-install-xcaddy \
+            --build-caddy \
+            --caddy-snake-path ../..
       - name: Run integration tests
         working-directory: tests/${{ matrix.tool-name }}/
         if: matrix.python-version != '3.13-nogil'
