@@ -16,9 +16,10 @@ RUN export DEBIAN_FRONTEND=noninteractive &&\
     python get-pip.py &&\
     apt-get clean &&\
     rm -rf /var/lib/apt/lists/* get-pip.py &&\
-    wget https://dl.google.com/go/go${GO_VERSION}.linux-amd64.tar.gz && \
-    tar -C /usr/local -xzf go*.linux-amd64.tar.gz && \
-    rm go*.linux-amd64.tar.gz
+    ARCH=$(dpkg --print-architecture) &&\
+    wget https://dl.google.com/go/go${GO_VERSION}.linux-${ARCH}.tar.gz && \
+    tar -C /usr/local -xzf go*.linux-${ARCH}.tar.gz && \
+    rm go*.linux-${ARCH}.tar.gz
 
 COPY . /build
 
