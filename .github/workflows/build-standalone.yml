@@ -24,7 +24,7 @@ jobs:
           bash scripts/setup-python-and-build.sh \
             --python-version ${{ matrix.python-version }} \
             --build-caddy \
-            --caddy-snake-path ../.. \
+            --caddy-snake-path ${{ github.workspace }} \
             --working-dir cmd/embed
       - name: Set up Python (nogil) and build Caddy
         if: matrix.python-version == '3.13-nogil'
@@ -32,7 +32,7 @@ jobs:
           bash scripts/setup-python-and-build.sh \
             --python-version ${{ matrix.python-version }} \
             --build-caddy \
-            --caddy-snake-path ../.. \
+            --caddy-snake-path ${{ github.workspace }} \
             --working-dir cmd/embed
       - name: Retrive python build standalone
         if: matrix.python-version != '3.13-nogil'
