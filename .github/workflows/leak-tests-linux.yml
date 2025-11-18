@@ -30,7 +30,6 @@
               export CC=clang
               export CGO_ENABLED=1
               export CGO_CFLAGS="-fsanitize=address"
-              export CGO_LDFLAGS="-fsanitize=address"
               export XCADDY_GO_BUILD_FLAGS="-asan"
               bash ../../scripts/setup-python-and-build.sh \
                 --python-version ${{ matrix.python-version }} \
