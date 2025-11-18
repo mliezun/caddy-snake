@@ -18,7 +18,7 @@ jobs:
     strategy:
       matrix:
         python-version: ['3.10', '3.11', '3.12', '3.13', '3.14']
-        os: [ubuntu-24.04, ubuntu-24.04-arm]
+        os: [ubuntu-24.04]
     runs-on: ${{ matrix.os }}
     permissions:
       contents: read
@@ -71,6 +71,7 @@ jobs:
           context: .
           push: ${{ github.event_name != 'pull_request' }}
           build-args: PY_VERSION=${{ matrix.python-version }}
+          platforms: linux/amd64,linux/arm64
           tags: |
             ${{ env.REGISTRY_GHCR }}/${{ env.IMAGE_NAME }}:${{ endsWith(github.ref_name, '/merge') && 'dev' || github.ref_name }}-py${{ matrix.python-version }}
             ${{ env.REGISTRY_GHCR }}/${{ env.IMAGE_NAME }}:latest-py${{ matrix.python-version }}
