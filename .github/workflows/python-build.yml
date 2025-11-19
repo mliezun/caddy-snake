@@ -53,4 +53,4 @@ jobs:
           python${{ matrix.python-version }} -m twine upload \
             --username __token__ \
             --password ${{ secrets.PYPI_API_TOKEN }} \
-            cmd/cli/target/wheels/*.whl
+            *.whl
