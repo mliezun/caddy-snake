@@ -41,9 +41,16 @@ jobs:
           cd cmd/cli/
           python${{ matrix.python-version }} -m pip install maturin
           python${{ matrix.python-version }} -m maturin build --release
-      - name: Publish package
-        uses: pypa/gh-action-pypi-publish@release/v1
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
         with:
-          packages-dir: cmd/cli/target/wheels
-          user: __token__
-          password: ${{ secrets.PYPI_API_TOKEN }}
+          name: caddysnake-cli-${{ matrix.python-version }}-${{ matrix.os }}
+          path: cmd/cli/target/wheels/*.whl
+      - name: Publish package
+        run: |
+          cd cmd/cli/target/wheels
+          python${{ matrix.python-version }} -m pip install twine
+          python${{ matrix.python-version }} -m twine upload \
+            --username __token__ \
+            --password ${{ secrets.PYPI_API_TOKEN }} \
+            cmd/cli/target/wheels/*.whl
