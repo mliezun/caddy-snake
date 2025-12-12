@@ -1,0 +1,15 @@
+version: 2
+updates:
+  # Monitor Go dependencies at the root
+  - package-ecosystem: "gomod"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 10
+
+  # Monitor Python dependencies in cmd/cli (excludes tests/)
+  - package-ecosystem: "pip"
+    directory: "/cmd/cli"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 10
