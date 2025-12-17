@@ -16,9 +16,9 @@ RUN ARCH=$(dpkg --print-architecture) && \
 ENV PATH=$PATH:/usr/local/go/bin
 
 # Setup pkg-config for python3-embed
-RUN PC_FILE=$(find /usr/local/lib/pkgconfig -name "python-*-embed.pc" | head -n 1) && \
-    if [ -z "$PC_FILE" ]; then echo "Error: python embed pc file not found"; exit 1; fi && \
-    ln -s "$PC_FILE" /usr/local/lib/pkgconfig/python3-embed.pc
+RUN PC_FILE=$(find /usr/local/lib/pkgconfig -name "python-${PY_VERSION}-embed.pc" | head -n 1) && \
+    if [ -z "$PC_FILE" ]; then echo "Error: python-${PY_VERSION} embed pc file not found"; exit 1; fi && \
+    ln -sf "$PC_FILE" /usr/local/lib/pkgconfig/python3-embed.pc
 
 COPY . /build
 
