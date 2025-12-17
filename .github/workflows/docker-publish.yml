@@ -35,6 +35,9 @@ jobs:
         with:
           cosign-release: 'v2.1.1'
 
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@f95db51fddba0c2d1ec667646a06c2ce06100226
 
@@ -71,7 +74,7 @@ jobs:
           context: .
           push: ${{ github.event_name != 'pull_request' }}
           build-args: PY_VERSION=${{ matrix.python-version }}
-          platforms: linux/amd64,linux/arm64
+          platforms: linux/amd64,linux/arm64,linux/riscv64
           tags: |
             ${{ env.REGISTRY_GHCR }}/${{ env.IMAGE_NAME }}:${{ endsWith(github.ref_name, '/merge') && 'dev' || github.ref_name }}-py${{ matrix.python-version }}
             ${{ env.REGISTRY_GHCR }}/${{ env.IMAGE_NAME }}:latest-py${{ matrix.python-version }}
