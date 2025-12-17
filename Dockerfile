@@ -1,6 +1,7 @@
 ARG PY_VERSION=3.13
 FROM python:${PY_VERSION}
 
+ARG PY_VERSION
 ARG GO_VERSION=1.25.0
 
 RUN apt-get update -yyqq && \
