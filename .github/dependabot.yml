@@ -5,11 +5,13 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
-    open-pull-requests-limit: 10
+    # Disable version updates; only security updates will be reported
+    open-pull-requests-limit: 0
 
   # Monitor Python dependencies in cmd/cli (excludes tests/)
   - package-ecosystem: "pip"
     directory: "/cmd/cli"
     schedule:
       interval: "weekly"
-    open-pull-requests-limit: 10
+    # Disable version updates; only security updates will be reported
+    open-pull-requests-limit: 0
