@@ -9,31 +9,65 @@
 
 [![Caddy Snake logo](docs/static/img/caddysnake-512x512.png)](https://caddy-snake.readthedocs.io/en/latest/docs/intro)
 
-A plugin that allows you to serve Python apps directly from the Caddy web server.
+Caddy Snake is a Caddy plugin that lets you **run Python web apps directly inside Caddy** — no reverse proxy needed.
 
-It uses the Python C API to run applications directly inside Caddy, avoiding the need for an extra layer of HTTP proxy.
+It embeds Python via the C API, so your WSGI or ASGI application runs in the same process as Caddy. This means less overhead, simpler deployments, and automatic HTTPS out of the box.
 
-Supports both WSGI and ASGI, which means you can run all types of frameworks like Flask, Django and FastAPI.
+To make it easier to get started you can also grab one of the precompiled binaries that comes with Caddy and Python, or one of the Docker images.
 
-## Download a pre-compiled package
+**Works with Flask, Django, FastAPI, and any other WSGI/ASGI framework.**
 
-Easiest way to get started on Linux is to download one of our pre-compiled caddy binaries from the [latest release](https://github.com/mliezun/caddy-snake/releases).
+---
 
-You can download a `caddy` binary with your preferred version Python included and run it easily. Example:
+## Features
+
+- **WSGI & ASGI support** — serve any Python web framework (Flask, Django, FastAPI, Starlette, etc.)
+- **Multi-worker** — process-based (default) or thread-based workers for concurrent request handling
+- **Auto-reload** — watches `.py` files and hot-reloads your app on changes during development
+- **Dynamic module loading** — use Caddy placeholders to load different apps per subdomain or route
+- **Virtual environment support** — point to a `venv` and dependencies are available automatically
+- **WebSocket support** — full WebSocket handling for ASGI apps
+- **ASGI lifespan events** — optional startup/shutdown lifecycle hooks
+- **Static file serving** — built-in static file support via the CLI
+- **Pre-built binaries** — download and run with Python embedded, no compilation required
+- **Docker images** — ready-to-use images for Python 3.10 through 3.14
+- **Cross-platform** — Linux, macOS, and Windows
+
+---
+
+## Quick start
+
+### Option 1: Download a pre-built binary
+
+The easiest way to get started on Linux is to download a pre-compiled Caddy binary from the [latest release](https://github.com/mliezun/caddy-snake/releases). It comes with Python embedded — no system Python required.
 
 ```bash
-./caddy python-server --app main:app --server-type wsgi
+# Start a WSGI server
+./caddy python-server --server-type wsgi --app main:app
+
+# Start an ASGI server
+./caddy python-server --server-type asgi --app main:app
 ```
 
-This will start a server that listens on port 9080 and serves your WSGI app. See `./caddy python-server --help` for more instructions.
-
-The `python-server` command is added to caddy by the plugin and is a shorthand that creates a `Caddyfile` for you and manages configurations for you.
-
-## Build from source
-
-Alternatively you can build `caddy` from source and bundle it with the caddy-snake plugin:
+This starts a server on port `9080` serving your app. See `./caddy python-server --help` for all options:
 
 ```
+--server-type wsgi|asgi   Required. Type of Python app
+--app <module:var>        Required. Python module and app variable (e.g. main:app)
+--domain <example.com>    Enable HTTPS with automatic certificates
+--listen <addr>           Custom listen address (default: :9080)
+--workers <count>         Number of worker processes (default: CPU count)
+--workers-runtime <type>  Worker type: process or thread
+--static-path <path>      Serve a static files directory
+--static-route <route>    Route prefix for static files (default: /static)
+--debug                   Enable debug logging
+--access-logs             Enable access logs
+--autoreload              Watch .py files and reload on changes
+```
+
+### Option 2: Build from source
+
+```bash
 CGO_ENABLED=1 xcaddy build --with github.com/mliezun/caddy-snake
 ```
 
@@ -41,18 +75,38 @@ CGO_ENABLED=1 xcaddy build --with github.com/mliezun/caddy-snake
 
 - Python >= 3.10 + dev files
 - C compiler and build tools
-- Go >= 1.25 and [Xcaddy](https://github.com/caddyserver/xcaddy)
+- Go >= 1.25 and [xcaddy](https://github.com/caddyserver/xcaddy)
 
-Install requirements on Ubuntu 24.04:
+Install on Ubuntu 24.04:
 
+```bash
+sudo apt-get install python3-dev build-essential pkg-config golang
+go install github.com/caddyserver/xcaddy/cmd/xcaddy@latest
 ```
-$ sudo apt-get install python3-dev build-essential pkg-config golang
-$ go install github.com/caddyserver/xcaddy/cmd/xcaddy@latest
+
+### Option 3: Use a Docker image
+
+Docker images are available with Python 3.10, 3.11, 3.12, 3.13, and 3.14:
+
+```Dockerfile
+FROM mliezun/caddy-snake:latest-py3.13
+
+WORKDIR /app
+COPY . /app
+
+CMD ["caddy", "run", "--config", "/app/Caddyfile"]
 ```
 
-You can also [build with Docker](#build-with-docker).
+Images are published to both registries:
 
-#### Example usage: Flask
+- [Docker Hub](https://hub.docker.com/r/mliezun/caddy-snake)
+- [GitHub Container Registry](https://github.com/mliezun/caddy-snake/pkgs/container/caddy-snake)
+
+---
+
+## Usage examples
+
+### Flask (WSGI)
 
 `main.py`
 
@@ -78,27 +132,24 @@ http://localhost:9080 {
 }
 ```
 
-Run:
-
-```
-$ pip install Flask
-$ CGO_ENABLED=1 xcaddy build --with github.com/mliezun/caddy-snake
-$ ./caddy run --config Caddyfile
+```bash
+pip install Flask
+./caddy run --config Caddyfile
 ```
 
-```
-$ curl http://localhost:9080/hello-world
-Hello world!
+```bash
+curl http://localhost:9080/hello-world
+# Hello world!
 ```
 
-See how to setup [Hot Reloading](#hot-reloading)
-
-#### Example usage: FastAPI
+### FastAPI (ASGI)
 
 `main.py`
 
 ```python
 from fastapi import FastAPI
+
+app = FastAPI()
 
 @app.get("/hello-world")
 def hello():
@@ -112,96 +163,60 @@ http://localhost:9080 {
     route {
         python {
             module_asgi "main:app"
+            lifespan on
         }
     }
 }
 ```
 
-Run:
-
-```
-$ pip install fastapi
-$ CGO_ENABLED=1 xcaddy build --with github.com/mliezun/caddy-snake
-$ ./caddy run --config Caddyfile
-```
-
-```
-$ curl http://localhost:9080/hello-world
-Hello world!
-```
-
-> NOTE: It's possible to enable/disable [lifespan events](https://fastapi.tiangolo.com/advanced/events/) by adding the `lifespan on|off` directive to your Caddy configuration. In the above case the lifespan events are disabled because the directive was omitted.
-
-See how to setup [Hot Reloading](#hot-reloading)
-
-## Use docker image
-
-There are docker images available with the following Python versions: `3.10`, `3.11`, `3.12`, `3.13` or `3.14`.
-
-Example usage:
-
-```Dockerfile
-FROM mliezun/caddy-snake:latest-py3.13
-
-WORKDIR /app
-
-# Copy your project into app
-COPY . /app
-
-# Caddy snake is already installed and has support for Python 3.13
-CMD ["caddy", "run", "--config", "/app/Caddyfile"]
-```
-
-Images are available both in Docker Hub and Github Container Registry:
-
-- [https://hub.docker.com/r/mliezun/caddy-snake](https://hub.docker.com/r/mliezun/caddy-snake)
-- [https://github.com/mliezun/caddy-snake/pkgs/container/caddy-snake](https://github.com/mliezun/caddy-snake/pkgs/container/caddy-snake)
-
-### Build with Docker
-
-There's a template file in the project: [builder.Dockerfile](/builder.Dockerfile). It supports build arguments to configure which Python or Go version is desired for the build.
-
-Make sure to use the same Python version as you have installed in your system.
-
-You can copy the contents of the builder Dockerfile and execute the following commands to get your Caddy binary: 
-
 ```bash
-docker build -f builder.Dockerfile --build-arg PY_VERSION=3.11 -t caddy-snake-builder .
+pip install fastapi
+./caddy run --config Caddyfile
 ```
 
 ```bash
-docker run --rm -v $(pwd):/output caddy-snake-builder
+curl http://localhost:9080/hello-world
+# Hello world!
 ```
 
-The output `caddy` binary file will be located in your current folder.
+---
 
-**NOTE**
+## Caddyfile reference
 
-It's also possible to provide virtual environments with the following syntax:
+The `python` directive supports the following subdirectives:
 
 ```Caddyfile
 python {
-    module_wsgi "main:app"
-    venv "./venv"
+    module_wsgi "module:variable"       # WSGI app to serve (e.g. "main:app")
+    module_asgi "module:variable"       # ASGI app to serve (e.g. "main:app")
+    venv "/path/to/venv"                # Virtual environment path
+    working_dir "/path/to/app"          # Working directory for module resolution
+    workers 4                           # Number of worker processes (default: CPU count)
+    workers_runtime process|thread      # Worker type (default: process on Linux/macOS, thread on Windows)
+    lifespan on|off                     # ASGI lifespan events (default: off)
+    autoreload                          # Watch .py files and reload on changes
 }
 ```
 
-What it does behind the scenes is to append `venv/lib/python3.x/site-packages` to python `sys.path`.
+You must specify either `module_wsgi` or `module_asgi` (not both).
 
-> Disclaimer: Currently, when you provide a venv it gets added to the global `sys.path`, which in consequence
-> means all apps have access to those packages.
+### `module_wsgi`
 
-## `working_dir` (optional)
+The Python module and WSGI application variable to import, in `"module:variable"` format.
 
-Sets the working directory from which your Python module will be resolved and executed.
+### `module_asgi`
 
-By default, Caddy uses its own process working directory (often / when run as a service) to resolve Python module imports. However, this default is not always appropriate, especially in modern project structures such as monorepos or deployment environments where Python applications live in subdirectories that are not importable from the root.
+The Python module and ASGI application variable to import, in `"module:variable"` format.
 
-The `working_dir` directive allows you to explicitly define the working directory that will be used for:
+### `venv`
 
-- Importing the Python module
-- Resolving relative paths (e.g., for configuration files or static assets)
-- Ensuring consistent behavior across local development and production (e.g., when run under systemd, which defaults to / unless otherwise configured)
+Path to a Python virtual environment. Behind the scenes, this appends `venv/lib/python3.x/site-packages` to `sys.path` so installed packages are available to your app.
+
+> **Note:** The venv packages are added to the global `sys.path`, which means all Python apps served by Caddy share the same packages.
+
+### `working_dir`
+
+Sets the working directory for Python module resolution and relative paths. This is important when deploying with systemd (which defaults to `/`) or in monorepo/container setups where your app lives in a subdirectory.
 
 ```Caddyfile
 python {
@@ -211,27 +226,121 @@ python {
 }
 ```
 
-This example tells Caddy to:
+### `workers`
 
-- Load the app object from the main.py module
-- Use the virtual environment located at /var/www/myapp/venv
-- Switch to /var/www/myapp as the working directory before executing Python code
+Number of worker processes to spawn. Defaults to the number of CPUs (`GOMAXPROCS`). When using `workers_runtime thread`, only 1 worker is used regardless of this setting.
 
-This behavior is analogous to the "path" setting in NGINX Unit, or manually setting the working directory in a systemd service file. It provides flexibility in organizing your Python applications — especially when working within monorepos or containerized environments — and ensures your app runs with the correct context regardless of where Caddy itself is invoked.
+### `workers_runtime`
 
+Controls how requests are handled:
+
+- **`process`** (default on Linux/macOS) — spawns separate worker processes, each with its own Python interpreter. Best for CPU-bound workloads and production use.
+- **`thread`** — runs Python in the main Caddy process using a single interpreter. Required on Windows. Needed for `autoreload`.
+
+### `lifespan`
+
+Enables ASGI [lifespan events](https://asgi.readthedocs.io/en/latest/specs/lifespan.html) (`startup` and `shutdown`). Only applies to ASGI apps. Defaults to `off`.
+
+### `autoreload`
+
+Watches the working directory for `.py` file changes and automatically reloads the Python app. Useful during development. Requires `workers_runtime thread`.
+
+Changes are debounced (500ms) to handle rapid edits.
+
+```Caddyfile
+python {
+    module_wsgi "main:app"
+    workers_runtime thread
+    autoreload
+}
+```
+
+---
+
+## Dynamic module loading
+
+You can use [Caddy placeholders](https://caddyserver.com/docs/caddyfile/concepts#placeholders) in `module_wsgi`, `module_asgi`, `working_dir`, and `venv` to dynamically load different Python apps based on the request.
+
+This is useful for multi-tenant setups where each subdomain or route serves a different application:
+
+```Caddyfile
+*.example.com:9080 {
+    route /* {
+        python {
+            module_asgi "{http.request.host.labels.2}:app"
+            working_dir "{http.request.host.labels.2}/"
+            workers_runtime thread
+        }
+    }
+}
+```
+
+In this example, a request to `app1.example.com` loads the app from the `app1/` directory, `app2.example.com` loads from `app2/`, and so on. Apps are lazily created on first request and cached for subsequent requests.
+
+---
 
 ## Hot reloading
 
-Currently the Python app is not reloaded by the plugin if a file changes. But it is possible to setup using [watchmedo](https://github.com/gorakhargosh/watchdog?tab=readme-ov-file#shell-utilities) to restart the Caddy process.
+There are two approaches for hot reloading during development:
+
+### Built-in autoreload (recommended)
+
+Add the `autoreload` directive to your Caddyfile. This watches for `.py` file changes and reloads the app in-place without restarting Caddy:
+
+```Caddyfile
+python {
+    module_wsgi "main:app"
+    workers_runtime thread
+    autoreload
+}
+```
+
+> **Note:** `autoreload` requires `workers_runtime thread` since it reloads the Python module within the same interpreter.
+
+### Using watchmedo (alternative)
+
+You can also use [watchmedo](https://github.com/gorakhargosh/watchdog?tab=readme-ov-file#shell-utilities) to restart Caddy on file changes:
 
 ```bash
-# Install on Debian and Ubuntu.
+# Install on Debian/Ubuntu
 sudo apt-get install python3-watchdog
+
 watchmedo auto-restart -d . -p "*.py" --recursive \
     -- caddy run --config Caddyfile
 ```
 
-Note that this will restart Caddy when new `.py` files are created. If your venv is in the directory watched by watchmedo, installing packages in the venv will also restart Caddy by modifying `.py` files.
+Note that this restarts the entire Caddy process on changes.
+
+---
+
+## Build with Docker
+
+There's a template file in the project: [builder.Dockerfile](/builder.Dockerfile). It supports build arguments to configure which Python or Go version to use.
+
+```bash
+# Build the Docker image
+docker build -f builder.Dockerfile --build-arg PY_VERSION=3.13 -t caddy-snake-builder .
+
+# Extract the caddy binary to your current directory
+docker run --rm -v $(pwd):/output caddy-snake-builder
+```
+
+Make sure to match the Python version with your target environment.
+
+---
+
+## Platform support
+
+| Platform       | Workers runtime   | Notes                                    |
+|----------------|-------------------|------------------------------------------|
+| Linux (x86_64) | process, thread   | Primary platform, full support           |
+| Linux (arm64)  | process, thread   | Full support                             |
+| macOS          | process, thread   | Full support                             |
+| Windows        | thread only       | Process workers not supported on Windows |
+
+**Python versions:** 3.10, 3.11, 3.12, 3.13, 3.13-nogil (free-threaded), 3.14
+
+---
 
 ## LICENSE
 

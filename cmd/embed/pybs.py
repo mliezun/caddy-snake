@@ -2,6 +2,7 @@
 import argparse
 import sys
 import json
+import time
 import urllib.request
 import urllib.error
 import os
@@ -80,14 +81,39 @@ WINDOWS_VARIANTS = {
 }
 
 
-def get_release(tag: str | None):
-    url = f"{GITHUB_API}/latest" if tag == "latest" else f"{GITHUB_API}/tags/{tag}"
-    try:
-        with urllib.request.urlopen(url) as response:
+def urlopen_with_retry(url, max_retries=5, initial_delay=5):
+    """Open a URL with retry logic for rate limit errors (HTTP 403/429)."""
+    delay = initial_delay
+    for attempt in range(max_retries + 1):
+        try:
+            response = urllib.request.urlopen(url)
             if response.status != 200:
                 raise urllib.error.HTTPError(
                     url, response.status, "HTTP Error", response.headers, None
                 )
+            return response
+        except urllib.error.HTTPError as e:
+            if e.code in (403, 429) and attempt < max_retries:
+                # Check for Retry-After header
+                retry_after = e.headers.get("Retry-After") if e.headers else None
+                wait = (
+                    int(retry_after) if retry_after and retry_after.isdigit() else delay
+                )
+                print(
+                    f"Rate limited (HTTP {e.code}). Retrying in {wait}s "
+                    f"(attempt {attempt + 1}/{max_retries})...",
+                    file=sys.stderr,
+                )
+                time.sleep(wait)
+                delay *= 2  # Exponential backoff
+                continue
+            raise
+
+
+def get_release(tag: str | None):
+    url = f"{GITHUB_API}/latest" if tag == "latest" else f"{GITHUB_API}/tags/{tag}"
+    try:
+        with urlopen_with_retry(url) as response:
             return json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as e:
         print(f"HTTP Error {e.code}: {e.reason}", file=sys.stderr)
@@ -336,11 +362,7 @@ def select_asset(
 def download_asset(url, filename, dest):
     dest_path = Path(dest) / filename
     try:
-        with urllib.request.urlopen(url) as response:
-            if response.status != 200:
-                raise urllib.error.HTTPError(
-                    url, response.status, "HTTP Error", response.headers, None
-                )
+        with urlopen_with_retry(url) as response:
             with open(dest_path, "wb") as f:
                 while True:
                     chunk = response.read(8192)

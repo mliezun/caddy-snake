@@ -7,6 +7,8 @@ db = SqliteDict("items.db", autocommit=True)
 
 CHUNK_SIZE = 256 * 2**20
 
+APP_VERSION = "v0"
+
 
 def store_item(id: str, content: dict):
     db[id] = content
@@ -27,7 +29,10 @@ def app(environ: dict, start_response: Callable):
     """A simple WSGI application"""
     path: str = environ.get("PATH_INFO", "")
     method: str = environ.get("REQUEST_METHOD", "").lower()
-    if path.startswith("/item/"):
+    if path == "/version":
+        start_response("200 OK", [("Content-Type", "text/plain")])
+        yield APP_VERSION.encode()
+    elif path.startswith("/item/"):
         item_id = path[6:]
         body = b""
         status = "200 OK"

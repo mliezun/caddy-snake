@@ -129,6 +129,7 @@ type CaddySnake struct {
 	VenvPath       string `json:"venv_path,omitempty"`
 	Workers        string `json:"workers,omitempty"`
 	WorkersRuntime string `json:"workers_runtime,omitempty"`
+	Autoreload     string `json:"autoreload,omitempty"`
 	logger         *zap.Logger
 	app            AppServer
 }
@@ -166,11 +167,13 @@ func (f *CaddySnake) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 					if !d.Args(&f.Workers) {
 						return d.Errf("expected exactly one argument for workers")
 					}
-				case "workers_runtime":
-					if !d.Args(&f.WorkersRuntime) || (f.WorkersRuntime != "thread" && f.WorkersRuntime != "process") {
-						return d.Errf("expected exactly one argument for workers_runtime: thread|process")
-					}
-				default:
+			case "workers_runtime":
+				if !d.Args(&f.WorkersRuntime) || (f.WorkersRuntime != "thread" && f.WorkersRuntime != "process") {
+					return d.Errf("expected exactly one argument for workers_runtime: thread|process")
+				}
+			case "autoreload":
+				f.Autoreload = "on"
+			default:
 					return d.Errf("unknown subdirective: %s", d.Val())
 				}
 			}
@@ -210,6 +213,17 @@ func (f *CaddySnake) Provision(ctx caddy.Context) error {
 		f.logger.Warn("workers attribute is ignored when workers_runtime is thread, only 1 worker will be used", zap.String("workers_runtime", workersRuntime), zap.Int("workers", workers))
 		workers = 1
 	}
+
+	// Check if any configuration field contains Caddy placeholders.
+	// When placeholders are present, we use dynamic mode: apps are imported
+	// lazily at request time after resolving placeholders (e.g. {host.labels.2}).
+	isDynamic := containsPlaceholder(f.ModuleWsgi) || containsPlaceholder(f.ModuleAsgi) ||
+		containsPlaceholder(f.WorkingDir) || containsPlaceholder(f.VenvPath)
+
+	if isDynamic {
+		return f.provisionDynamic(workersRuntime, workers)
+	}
+
 	if f.ModuleWsgi != "" {
 		if workersRuntime == "thread" {
 			initPythonMainThread()
@@ -243,6 +257,112 @@ func (f *CaddySnake) Provision(ctx caddy.Context) error {
 			}
 		}
 		f.logger.Info("serving asgi app", zap.String("module_asgi", f.ModuleAsgi), zap.String("working_dir", f.WorkingDir), zap.String("venv_path", f.VenvPath))
+	} else {
+		return errors.New("asgi or wsgi app needs to be specified")
+	}
+
+	// Wrap with autoreload if enabled
+	if f.Autoreload == "on" {
+		watchDir := f.WorkingDir
+		if watchDir == "" {
+			watchDir = "."
+		}
+		absDir, absErr := filepath.Abs(watchDir)
+		if absErr != nil {
+			return fmt.Errorf("autoreload: %w", absErr)
+		}
+
+		var factory func() (AppServer, error)
+		if f.ModuleWsgi != "" {
+			if workersRuntime == "thread" {
+				factory = func() (AppServer, error) {
+					return NewWsgi(f.ModuleWsgi, f.WorkingDir, f.VenvPath)
+				}
+			} else {
+				factory = func() (AppServer, error) {
+					return NewPythonWorkerGroup("wsgi", f.ModuleWsgi, f.WorkingDir, f.VenvPath, f.Lifespan, workers)
+				}
+			}
+		} else {
+			if workersRuntime == "thread" {
+				factory = func() (AppServer, error) {
+					return NewAsgi(f.ModuleAsgi, f.WorkingDir, f.VenvPath, f.Lifespan == "on", f.logger)
+				}
+			} else {
+				factory = func() (AppServer, error) {
+					return NewPythonWorkerGroup("asgi", f.ModuleAsgi, f.WorkingDir, f.VenvPath, f.Lifespan, workers)
+				}
+			}
+		}
+
+		f.app, err = NewAutoreloadableApp(f.app, absDir, factory, f.logger)
+		if err != nil {
+			return fmt.Errorf("autoreload: %w", err)
+		}
+	}
+
+	return nil
+}
+
+// provisionDynamic sets up the module in dynamic mode where Caddy placeholders
+// in module_wsgi/module_asgi, working_dir, or venv are resolved per-request.
+// Each unique combination of resolved values gets its own Python app instance,
+// created lazily on first request.
+func (f *CaddySnake) provisionDynamic(workersRuntime string, workers int) error {
+	autoreload := f.Autoreload == "on"
+	if f.ModuleWsgi != "" {
+		var factory appFactory
+		if workersRuntime == "thread" {
+			initPythonMainThread()
+			initWsgi()
+			factory = func(module, dir, venv string) (AppServer, error) {
+				return NewDynamicWsgiApp(module, dir, venv)
+			}
+		} else {
+			lifespan := f.Lifespan
+			factory = func(module, dir, venv string) (AppServer, error) {
+				return NewPythonWorkerGroup("wsgi", module, dir, venv, lifespan, workers)
+			}
+		}
+		var err error
+		f.app, err = NewDynamicApp(f.ModuleWsgi, f.WorkingDir, f.VenvPath, factory, f.logger, autoreload)
+		if err != nil {
+			return err
+		}
+		if f.Lifespan != "" {
+			f.logger.Warn("lifespan attribute is ignored in WSGI mode", zap.String("lifespan", f.Lifespan))
+		}
+		f.logger.Info("serving dynamic wsgi app",
+			zap.String("module_wsgi", f.ModuleWsgi),
+			zap.String("working_dir", f.WorkingDir),
+			zap.String("venv_path", f.VenvPath),
+		)
+	} else if f.ModuleAsgi != "" {
+		var factory appFactory
+		if workersRuntime == "thread" {
+			initPythonMainThread()
+			initAsgi()
+			lifespan := f.Lifespan == "on"
+			logger := f.logger
+			factory = func(module, dir, venv string) (AppServer, error) {
+				return NewDynamicAsgiApp(module, dir, venv, lifespan, logger)
+			}
+		} else {
+			lifespan := f.Lifespan
+			factory = func(module, dir, venv string) (AppServer, error) {
+				return NewPythonWorkerGroup("asgi", module, dir, venv, lifespan, workers)
+			}
+		}
+		var err error
+		f.app, err = NewDynamicApp(f.ModuleAsgi, f.WorkingDir, f.VenvPath, factory, f.logger, autoreload)
+		if err != nil {
+			return err
+		}
+		f.logger.Info("serving dynamic asgi app",
+			zap.String("module_asgi", f.ModuleAsgi),
+			zap.String("working_dir", f.WorkingDir),
+			zap.String("venv_path", f.VenvPath),
+		)
 	} else {
 		return errors.New("asgi or wsgi app needs to be specified")
 	}
@@ -538,7 +658,7 @@ A Python worker designed for ASGI and WSGI apps.
 	})
 	caddycmd.RegisterCommand(caddycmd.Command{
 		Name:  "python-server",
-		Usage: "--server-type wsgi|asgi --app <module> [--domain <example.com>] [--listen <addr>] [--workers <count>] [--workers-runtime <runtime>] [--static-path <path>] [--static-route <route>] [--debug] [--access-logs]",
+		Usage: "--server-type wsgi|asgi --app <module> [--domain <example.com>] [--listen <addr>] [--workers <count>] [--workers-runtime <runtime>] [--static-path <path>] [--static-route <route>] [--debug] [--access-logs] [--autoreload]",
 		Short: "Spins up a Python server",
 		Long: `
 A Python WSGI or ASGI server designed for apps and frameworks.
@@ -559,6 +679,7 @@ Ensure DNS A/AAAA records are correctly set up if using a public domain for secu
 			cmd.Flags().String("static-route", "/static", "Route to serve the static directory: /static")
 			cmd.Flags().Bool("debug", false, "Enable debug logs")
 			cmd.Flags().Bool("access-logs", false, "Enable access logs")
+			cmd.Flags().Bool("autoreload", false, "Watch .py files and reload on changes (requires workers-runtime thread)")
 			cmd.RunE = caddycmd.WrapCommandFuncForCobra(pythonServer)
 		},
 	})
@@ -575,6 +696,7 @@ func pythonServer(fs caddycmd.Flags) (int, error) {
 	workersRuntime := fs.String("workers-runtime")
 	debug := fs.Bool("debug")
 	accessLogs := fs.Bool("access-logs")
+	autoreload := fs.Bool("autoreload")
 	staticPath := fs.String("static-path")
 	staticRoute := fs.String("static-route")
 	serverType := fs.String("server-type")
@@ -614,6 +736,10 @@ func pythonServer(fs caddycmd.Flags) (int, error) {
 
 	pythonHandler.Workers = workers
 	pythonHandler.WorkersRuntime = workersRuntime
+	if autoreload {
+		pythonHandler.Autoreload = "on"
+		pythonHandler.WorkersRuntime = "thread"
+	}
 
 	// Create routes list
 	routes := caddyhttp.RouteList{}

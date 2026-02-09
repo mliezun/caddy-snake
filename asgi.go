@@ -31,16 +31,8 @@ type Asgi struct {
 
 var asgiAppCache map[string]*Asgi = map[string]*Asgi{}
 
-// NewAsgi imports a Python ASGI app
-func NewAsgi(asgiPattern, workingDir, venvPath string, lifespan bool, logger *zap.Logger) (*Asgi, error) {
-	shard := asgiState.shardFor(0)
-	shard.Lock()
-	defer shard.Unlock()
-
-	if app, ok := asgiAppCache[asgiPattern]; ok {
-		return app, nil
-	}
-
+// importAsgiApp performs the actual Python ASGI app import without caching.
+func importAsgiApp(asgiPattern, workingDir, venvPath string) (*C.AsgiApp, error) {
 	moduleApp := strings.Split(asgiPattern, ":")
 	if len(moduleApp) != 2 {
 		return nil, errors.New("expected pattern $(MODULE_NAME):$(VARIABLE_NAME)")
@@ -78,20 +70,66 @@ func NewAsgi(asgiPattern, workingDir, venvPath string, lifespan bool, logger *za
 		return nil, errors.New("failed to import module")
 	}
 
-	var err error
+	return app, nil
+}
+
+// NewAsgi imports a Python ASGI app with global caching by asgi pattern.
+func NewAsgi(asgiPattern, workingDir, venvPath string, lifespan bool, logger *zap.Logger) (*Asgi, error) {
+	shard := asgiState.shardFor(0)
+	shard.Lock()
+	defer shard.Unlock()
+
+	if app, ok := asgiAppCache[asgiPattern]; ok {
+		return app, nil
+	}
+
+	cApp, err := importAsgiApp(asgiPattern, workingDir, venvPath)
+	if err != nil {
+		return nil, err
+	}
 
 	if lifespan {
 		var status C.uint8_t
 		pythonMainThread.do(func() {
-			status = C.AsgiApp_lifespan_startup(app)
+			status = C.AsgiApp_lifespan_startup(cApp)
 		})
 		if uint8(status) == 0 {
 			err = errors.New("startup failed")
 		}
 	}
 
-	result := &Asgi{app, asgiPattern, logger}
+	result := &Asgi{cApp, asgiPattern, logger}
 	asgiAppCache[asgiPattern] = result
+	return result, err
+}
+
+// NewDynamicAsgiApp imports an ASGI app for dynamic (per-request) use.
+// It uses a composite cache key (pattern + working dir) so that the same module
+// loaded from different directories is tracked separately for cleanup.
+func NewDynamicAsgiApp(asgiPattern, workingDir, venvPath string, lifespan bool, logger *zap.Logger) (*Asgi, error) {
+	cApp, err := importAsgiApp(asgiPattern, workingDir, venvPath)
+	if err != nil {
+		return nil, err
+	}
+
+	if lifespan {
+		var status C.uint8_t
+		pythonMainThread.do(func() {
+			status = C.AsgiApp_lifespan_startup(cApp)
+		})
+		if uint8(status) == 0 {
+			err = errors.New("startup failed")
+		}
+	}
+
+	cacheKey := asgiPattern + "@" + workingDir
+	result := &Asgi{cApp, cacheKey, logger}
+
+	shard := asgiState.shardFor(0)
+	shard.Lock()
+	asgiAppCache[cacheKey] = result
+	shard.Unlock()
+
 	return result, err
 }
 

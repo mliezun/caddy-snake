@@ -1,15 +1,18 @@
 ---
 title: Examples
 description: Example implementations using different Python web frameworks
+sidebar_position: 3
 ---
 
 # Examples
 
 This page provides example implementations using different Python web frameworks with Caddy-Snake. Each example includes the necessary Python code, Caddy configuration, and setup instructions.
 
-## FastAPI Example
+---
 
-FastAPI is a modern, fast web framework for building APIs with Python. Here's a simple example:
+## FastAPI (ASGI)
+
+FastAPI is a modern, fast web framework for building APIs with Python.
 
 ```python
 # main.py
@@ -44,33 +47,38 @@ http://localhost:9080 {
         python {
             module_asgi "main:app"
             lifespan on
+            workers 1
+            workers_runtime thread
+            venv "./venv"
         }
     }
 }
 ```
 
-To run this example:
+Setup and run:
 
-1. Install dependencies:
 ```bash
-pip install fastapi uvicorn
-```
-
-2. Start Caddy:
-```bash
+python -m venv venv
+source venv/bin/activate
+pip install fastapi
 caddy run --config Caddyfile
 ```
 
-3. Test the API:
+Test:
+
 ```bash
 curl http://localhost:9080/
 curl http://localhost:9080/items/1
-curl -X POST http://localhost:9080/items/ -H "Content-Type: application/json" -d '{"name":"test","price":10.5}'
+curl -X POST http://localhost:9080/items/ \
+    -H "Content-Type: application/json" \
+    -d '{"name":"test","price":10.5}'
 ```
 
-## Flask Example
+---
 
-Flask is a lightweight web framework that's great for smaller applications. Here's a basic example:
+## Flask (WSGI)
+
+Flask is a lightweight web framework that's great for smaller applications.
 
 ```python
 # main.py
@@ -98,33 +106,38 @@ http://localhost:9080 {
     route {
         python {
             module_wsgi "main:app"
+            workers 4
+            workers_runtime process
+            venv "./venv"
         }
     }
 }
 ```
 
-To run this example:
+Setup and run:
 
-1. Install dependencies:
 ```bash
+python -m venv venv
+source venv/bin/activate
 pip install flask
-```
-
-2. Start Caddy:
-```bash
 caddy run --config Caddyfile
 ```
 
-3. Test the API:
+Test:
+
 ```bash
 curl http://localhost:9080/
 curl http://localhost:9080/items/1
-curl -X POST http://localhost:9080/items -H "Content-Type: application/json" -d '{"name":"test"}'
+curl -X POST http://localhost:9080/items \
+    -H "Content-Type: application/json" \
+    -d '{"name":"test"}'
 ```
 
-## Django Example
+---
 
-Django is a full-featured web framework with a built-in admin interface. Here's a basic example:
+## Django (WSGI)
+
+Django is a full-featured web framework with a built-in admin interface and ORM.
 
 ```python
 # mysite/settings.py
@@ -162,35 +175,71 @@ http://localhost:9080 {
     route {
         python {
             module_wsgi "mysite.wsgi:application"
-            working_dir "."
+            workers 1
+            workers_runtime thread
+            venv "./venv"
         }
     }
 }
 ```
 
-To run this example:
+Setup and run:
 
-1. Install dependencies:
 ```bash
+python -m venv venv
+source venv/bin/activate
 pip install django
-```
-
-2. Set up the database:
-```bash
+django-admin startproject mysite .
 python manage.py migrate
-```
-
-3. Start Caddy:
-```bash
 caddy run --config Caddyfile
 ```
 
-4. Test the API:
+Test:
+
 ```bash
 curl http://localhost:9080/items/
 ```
 
-## Socket.IO Example
+---
+
+## Django Channels (ASGI)
+
+Django Channels extends Django with WebSocket support and other async protocols.
+
+```python
+# mysite/asgi.py
+import os
+from django.core.asgi import get_asgi_application
+
+os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'mysite.settings')
+application = get_asgi_application()
+```
+
+```caddyfile
+# Caddyfile
+http://localhost:9080 {
+    route {
+        python {
+            module_asgi "mysite.asgi:application"
+            workers 1
+            venv "./venv"
+        }
+    }
+}
+```
+
+Setup and run:
+
+```bash
+python -m venv venv
+source venv/bin/activate
+pip install django channels
+caddy run --config Caddyfile
+```
+
+---
+
+## Socket.IO
 
 Socket.IO enables real-time, bidirectional communication. Here's a simple chat application:
 
@@ -226,24 +275,24 @@ http://localhost:9080 {
         python {
             module_asgi "main:app"
             lifespan on
+            workers 1
+            venv "./venv"
         }
     }
 }
 ```
 
-To run this example:
+Setup and run:
 
-1. Install dependencies:
 ```bash
+python -m venv venv
+source venv/bin/activate
 pip install python-socketio fastapi
-```
-
-2. Start Caddy:
-```bash
 caddy run --config Caddyfile
 ```
 
-3. Test with a WebSocket client:
+Test with a WebSocket client:
+
 ```javascript
 const socket = io('http://localhost:9080');
 socket.on('connect', () => {
@@ -255,13 +304,159 @@ socket.on('message', (data) => {
 });
 ```
 
+---
+
+## Autoreload (Development)
+
+Enable hot-reloading during development so your app reloads automatically when you edit Python files:
+
+```python
+# main.py
+from flask import Flask
+
+app = Flask(__name__)
+
+@app.route("/")
+def hello():
+    return "Hello, World!"
+```
+
+```caddyfile
+# Caddyfile
+http://localhost:9080 {
+    route {
+        python {
+            module_wsgi "main:app"
+            workers_runtime thread
+            venv "./venv"
+            autoreload
+        }
+    }
+}
+```
+
+Now when you edit `main.py`, the app reloads automatically — no need to restart Caddy. If you introduce a syntax error, requests will return HTTP 500 until you fix the code.
+
+:::note
+`autoreload` requires `workers_runtime thread`. Changes are debounced (500ms) to handle rapid edits.
+:::
+
+### Alternative: watchmedo
+
+If you prefer to restart the entire Caddy process on file changes, you can use [watchmedo](https://github.com/gorakhargosh/watchdog?tab=readme-ov-file#shell-utilities):
+
+```bash
+# Install on Debian/Ubuntu
+sudo apt-get install python3-watchdog
+
+watchmedo auto-restart -d . -p "*.py" --recursive \
+    -- caddy run --config Caddyfile
+```
+
+---
+
+## Dynamic Module Loading (Multi-Tenant)
+
+Serve multiple Python apps from a single Caddy configuration using Caddy placeholders. Each subdomain can load a different app.
+
+### Project structure
+
+```
+project/
+├── app1/
+│   └── app1.py
+├── app2/
+│   └── app2.py
+├── app3/
+│   └── app3.py
+└── Caddyfile
+```
+
+```python
+# app1/app1.py
+from fastapi import FastAPI
+
+app = FastAPI()
+
+@app.get("/")
+def index():
+    return {"app": "app1", "message": "Hello from App 1!"}
+```
+
+```python
+# app2/app2.py
+from fastapi import FastAPI
+
+app = FastAPI()
+
+@app.get("/")
+def index():
+    return {"app": "app2", "message": "Hello from App 2!"}
+```
+
+```caddyfile
+# Caddyfile
+*.127.0.0.1.nip.io:9080 {
+    route /* {
+        python {
+            module_asgi "{http.request.host.labels.6}:app"
+            working_dir "{http.request.host.labels.6}/"
+            workers 1
+            workers_runtime thread
+        }
+    }
+}
+```
+
+Run:
+
+```bash
+pip install fastapi
+caddy run --config Caddyfile
+```
+
+Test:
+
+```bash
+curl http://app1.127.0.0.1.nip.io:9080/
+# {"app":"app1","message":"Hello from App 1!"}
+
+curl http://app2.127.0.0.1.nip.io:9080/
+# {"app":"app2","message":"Hello from App 2!"}
+```
+
+Each app is lazily loaded on first request and cached for subsequent requests.
+
+### Dynamic modules + autoreload
+
+Add `autoreload` to automatically reload individual apps when their Python files change:
+
+```caddyfile
+*.127.0.0.1.nip.io:9080 {
+    route /* {
+        python {
+            module_asgi "{http.request.host.labels.6}:app"
+            working_dir "{http.request.host.labels.6}/"
+            workers 1
+            workers_runtime thread
+            autoreload
+        }
+    }
+}
+```
+
+When you edit `app1/app1.py`, only `app1` is reloaded — `app2` and `app3` remain unaffected.
+
+---
+
 ## Notes
 
-- All examples assume you have Caddy-Snake installed and configured
+- All examples assume you have Caddy-Snake installed. See [Installation & Distribution](installation.md) for all the ways to install it — including `pip install caddysnake` for the quickest setup
 - The examples use different Caddy directives based on the framework:
-  - `module_asgi` for FastAPI and Socket.IO
+  - `module_asgi` for FastAPI, Django Channels, and Socket.IO
   - `module_wsgi` for Flask and Django
-  - `lifespan on` for ASGI applications that support it
+  - `lifespan on` for ASGI applications that support startup/shutdown events
   - `working_dir` for Django to ensure proper module resolution
 - Virtual environments are recommended for all examples
-- Make sure to install all required dependencies before running the examples 
+- Make sure to install all required dependencies before running the examples
+- See the [Configuration Reference](reference.md) for full details on all directives

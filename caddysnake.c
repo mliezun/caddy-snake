@@ -1129,6 +1129,56 @@ void AsgiApp_cleanup(AsgiApp *app) {
   free(app);
 }
 
+// Autoreload: Invalidate Python module cache
+
+void Py_invalidate_module_cache(const char *working_dir) {
+  PyGILState_STATE gstate = PyGILState_Ensure();
+
+  PyObject *sys_modules = PySys_GetObject("modules");
+  if (!sys_modules) {
+    PyGILState_Release(gstate);
+    return;
+  }
+
+  // Get a copy of the keys to avoid modifying the dict during iteration
+  PyObject *keys = PyDict_Keys(sys_modules);
+  if (!keys) {
+    PyGILState_Release(gstate);
+    return;
+  }
+
+  size_t working_dir_len = strlen(working_dir);
+  Py_ssize_t n = PyList_Size(keys);
+
+  for (Py_ssize_t i = 0; i < n; i++) {
+    PyObject *key = PyList_GetItem(keys, i);
+    PyObject *module = PyDict_GetItem(sys_modules, key);
+
+    if (!module)
+      continue;
+
+    PyObject *file_attr = PyObject_GetAttrString(module, "__file__");
+    if (!file_attr || file_attr == Py_None) {
+      if (PyErr_Occurred())
+        PyErr_Clear();
+      Py_XDECREF(file_attr);
+      continue;
+    }
+
+    if (PyUnicode_Check(file_attr)) {
+      const char *file_path = PyUnicode_AsUTF8(file_attr);
+      if (file_path && strncmp(file_path, working_dir, working_dir_len) == 0) {
+        PyDict_DelItem(sys_modules, key);
+      }
+    }
+
+    Py_DECREF(file_attr);
+  }
+
+  Py_DECREF(keys);
+  PyGILState_Release(gstate);
+}
+
 // Initialization
 
 void Py_init_and_release_gil(const char *setup_py) {

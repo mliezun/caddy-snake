@@ -1,0 +1,17 @@
+{
+	http_port 9080
+	https_port 9443
+	log {
+		level info
+	}
+}
+*.127.0.0.1.nip.io:9080 {
+	route /* {
+		python {
+			module_asgi "{http.request.host.labels.6}:app"
+			working_dir "{http.request.host.labels.6}/"
+			workers 1
+			workers_runtime thread
+		}
+	}
+}

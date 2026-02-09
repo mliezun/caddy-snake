@@ -1,19 +1,44 @@
-facebook:
-  label: Facebook
-  permalink: /facebook
-  description: Facebook tag description
+python:
+  label: Python
+  permalink: /python
+  description: Python related posts
 
-hello:
-  label: Hello
-  permalink: /hello
-  description: Hello tag description
+caddy-snake:
+  label: Caddy Snake
+  permalink: /caddy-snake
+  description: Caddy Snake project posts
 
-docusaurus:
-  label: Docusaurus
-  permalink: /docusaurus
-  description: Docusaurus tag description
+go:
+  label: Go
+  permalink: /go
+  description: Go related posts
 
-hola:
-  label: Hola
-  permalink: /hola
-  description: Hola tag description
+web:
+  label: Web
+  permalink: /web
+  description: Web development posts
+
+docs:
+  label: Docs
+  permalink: /docs
+  description: Documentation posts
+
+release:
+  label: Release
+  permalink: /release
+  description: Release announcements
+
+support:
+  label: Support
+  permalink: /support
+  description: Support related posts
+
+latest:
+  label: Latest
+  permalink: /latest
+  description: Latest updates
+
+"3.14":
+  label: "3.14"
+  permalink: /3-14
+  description: Python 3.14 related posts

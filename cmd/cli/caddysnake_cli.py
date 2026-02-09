@@ -42,6 +42,11 @@ import click
 )
 @click.option("--debug", is_flag=True, help="Enable debug logs")
 @click.option("--access-logs", is_flag=True, help="Enable access logs")
+@click.option(
+    "--autoreload",
+    is_flag=True,
+    help="Watch .py files and reload on changes (forces workers-runtime to thread)",
+)
 def main(
     server_type,
     domain,
@@ -53,6 +58,7 @@ def main(
     static_route,
     debug,
     access_logs,
+    autoreload,
 ):
     """
     A Python WSGI or ASGI server designed for apps and frameworks.
@@ -92,6 +98,8 @@ def main(
         args.append("--debug")
     if access_logs:
         args.append("--access-logs")
+    if autoreload:
+        args.append("--autoreload")
 
     # Execute the binary with the constructed arguments
     os.execv(binary_path, args)
