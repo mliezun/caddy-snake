@@ -6,15 +6,12 @@
 	}
 }
 localhost:9080 {
-	route /item/* {
+	route {
 		python {
 			module_wsgi "main:app"
 			workers 1
 			venv "./venv"
+			autoreload
 		}
-	}
-
-	route / {
-		respond 404
 	}
 }

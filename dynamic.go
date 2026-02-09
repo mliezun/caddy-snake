@@ -3,10 +3,14 @@ package caddysnake
 import (
 	"errors"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/caddyserver/caddy/v2"
+	"github.com/fsnotify/fsnotify"
 	"go.uber.org/zap"
 )
 
@@ -31,20 +35,44 @@ type DynamicApp struct {
 	venvPath      string
 	factory       appFactory
 	logger        *zap.Logger
+
+	// Autoreload fields
+	autoreload bool
+	watcher    *fsnotify.Watcher
+	dirToKeys  map[string][]string // abs working dir → cache keys that use it
+	stopCh     chan struct{}
 }
 
 // NewDynamicApp creates a DynamicApp that resolves placeholders from
 // modulePattern, workingDir, and venvPath at request time and lazily creates
-// Python app instances via the supplied factory function.
-func NewDynamicApp(modulePattern, workingDir, venvPath string, factory appFactory, logger *zap.Logger) *DynamicApp {
-	return &DynamicApp{
+// Python app instances via the supplied factory function. When autoreload is
+// true, a filesystem watcher is started that monitors each resolved working
+// directory for .py file changes and evicts affected apps so they are
+// reimported on the next request.
+func NewDynamicApp(modulePattern, workingDir, venvPath string, factory appFactory, logger *zap.Logger, autoreload bool) (*DynamicApp, error) {
+	d := &DynamicApp{
 		apps:          make(map[string]AppServer),
 		modulePattern: modulePattern,
 		workingDir:    workingDir,
 		venvPath:      venvPath,
 		factory:       factory,
 		logger:        logger,
+		autoreload:    autoreload,
 	}
+
+	if autoreload {
+		watcher, err := fsnotify.NewWatcher()
+		if err != nil {
+			return nil, err
+		}
+		d.watcher = watcher
+		d.dirToKeys = make(map[string][]string)
+		d.stopCh = make(chan struct{})
+		go d.watchForChanges()
+		logger.Info("autoreload enabled for dynamic app")
+	}
+
+	return d, nil
 }
 
 // resolve uses the Caddy replacer from the request context to substitute
@@ -98,7 +126,165 @@ func (d *DynamicApp) getOrCreateApp(key, module, dir, venv string) (AppServer, e
 	}
 
 	d.apps[key] = app
+
+	// Start watching the resolved working directory for autoreload
+	if d.autoreload && dir != "" {
+		d.startWatchingDir(dir, key)
+	}
+
 	return app, nil
+}
+
+// startWatchingDir begins watching the resolved working directory for .py file
+// changes and records the mapping from directory to cache key. Must be called
+// while holding d.mu write lock.
+func (d *DynamicApp) startWatchingDir(dir, key string) {
+	absDir, err := filepath.Abs(dir)
+	if err != nil {
+		d.logger.Warn("autoreload: failed to resolve directory",
+			zap.String("dir", dir),
+			zap.Error(err),
+		)
+		return
+	}
+
+	if keys, ok := d.dirToKeys[absDir]; ok {
+		// Already watching this directory, just add the key if not present
+		for _, k := range keys {
+			if k == key {
+				return
+			}
+		}
+		d.dirToKeys[absDir] = append(keys, key)
+		return
+	}
+
+	// New directory: start watching recursively and record the mapping
+	d.dirToKeys[absDir] = []string{key}
+	watchDirRecursive(d.watcher, absDir, d.logger)
+}
+
+// watchForChanges runs in a goroutine and listens for filesystem events across
+// all watched directories. Changes are debounced and then the affected apps are
+// evicted from the cache.
+func (d *DynamicApp) watchForChanges() {
+	var debounceTimer *time.Timer
+	const debounceDuration = 500 * time.Millisecond
+
+	pendingDirs := make(map[string]bool)
+	var pendingMu sync.Mutex
+
+	for {
+		select {
+		case event, ok := <-d.watcher.Events:
+			if !ok {
+				return
+			}
+			if !isPythonFileEvent(event) {
+				handleNewDirEvent(event, d.watcher)
+				continue
+			}
+
+			d.logger.Debug("python file changed (dynamic)",
+				zap.String("file", event.Name),
+				zap.String("op", event.Op.String()),
+			)
+
+			// Find which watched working directory this file belongs to
+			d.mu.RLock()
+			for absDir := range d.dirToKeys {
+				if strings.HasPrefix(event.Name, absDir+string(os.PathSeparator)) ||
+					strings.HasPrefix(event.Name, absDir) {
+					pendingMu.Lock()
+					pendingDirs[absDir] = true
+					pendingMu.Unlock()
+				}
+			}
+			d.mu.RUnlock()
+
+			if debounceTimer != nil {
+				debounceTimer.Stop()
+			}
+			debounceTimer = time.AfterFunc(debounceDuration, func() {
+				pendingMu.Lock()
+				dirs := make([]string, 0, len(pendingDirs))
+				for dir := range pendingDirs {
+					dirs = append(dirs, dir)
+				}
+				pendingDirs = make(map[string]bool)
+				pendingMu.Unlock()
+
+				for _, dir := range dirs {
+					d.reloadDir(dir)
+				}
+			})
+		case err, ok := <-d.watcher.Errors:
+			if !ok {
+				return
+			}
+			d.logger.Error("autoreload watcher error", zap.Error(err))
+		case <-d.stopCh:
+			if debounceTimer != nil {
+				debounceTimer.Stop()
+			}
+			return
+		}
+	}
+}
+
+// reloadDir invalidates the Python module cache for the given directory and
+// evicts all apps associated with it from the cache. Old apps are cleaned up
+// after a grace period to allow in-flight requests to complete safely.
+func (d *DynamicApp) reloadDir(absDir string) {
+	d.logger.Info("reloading dynamic python apps due to file changes",
+		zap.String("working_dir", absDir),
+	)
+
+	d.mu.Lock()
+
+	keys, ok := d.dirToKeys[absDir]
+	if !ok {
+		d.mu.Unlock()
+		return
+	}
+
+	// Invalidate Python module cache before any new imports can happen
+	invalidatePythonModuleCache(absDir)
+
+	// Collect old apps and evict them from the cache
+	var oldApps []AppServer
+	for _, key := range keys {
+		if app, exists := d.apps[key]; exists {
+			oldApps = append(oldApps, app)
+			delete(d.apps, key)
+		}
+	}
+
+	// Clear the dir-to-keys mapping; it will be rebuilt when apps are
+	// re-created via getOrCreateApp on the next request.
+	delete(d.dirToKeys, absDir)
+
+	d.mu.Unlock()
+
+	d.logger.Info("dynamic python apps evicted, will reimport on next request",
+		zap.String("working_dir", absDir),
+		zap.Int("apps_evicted", len(oldApps)),
+	)
+
+	// Schedule cleanup of old apps after a grace period so in-flight requests
+	// that still hold a reference to the old app can complete safely.
+	if len(oldApps) > 0 {
+		go func() {
+			time.Sleep(10 * time.Second)
+			for _, app := range oldApps {
+				if err := app.Cleanup(); err != nil {
+					d.logger.Error("failed to cleanup old dynamic app",
+						zap.Error(err),
+					)
+				}
+			}
+		}()
+	}
 }
 
 // HandleRequest resolves placeholders from the request, gets or creates the
@@ -112,10 +298,16 @@ func (d *DynamicApp) HandleRequest(w http.ResponseWriter, r *http.Request) error
 	return app.HandleRequest(w, r)
 }
 
-// Cleanup frees all dynamically created apps.
+// Cleanup frees all dynamically created apps and stops the autoreload watcher.
 func (d *DynamicApp) Cleanup() error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
+
+	// Stop autoreload watcher
+	if d.autoreload && d.stopCh != nil {
+		close(d.stopCh)
+		d.watcher.Close()
+	}
 
 	var errs []error
 	for key, app := range d.apps {

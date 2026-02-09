@@ -51,4 +51,8 @@ extern void asgi_set_headers(uint64_t, int, MapKeyVal *, AsgiEvent *);
 extern void asgi_cancel_request(uint64_t);
 extern void asgi_cancel_request_websocket(uint64_t, char *, int);
 
+// Autoreload: remove all Python modules from sys.modules whose __file__
+// starts with working_dir so the next import picks up fresh code.
+void Py_invalidate_module_cache(const char *working_dir);
+
 #endif // CADDYSNAKE_H_

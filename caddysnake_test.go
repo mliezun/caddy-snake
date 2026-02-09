@@ -528,11 +528,12 @@ func TestContainsPlaceholder(t *testing.T) {
 func TestDynamicAppResolveWithoutReplacer(t *testing.T) {
 	// When there is no Caddy replacer in the context, resolve should return
 	// the patterns as-is.
-	d := NewDynamicApp("main:app", "/home/{host.labels.0}", "/venvs/{host.labels.0}",
+	d, _ := NewDynamicApp("main:app", "/home/{host.labels.0}", "/venvs/{host.labels.0}",
 		func(module, dir, venv string) (AppServer, error) {
 			return nil, nil
 		},
 		zap.NewNop(),
+		false,
 	)
 
 	r := &http.Request{}
@@ -559,12 +560,13 @@ func TestDynamicAppGetOrCreate(t *testing.T) {
 	var createCount int
 	mockApp := &mockAppServer{}
 
-	d := NewDynamicApp("main:app", "/home/test", "",
+	d, _ := NewDynamicApp("main:app", "/home/test", "",
 		func(module, dir, venv string) (AppServer, error) {
 			createCount++
 			return mockApp, nil
 		},
 		zap.NewNop(),
+		false,
 	)
 
 	// First call should create the app.
@@ -603,11 +605,12 @@ func TestDynamicAppGetOrCreate(t *testing.T) {
 
 func TestDynamicAppCleanup(t *testing.T) {
 	var cleanupCount int
-	d := NewDynamicApp("main:app", "/home/test", "",
+	d, _ := NewDynamicApp("main:app", "/home/test", "",
 		func(module, dir, venv string) (AppServer, error) {
 			return &mockAppServer{onCleanup: func() { cleanupCount++ }}, nil
 		},
 		zap.NewNop(),
+		false,
 	)
 
 	// Create two apps.
@@ -1527,11 +1530,12 @@ func TestWsgiState_MultipleRequests(t *testing.T) {
 
 func TestDynamicAppGetOrCreate_FactoryError(t *testing.T) {
 	factoryErr := errors.New("import failed")
-	d := NewDynamicApp("main:app", "/home/test", "",
+	d, _ := NewDynamicApp("main:app", "/home/test", "",
 		func(module, dir, venv string) (AppServer, error) {
 			return nil, factoryErr
 		},
 		zap.NewNop(),
+		false,
 	)
 
 	app, err := d.getOrCreateApp("key1", "main:app", "/home/test", "")
@@ -1552,11 +1556,12 @@ func TestDynamicAppGetOrCreate_FactoryError(t *testing.T) {
 
 func TestDynamicAppCleanup_WithErrors(t *testing.T) {
 	cleanupErr := errors.New("cleanup failed")
-	d := NewDynamicApp("main:app", "/home/test", "",
+	d, _ := NewDynamicApp("main:app", "/home/test", "",
 		func(module, dir, venv string) (AppServer, error) {
 			return &mockAppServer{cleanupErr: cleanupErr}, nil
 		},
 		zap.NewNop(),
+		false,
 	)
 
 	_, _ = d.getOrCreateApp("key1", "main:app", "/home/a", "")
@@ -1579,13 +1584,14 @@ func TestDynamicAppHandleRequest(t *testing.T) {
 			return nil
 		},
 	}
-	d := NewDynamicApp("main:app", "/home/test", "",
+	d, _ := NewDynamicApp("main:app", "/home/test", "",
 		func(module, dir, venv string) (AppServer, error) {
 			handledModule = module
 			handledDir = dir
 			return mockApp, nil
 		},
 		zap.NewNop(),
+		false,
 	)
 
 	w := &mockResponseWriter{headers: make(http.Header)}
@@ -1606,11 +1612,12 @@ func TestDynamicAppHandleRequest(t *testing.T) {
 
 func TestDynamicAppHandleRequest_FactoryError(t *testing.T) {
 	factoryErr := errors.New("import failed")
-	d := NewDynamicApp("main:app", "/home/test", "",
+	d, _ := NewDynamicApp("main:app", "/home/test", "",
 		func(module, dir, venv string) (AppServer, error) {
 			return nil, factoryErr
 		},
 		zap.NewNop(),
+		false,
 	)
 
 	w := &mockResponseWriter{headers: make(http.Header)}
@@ -1624,11 +1631,12 @@ func TestDynamicAppHandleRequest_FactoryError(t *testing.T) {
 }
 
 func TestDynamicAppResolveWithReplacer(t *testing.T) {
-	d := NewDynamicApp("main:app", "/home/{custom.host}", "",
+	d, _ := NewDynamicApp("main:app", "/home/{custom.host}", "",
 		func(module, dir, venv string) (AppServer, error) {
 			return nil, nil
 		},
 		zap.NewNop(),
+		false,
 	)
 
 	repl := caddy.NewReplacer()
@@ -1654,11 +1662,12 @@ func TestDynamicAppResolveWithReplacer(t *testing.T) {
 }
 
 func TestDynamicAppResolveMultiplePlaceholders(t *testing.T) {
-	d := NewDynamicApp("{custom.module}:app", "/home/{custom.host}", "/venvs/{custom.host}",
+	d, _ := NewDynamicApp("{custom.module}:app", "/home/{custom.host}", "/venvs/{custom.host}",
 		func(module, dir, venv string) (AppServer, error) {
 			return nil, nil
 		},
 		zap.NewNop(),
+		false,
 	)
 
 	repl := caddy.NewReplacer()
@@ -1687,7 +1696,7 @@ func TestDynamicAppResolveMultiplePlaceholders(t *testing.T) {
 func TestDynamicAppConcurrentAccess(t *testing.T) {
 	var mu sync.Mutex
 	createCount := 0
-	d := NewDynamicApp("main:app", "/home/test", "",
+	d, _ := NewDynamicApp("main:app", "/home/test", "",
 		func(module, dir, venv string) (AppServer, error) {
 			mu.Lock()
 			createCount++
@@ -1695,6 +1704,7 @@ func TestDynamicAppConcurrentAccess(t *testing.T) {
 			return &mockAppServer{}, nil
 		},
 		zap.NewNop(),
+		false,
 	)
 
 	const goroutines = 50
@@ -1724,7 +1734,7 @@ func TestDynamicAppConcurrentAccess(t *testing.T) {
 func TestDynamicAppConcurrentDifferentKeys(t *testing.T) {
 	var mu sync.Mutex
 	createdKeys := make(map[string]bool)
-	d := NewDynamicApp("main:app", "", "",
+	d, _ := NewDynamicApp("main:app", "", "",
 		func(module, dir, venv string) (AppServer, error) {
 			mu.Lock()
 			createdKeys[module+"|"+dir+"|"+venv] = true
@@ -1732,6 +1742,7 @@ func TestDynamicAppConcurrentDifferentKeys(t *testing.T) {
 			return &mockAppServer{}, nil
 		},
 		zap.NewNop(),
+		false,
 	)
 
 	const goroutines = 10
@@ -2076,7 +2087,7 @@ func TestDynamicAppGetOrCreate_DoubleCheckPath(t *testing.T) {
 	factoryCalls := int32(0)
 	mockApp := &mockAppServer{}
 
-	d := NewDynamicApp("main:app", "/home/test", "",
+	d, _ := NewDynamicApp("main:app", "/home/test", "",
 		func(module, dir, venv string) (AppServer, error) {
 			atomic.AddInt32(&factoryCalls, 1)
 			// Small delay so other goroutines queue on the write lock.
@@ -2084,6 +2095,7 @@ func TestDynamicAppGetOrCreate_DoubleCheckPath(t *testing.T) {
 			return mockApp, nil
 		},
 		zap.NewNop(),
+		false,
 	)
 
 	const goroutines = 50
@@ -2201,11 +2213,12 @@ func TestBuildWsgiHeaders_ContentTypeLengthExcluded(t *testing.T) {
 }
 
 func TestDynamicAppCleanup_EmptyApps(t *testing.T) {
-	d := NewDynamicApp("main:app", "", "",
+	d, _ := NewDynamicApp("main:app", "", "",
 		func(module, dir, venv string) (AppServer, error) {
 			return &mockAppServer{}, nil
 		},
 		zap.NewNop(),
+		false,
 	)
 
 	// Cleanup with no apps should succeed with nil error.
@@ -2216,11 +2229,12 @@ func TestDynamicAppCleanup_EmptyApps(t *testing.T) {
 }
 
 func TestDynamicAppResolveWithNilReplacer(t *testing.T) {
-	d := NewDynamicApp("main:app", "/home/static", "",
+	d, _ := NewDynamicApp("main:app", "/home/static", "",
 		func(module, dir, venv string) (AppServer, error) {
 			return nil, nil
 		},
 		zap.NewNop(),
+		false,
 	)
 
 	// Context with a nil replacer value should fall through gracefully.

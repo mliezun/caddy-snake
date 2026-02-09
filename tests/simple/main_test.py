@@ -11,6 +11,14 @@ BASE_URL = "http://localhost:9080"
 
 BIG_BLOB = base64.b64encode(os.urandom(4 * 2**20)).decode("utf")
 
+MAIN_PY_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "main.py")
+
+# Number of autoreload cycles to test
+AUTORELOAD_CYCLES = 5
+
+# Max seconds to wait for each reload to take effect
+AUTORELOAD_TIMEOUT = 15
+
 
 def get_dummy_item() -> dict:
     global item_count
@@ -70,8 +78,88 @@ def make_objects(max_workers: int, count: int):
     print(f"Elapsed: {time.time() - start}s")
 
 
+def get_version() -> str:
+    """Fetch the current version from the running app."""
+    resp = requests.get(f"{BASE_URL}/version", timeout=5)
+    resp.raise_for_status()
+    return resp.text
+
+
+def wait_for_version(expected: str, timeout: float = AUTORELOAD_TIMEOUT) -> float:
+    """Poll /version until it returns `expected` or timeout is reached.
+
+    Returns the elapsed time in seconds.  Raises AssertionError on timeout.
+    """
+    start = time.time()
+    deadline = start + timeout
+    last_value = None
+    while time.time() < deadline:
+        try:
+            last_value = get_version()
+            if last_value == expected:
+                return time.time() - start
+        except requests.exceptions.RequestException:
+            # App might be mid-reload; keep polling
+            pass
+        time.sleep(0.3)
+    raise AssertionError(
+        f"Timeout after {timeout}s waiting for version '{expected}' "
+        f"(last seen: '{last_value}')"
+    )
+
+
+def rewrite_version(content: str, old_version: str, new_version: str) -> str:
+    """Replace the APP_VERSION line in the file content."""
+    marker_old = f'APP_VERSION = "{old_version}"'
+    marker_new = f'APP_VERSION = "{new_version}"'
+    assert marker_old in content, f"Marker '{marker_old}' not found in main.py"
+    return content.replace(marker_old, marker_new)
+
+
+def test_autoreload():
+    """Modify main.py several times and verify the running app picks up each change."""
+
+    print(f"\n=== Autoreload test ({AUTORELOAD_CYCLES} cycles) ===")
+
+    # Read the original file so we can restore it no matter what
+    with open(MAIN_PY_PATH, "r") as f:
+        original_content = f.read()
+
+    current_content = original_content
+
+    try:
+        # 1. Verify the initial version
+        version = get_version()
+        assert version == "v0", f"Expected initial version 'v0', got '{version}'"
+        print(f"  Initial version: {version}")
+
+        # 2. Cycle through versions v1 .. v{AUTORELOAD_CYCLES}
+        for i in range(1, AUTORELOAD_CYCLES + 1):
+            old_ver = f"v{i - 1}"
+            new_ver = f"v{i}"
+
+            # Rewrite main.py with the new version
+            current_content = rewrite_version(current_content, old_ver, new_ver)
+            with open(MAIN_PY_PATH, "w") as f:
+                f.write(current_content)
+
+            # Wait for the reload to take effect
+            elapsed = wait_for_version(new_ver)
+            print(f"  Reload {i}: {old_ver} -> {new_ver}  ({elapsed:.2f}s)")
+
+        print("=== Autoreload test passed ===\n")
+
+    finally:
+        # Always restore the original file so the test is idempotent
+        with open(MAIN_PY_PATH, "w") as f:
+            f.write(original_content)
+        print("  (main.py restored to original)")
+
+
 if __name__ == "__main__":
     import sys
 
     count = int(sys.argv[1]) if len(sys.argv) > 1 else 2_500
     make_objects(max_workers=4, count=count)
+
+    test_autoreload()
