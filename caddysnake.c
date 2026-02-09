@@ -1167,8 +1167,7 @@ void Py_invalidate_module_cache(const char *working_dir) {
 
     if (PyUnicode_Check(file_attr)) {
       const char *file_path = PyUnicode_AsUTF8(file_attr);
-      if (file_path &&
-          strncmp(file_path, working_dir, working_dir_len) == 0) {
+      if (file_path && strncmp(file_path, working_dir, working_dir_len) == 0) {
         PyDict_DelItem(sys_modules, key);
       }
     }
