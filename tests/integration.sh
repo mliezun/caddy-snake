@@ -13,13 +13,13 @@ set -euo pipefail
 #   ./integration_test.sh simple 3.13-nogil
 #
 # Valid tool names:
-#   django, django_channels, flask, fastapi, simple, simple_async, socketio, dynamic
+#   django, django_channels, flask, fastapi, simple_autoreload, simple_async, socketio, dynamic
 #
 # Valid python versions:
 #   3.10, 3.11, 3.12, 3.13, 3.13-nogil, 3.14
 # ---------------------------------------------------------------------------
 
-VALID_TOOLS=("django" "django_channels" "flask" "fastapi" "simple" "simple_async" "socketio" "dynamic")
+VALID_TOOLS=("django" "django_channels" "flask" "fastapi" "simple_autoreload" "simple_async" "socketio" "dynamic")
 VALID_PYVERSIONS=("3.10" "3.11" "3.12" "3.13" "3.13-nogil" "3.14")
 
 usage() {
