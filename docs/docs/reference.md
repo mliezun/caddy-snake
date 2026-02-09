@@ -179,7 +179,6 @@ python {
 - The old app is cleaned up and a new one is created seamlessly
 - In-flight requests complete before the swap happens (thread-safe with read/write locks)
 - If the reload fails (e.g. syntax error), all requests return HTTP 500 until the next successful reload
-- Hidden directories, `__pycache__`, and `node_modules` are automatically ignored
 
 ---
 

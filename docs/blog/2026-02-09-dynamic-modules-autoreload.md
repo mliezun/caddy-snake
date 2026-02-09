@@ -56,7 +56,7 @@ When you save a Python file, the app is automatically reloaded without restartin
 4. The old app is cleaned up and a new one is imported
 5. A read/write lock ensures in-flight requests complete before the swap
 
-If the reload fails (e.g. syntax error), requests return HTTP 500 until the code is fixed. Hidden directories, `__pycache__`, and `node_modules` are automatically ignored.
+If the reload fails (e.g. syntax error), requests return HTTP 500 until the code is fixed.
 
 ## Dynamic Modules + Autoreload
 

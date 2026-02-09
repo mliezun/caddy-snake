@@ -245,7 +245,7 @@ Enables ASGI [lifespan events](https://asgi.readthedocs.io/en/latest/specs/lifes
 
 Watches the working directory for `.py` file changes and automatically reloads the Python app. Useful during development. Requires `workers_runtime thread`.
 
-Changes are debounced (500ms) to handle rapid edits. Hidden directories, `__pycache__`, and `node_modules` are ignored.
+Changes are debounced (500ms) to handle rapid edits.
 
 ```Caddyfile
 python {

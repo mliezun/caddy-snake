@@ -71,15 +71,14 @@ The autoreload feature provides hot-reloading during development without restart
 
 1. A filesystem watcher ([fsnotify](https://github.com/fsnotify/fsnotify)) is started on the working directory, recursively watching all subdirectories
 2. Only `.py` file events are considered (write, create, remove, rename)
-3. Hidden directories, `__pycache__`, and `node_modules` are automatically skipped
-4. Rapid changes are debounced with a 500ms window (e.g. when an editor saves and auto-formats)
-5. When the debounce fires:
+3. Rapid changes are debounced with a 500ms window (e.g. when an editor saves and auto-formats)
+4. When the debounce fires:
    - The Python module cache (`sys.modules`) is invalidated for all modules under the working directory
    - The old application is cleaned up
    - The Python module is re-imported and a new application is created
    - The new app replaces the old one atomically
-6. A read/write lock ensures in-flight requests complete before the swap
-7. If the reload fails (e.g. syntax error in Python code), all subsequent requests return HTTP 500 until the next successful reload
+5. A read/write lock ensures in-flight requests complete before the swap
+6. If the reload fails (e.g. syntax error in Python code), all subsequent requests return HTTP 500 until the next successful reload
 
 ### Thread safety
 

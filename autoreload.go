@@ -15,8 +15,7 @@ import (
 	"go.uber.org/zap"
 )
 
-// watchDirRecursive adds all directories under root to the fsnotify watcher,
-// skipping hidden dirs, __pycache__, venvs, and other non-source directories.
+// watchDirRecursive adds all directories under root to the fsnotify watcher.
 // It is used by both AutoreloadableApp and DynamicApp.
 func watchDirRecursive(watcher *fsnotify.Watcher, root string, logger *zap.Logger) {
 	filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
@@ -54,10 +53,6 @@ func handleNewDirEvent(event fsnotify.Event, watcher *fsnotify.Watcher) {
 	}
 	info, err := os.Stat(event.Name)
 	if err != nil || !info.IsDir() {
-		return
-	}
-	name := info.Name()
-	if strings.HasPrefix(name, ".") || name == "__pycache__" || name == "node_modules" {
 		return
 	}
 	watcher.Add(event.Name)
