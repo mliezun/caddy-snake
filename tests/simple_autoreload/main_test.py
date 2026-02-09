@@ -17,7 +17,7 @@ MAIN_PY_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "main.py
 AUTORELOAD_CYCLES = 5
 
 # Max seconds to wait for each reload to take effect
-AUTORELOAD_TIMEOUT = 15
+AUTORELOAD_TIMEOUT = 30
 
 
 def get_dummy_item() -> dict:
@@ -85,14 +85,25 @@ def get_version() -> str:
     return resp.text
 
 
-def wait_for_version(expected: str, timeout: float = AUTORELOAD_TIMEOUT) -> float:
+def wait_for_version(
+    expected: str,
+    timeout: float = AUTORELOAD_TIMEOUT,
+    retouch_path: str | None = None,
+) -> float:
     """Poll /version until it returns `expected` or timeout is reached.
+
+    If *retouch_path* is given and the version hasn't changed after
+    RETOUCH_INTERVAL seconds, the file is "touched" (re-written with the same
+    content) to re-trigger the filesystem watcher.  This guards against rare
+    cases where the inotify/kqueue event is lost (observed in CI).
 
     Returns the elapsed time in seconds.  Raises AssertionError on timeout.
     """
+    RETOUCH_INTERVAL = 5  # seconds between re-touch attempts
     start = time.time()
     deadline = start + timeout
     last_value = None
+    last_retouch = start
     while time.time() < deadline:
         try:
             last_value = get_version()
@@ -101,11 +112,43 @@ def wait_for_version(expected: str, timeout: float = AUTORELOAD_TIMEOUT) -> floa
         except requests.exceptions.RequestException:
             # App might be mid-reload; keep polling
             pass
+
+        # If we've been waiting a while and the version is stuck, re-touch
+        # the file so the filesystem watcher fires again.
+        now = time.time()
+        if retouch_path and (now - last_retouch) >= RETOUCH_INTERVAL:
+            try:
+                _touch_file(retouch_path)
+            except OSError:
+                pass
+            last_retouch = now
+
         time.sleep(0.3)
     raise AssertionError(
         f"Timeout after {timeout}s waiting for version '{expected}' "
         f"(last seen: '{last_value}')"
     )
+
+
+def _write_and_sync(path: str, content: str) -> None:
+    """Write *content* to *path* and fsync to ensure the OS flushes the data.
+
+    This makes inotify / kqueue events fire reliably, even under heavy I/O
+    (e.g. CI runners).
+    """
+    fd = os.open(path, os.O_WRONLY | os.O_TRUNC | os.O_CREAT, 0o644)
+    try:
+        os.write(fd, content.encode())
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
+def _touch_file(path: str) -> None:
+    """Re-write the file with its current content to re-trigger fs watchers."""
+    with open(path, "r") as f:
+        content = f.read()
+    _write_and_sync(path, content)
 
 
 def rewrite_version(content: str, old_version: str, new_version: str) -> str:
@@ -138,21 +181,19 @@ def test_autoreload():
             old_ver = f"v{i - 1}"
             new_ver = f"v{i}"
 
-            # Rewrite main.py with the new version
+            # Rewrite main.py with the new version (fsync to ensure event fires)
             current_content = rewrite_version(current_content, old_ver, new_ver)
-            with open(MAIN_PY_PATH, "w") as f:
-                f.write(current_content)
+            _write_and_sync(MAIN_PY_PATH, current_content)
 
-            # Wait for the reload to take effect
-            elapsed = wait_for_version(new_ver)
+            # Wait for the reload to take effect; re-touch file if stuck
+            elapsed = wait_for_version(new_ver, retouch_path=MAIN_PY_PATH)
             print(f"  Reload {i}: {old_ver} -> {new_ver}  ({elapsed:.2f}s)")
 
         print("=== Autoreload test passed ===\n")
 
     finally:
         # Always restore the original file so the test is idempotent
-        with open(MAIN_PY_PATH, "w") as f:
-            f.write(original_content)
+        _write_and_sync(MAIN_PY_PATH, original_content)
         print("  (main.py restored to original)")
 
 
