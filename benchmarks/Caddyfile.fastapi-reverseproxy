@@ -1,0 +1,9 @@
+{
+	http_port 9080
+	https_port 9443
+}
+localhost:9080 {
+	route /* {
+		reverse_proxy localhost:8000
+	}
+}

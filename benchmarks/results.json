@@ -1,0 +1,22 @@
+{
+  "flask_gunicorn_caddy": {
+    "requests_per_sec": 4231.0004,
+    "avg_latency_ms": 23.6,
+    "p99_latency_ms": 37.7
+  },
+  "flask_caddysnake": {
+    "requests_per_sec": 4669.9346,
+    "avg_latency_ms": 21.4,
+    "p99_latency_ms": 42
+  },
+  "fastapi_uvicorn_caddy": {
+    "requests_per_sec": 13346.6306,
+    "avg_latency_ms": 7.5,
+    "p99_latency_ms": 83.7
+  },
+  "fastapi_caddysnake": {
+    "requests_per_sec": 9558.7325,
+    "avg_latency_ms": 10.4,
+    "p99_latency_ms": 19.8
+  }
+}

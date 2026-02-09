@@ -1,0 +1,14 @@
+{
+	http_port 9080
+	https_port 9443
+}
+localhost:9080 {
+	route /* {
+		python {
+			module_asgi "app_fastapi:app"
+			venv "./venv"
+			workers 1
+			workers_runtime thread
+		}
+	}
+}

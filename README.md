@@ -329,6 +329,23 @@ Make sure to match the Python version with your target environment.
 
 ---
 
+## Benchmarks
+
+Caddy Snake eliminates the overhead of a reverse proxy by embedding Python directly in Caddy. Here's how it compares to traditional setups using a simple JSON "Hello, World!" endpoint:
+
+![Benchmark Chart](benchmarks/benchmark_chart.svg)
+
+| Configuration | Requests/sec | Avg Latency (ms) | P99 Latency (ms) |
+|---|---|---|---|
+| Flask + Gunicorn + Caddy | 4,231 | 23.60 | 37.70 |
+| Flask + Caddy Snake | 4,670 | 21.40 | 42.00 |
+| FastAPI + Uvicorn + Caddy | 13,347 | 7.50 | 83.70 |
+| FastAPI + Caddy Snake | 9,559 | 10.40 | 19.80 |
+
+> Benchmarked with [hey](https://github.com/rakyll/hey) — 100 concurrent connections, 10s duration, thread workers. See [benchmarks/](benchmarks/) for methodology and how to reproduce.
+
+---
+
 ## Platform support
 
 | Platform       | Workers runtime   | Notes                                    |

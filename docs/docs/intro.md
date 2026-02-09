@@ -259,3 +259,4 @@ The venv packages are added to the global `sys.path`, which means all Python app
 - Learn about all [Configuration Options](reference.md)
 - See more [Examples](examples.md) with Flask, Django, FastAPI, Socket.IO, and more
 - Understand the [Architecture](architecture.md) and how it all works
+- Check out the [Benchmarks](benchmarks.md) comparing Caddy Snake to traditional reverse proxy setups
