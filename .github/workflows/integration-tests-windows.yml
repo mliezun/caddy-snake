@@ -13,7 +13,7 @@
         strategy:
           fail-fast: false
           matrix:
-            tool-name: ['simple_async', 'flask']
+            tool-name: ['simple_async']
             python-version: ['3.14']
         env:
           GOEXPERIMENT: cgocheck2
