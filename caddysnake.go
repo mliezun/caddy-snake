@@ -658,7 +658,7 @@ A Python worker designed for ASGI and WSGI apps.
 	})
 	caddycmd.RegisterCommand(caddycmd.Command{
 		Name:  "python-server",
-		Usage: "--server-type wsgi|asgi --app <module> [--domain <example.com>] [--listen <addr>] [--workers <count>] [--workers-runtime <runtime>] [--static-path <path>] [--static-route <route>] [--debug] [--access-logs]",
+		Usage: "--server-type wsgi|asgi --app <module> [--domain <example.com>] [--listen <addr>] [--workers <count>] [--workers-runtime <runtime>] [--static-path <path>] [--static-route <route>] [--debug] [--access-logs] [--autoreload]",
 		Short: "Spins up a Python server",
 		Long: `
 A Python WSGI or ASGI server designed for apps and frameworks.
@@ -679,6 +679,7 @@ Ensure DNS A/AAAA records are correctly set up if using a public domain for secu
 			cmd.Flags().String("static-route", "/static", "Route to serve the static directory: /static")
 			cmd.Flags().Bool("debug", false, "Enable debug logs")
 			cmd.Flags().Bool("access-logs", false, "Enable access logs")
+			cmd.Flags().Bool("autoreload", false, "Watch .py files and reload on changes (requires workers-runtime thread)")
 			cmd.RunE = caddycmd.WrapCommandFuncForCobra(pythonServer)
 		},
 	})
@@ -695,6 +696,7 @@ func pythonServer(fs caddycmd.Flags) (int, error) {
 	workersRuntime := fs.String("workers-runtime")
 	debug := fs.Bool("debug")
 	accessLogs := fs.Bool("access-logs")
+	autoreload := fs.Bool("autoreload")
 	staticPath := fs.String("static-path")
 	staticRoute := fs.String("static-route")
 	serverType := fs.String("server-type")
@@ -734,6 +736,10 @@ func pythonServer(fs caddycmd.Flags) (int, error) {
 
 	pythonHandler.Workers = workers
 	pythonHandler.WorkersRuntime = workersRuntime
+	if autoreload {
+		pythonHandler.Autoreload = "on"
+		pythonHandler.WorkersRuntime = "thread"
+	}
 
 	// Create routes list
 	routes := caddyhttp.RouteList{}

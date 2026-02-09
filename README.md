@@ -62,6 +62,7 @@ This starts a server on port `9080` serving your app. See `./caddy python-server
 --static-route <route>    Route prefix for static files (default: /static)
 --debug                   Enable debug logging
 --access-logs             Enable access logs
+--autoreload              Watch .py files and reload on changes
 ```
 
 ### Option 2: Build from source
