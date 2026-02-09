@@ -104,15 +104,8 @@ type Wsgi struct {
 
 var wsgiAppCache map[string]*Wsgi = map[string]*Wsgi{}
 
-// NewWsgi imports a WSGI app
-func NewWsgi(wsgiPattern, workingDir, venvPath string) (*Wsgi, error) {
-	wsgiState.Lock()
-	defer wsgiState.Unlock()
-
-	if app, ok := wsgiAppCache[wsgiPattern]; ok {
-		return app, nil
-	}
-
+// importWsgiApp performs the actual Python WSGI app import without caching.
+func importWsgiApp(wsgiPattern, workingDir, venvPath string) (*C.WsgiApp, error) {
 	moduleApp := strings.Split(wsgiPattern, ":")
 	if len(moduleApp) != 2 {
 		return nil, errors.New("expected pattern $(MODULE_NAME):$(VARIABLE_NAME)")
@@ -150,8 +143,44 @@ func NewWsgi(wsgiPattern, workingDir, venvPath string) (*Wsgi, error) {
 		return nil, errors.New("failed to import module")
 	}
 
-	result := &Wsgi{app, wsgiPattern}
+	return app, nil
+}
+
+// NewWsgi imports a WSGI app with global caching by wsgi pattern.
+func NewWsgi(wsgiPattern, workingDir, venvPath string) (*Wsgi, error) {
+	wsgiState.Lock()
+	defer wsgiState.Unlock()
+
+	if app, ok := wsgiAppCache[wsgiPattern]; ok {
+		return app, nil
+	}
+
+	cApp, err := importWsgiApp(wsgiPattern, workingDir, venvPath)
+	if err != nil {
+		return nil, err
+	}
+
+	result := &Wsgi{cApp, wsgiPattern}
 	wsgiAppCache[wsgiPattern] = result
+	return result, nil
+}
+
+// NewDynamicWsgiApp imports a WSGI app for dynamic (per-request) use.
+// It uses a composite cache key (pattern + working dir) so that the same module
+// loaded from different directories is tracked separately for cleanup.
+func NewDynamicWsgiApp(wsgiPattern, workingDir, venvPath string) (*Wsgi, error) {
+	cApp, err := importWsgiApp(wsgiPattern, workingDir, venvPath)
+	if err != nil {
+		return nil, err
+	}
+
+	cacheKey := wsgiPattern + "@" + workingDir
+	result := &Wsgi{cApp, cacheKey}
+
+	wsgiState.Lock()
+	wsgiAppCache[cacheKey] = result
+	wsgiState.Unlock()
+
 	return result, nil
 }
 
@@ -242,7 +271,7 @@ func buildWsgiHeaders(r *http.Request) *MapKeyVal {
 		}
 
 		joinStr := ", "
-		if k == "COOKIE" {
+		if key == "COOKIE" {
 			joinStr = "; "
 		}
 

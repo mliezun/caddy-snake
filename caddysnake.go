@@ -210,6 +210,17 @@ func (f *CaddySnake) Provision(ctx caddy.Context) error {
 		f.logger.Warn("workers attribute is ignored when workers_runtime is thread, only 1 worker will be used", zap.String("workers_runtime", workersRuntime), zap.Int("workers", workers))
 		workers = 1
 	}
+
+	// Check if any configuration field contains Caddy placeholders.
+	// When placeholders are present, we use dynamic mode: apps are imported
+	// lazily at request time after resolving placeholders (e.g. {host.labels.2}).
+	isDynamic := containsPlaceholder(f.ModuleWsgi) || containsPlaceholder(f.ModuleAsgi) ||
+		containsPlaceholder(f.WorkingDir) || containsPlaceholder(f.VenvPath)
+
+	if isDynamic {
+		return f.provisionDynamic(workersRuntime, workers)
+	}
+
 	if f.ModuleWsgi != "" {
 		if workersRuntime == "thread" {
 			initPythonMainThread()
@@ -243,6 +254,62 @@ func (f *CaddySnake) Provision(ctx caddy.Context) error {
 			}
 		}
 		f.logger.Info("serving asgi app", zap.String("module_asgi", f.ModuleAsgi), zap.String("working_dir", f.WorkingDir), zap.String("venv_path", f.VenvPath))
+	} else {
+		return errors.New("asgi or wsgi app needs to be specified")
+	}
+	return nil
+}
+
+// provisionDynamic sets up the module in dynamic mode where Caddy placeholders
+// in module_wsgi/module_asgi, working_dir, or venv are resolved per-request.
+// Each unique combination of resolved values gets its own Python app instance,
+// created lazily on first request.
+func (f *CaddySnake) provisionDynamic(workersRuntime string, workers int) error {
+	if f.ModuleWsgi != "" {
+		var factory appFactory
+		if workersRuntime == "thread" {
+			initPythonMainThread()
+			initWsgi()
+			factory = func(module, dir, venv string) (AppServer, error) {
+				return NewDynamicWsgiApp(module, dir, venv)
+			}
+		} else {
+			lifespan := f.Lifespan
+			factory = func(module, dir, venv string) (AppServer, error) {
+				return NewPythonWorkerGroup("wsgi", module, dir, venv, lifespan, workers)
+			}
+		}
+		f.app = NewDynamicApp(f.ModuleWsgi, f.WorkingDir, f.VenvPath, factory, f.logger)
+		if f.Lifespan != "" {
+			f.logger.Warn("lifespan attribute is ignored in WSGI mode", zap.String("lifespan", f.Lifespan))
+		}
+		f.logger.Info("serving dynamic wsgi app",
+			zap.String("module_wsgi", f.ModuleWsgi),
+			zap.String("working_dir", f.WorkingDir),
+			zap.String("venv_path", f.VenvPath),
+		)
+	} else if f.ModuleAsgi != "" {
+		var factory appFactory
+		if workersRuntime == "thread" {
+			initPythonMainThread()
+			initAsgi()
+			lifespan := f.Lifespan == "on"
+			logger := f.logger
+			factory = func(module, dir, venv string) (AppServer, error) {
+				return NewDynamicAsgiApp(module, dir, venv, lifespan, logger)
+			}
+		} else {
+			lifespan := f.Lifespan
+			factory = func(module, dir, venv string) (AppServer, error) {
+				return NewPythonWorkerGroup("asgi", module, dir, venv, lifespan, workers)
+			}
+		}
+		f.app = NewDynamicApp(f.ModuleAsgi, f.WorkingDir, f.VenvPath, factory, f.logger)
+		f.logger.Info("serving dynamic asgi app",
+			zap.String("module_asgi", f.ModuleAsgi),
+			zap.String("working_dir", f.WorkingDir),
+			zap.String("venv_path", f.VenvPath),
+		)
 	} else {
 		return errors.New("asgi or wsgi app needs to be specified")
 	}
