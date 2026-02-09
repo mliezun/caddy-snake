@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "caddysnake"
-version = "0.2.2"
+version = "0.3.0"
 description = "Python WSGI/ASGI server powered by Caddy"
 authors = [
     {name = "Miguel Liezun", email = "liezun.js@gmail.com"},
@@ -21,6 +21,7 @@ classifiers = [
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
     "Programming Language :: Go",
 ]
 dependencies = [

@@ -111,6 +111,10 @@ const config = {
                 label: 'Quickstart',
                 to: '/docs/intro',
               },
+              {
+                label: 'Installation',
+                to: '/docs/installation',
+              },
             ],
           },
           // {
