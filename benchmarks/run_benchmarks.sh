@@ -4,12 +4,13 @@ set -euo pipefail
 WORKSPACE="/workspace"
 BENCH_DIR="${WORKSPACE}/benchmarks"
 RESULTS_FILE="${BENCH_DIR}/results.json"
+NUM_RUNS=10
 
 export PATH="/usr/local/go/bin:$HOME/go/bin:$PATH"
 export DEBIAN_FRONTEND=noninteractive
 
 echo "============================================"
-echo " Caddy Snake Benchmarks"
+echo " Caddy Snake Benchmarks (${NUM_RUNS} runs)"
 echo "============================================"
 
 # Install system packages
@@ -72,7 +73,7 @@ run_benchmark() {
     local teardown_cmd="$3"
 
     echo ""
-    echo ">>> Running benchmark: $name"
+    echo ">>> Running benchmark: $name ($NUM_RUNS runs)"
     echo "-------------------------------------------"
 
     eval "$setup_cmd"
@@ -91,37 +92,50 @@ run_benchmark() {
     $HEY -c 10 -n 200 http://localhost:9080/hello > /dev/null 2>&1
     sleep 2
 
-    # Run benchmark
-    echo "    Running benchmark (100 concurrent, 10s)..."
-    local hey_output_file="${BENCH_DIR}/hey_output_${name}.txt"
-    $HEY -c 100 -z 10s http://localhost:9080/hello > "$hey_output_file" 2>&1
+    local sum_rps=0 sum_avg=0 sum_p99=0
 
-    # Parse results (hey uses %% in some output modes)
-    local rps avg_latency p99_latency
-    rps=$(grep "Requests/sec:" "$hey_output_file" | awk '{print $2}' || echo "0")
-    avg_latency=$(grep "Average" "$hey_output_file" | head -1 | awk '{print $2}' || echo "0")
-    p99_latency=$(grep -E "99%[%]? in" "$hey_output_file" | awk '{print $3}' || echo "0")
-    : "${rps:=0}" "${avg_latency:=0}" "${p99_latency:=0}"
+    for run in $(seq 1 $NUM_RUNS); do
+        echo "    Run $run/$NUM_RUNS..."
+        local hey_output_file="${BENCH_DIR}/hey_output_${name}_${run}.txt"
+        $HEY -c 100 -z 10s http://localhost:9080/hello > "$hey_output_file" 2>&1
 
-    # Handle NaN or empty values
-    [[ "$rps" == "NaN" || -z "$rps" ]] && rps="0"
-    [[ "$avg_latency" == "NaN" || -z "$avg_latency" ]] && avg_latency="0"
-    [[ "$p99_latency" == "NaN" || -z "$p99_latency" ]] && p99_latency="0"
+        local rps avg_latency p99_latency
+        rps=$(grep "Requests/sec:" "$hey_output_file" | awk '{print $2}' || echo "0")
+        avg_latency=$(grep "Average" "$hey_output_file" | head -1 | awk '{print $2}' || echo "0")
+        p99_latency=$(grep -E "99%[%]? in" "$hey_output_file" | awk '{print $3}' || echo "0")
+        : "${rps:=0}" "${avg_latency:=0}" "${p99_latency:=0}"
+        [[ "$rps" == "NaN" || -z "$rps" ]] && rps="0"
+        [[ "$avg_latency" == "NaN" || -z "$avg_latency" ]] && avg_latency="0"
+        [[ "$p99_latency" == "NaN" || -z "$p99_latency" ]] && p99_latency="0"
 
-    echo "    Results: ${rps} req/s, avg ${avg_latency}s, p99 ${p99_latency}s"
+        local avg_ms p99_ms
+        avg_ms=$(python3 -c "print(round(float('${avg_latency}') * 1000, 3))")
+        p99_ms=$(python3 -c "print(round(float('${p99_latency}') * 1000, 3))")
 
-    # Convert to ms
-    local avg_ms p99_ms
-    avg_ms=$(python3 -c "print(round(float('${avg_latency}') * 1000, 3))")
-    p99_ms=$(python3 -c "print(round(float('${p99_latency}') * 1000, 3))")
+        echo "      ${rps} req/s, avg ${avg_ms}ms, p99 ${p99_ms}ms"
+
+        sum_rps=$(python3 -c "print(${sum_rps} + ${rps})")
+        sum_avg=$(python3 -c "print(${sum_avg} + ${avg_ms})")
+        sum_p99=$(python3 -c "print(${sum_p99} + ${p99_ms})")
+
+        sleep 1
+    done
+
+    # Compute averages
+    local final_rps final_avg final_p99
+    final_rps=$(python3 -c "print(round(${sum_rps} / ${NUM_RUNS}, 4))")
+    final_avg=$(python3 -c "print(round(${sum_avg} / ${NUM_RUNS}, 3))")
+    final_p99=$(python3 -c "print(round(${sum_p99} / ${NUM_RUNS}, 3))")
+
+    echo "    Average over $NUM_RUNS runs: ${final_rps} req/s, avg ${final_avg}ms, p99 ${final_p99}ms"
 
     # Save to results file
     local tmp
     tmp=$(mktemp)
     jq --arg name "$name" \
-       --argjson rps "$rps" \
-       --argjson avg "$avg_ms" \
-       --argjson p99 "$p99_ms" \
+       --argjson rps "$final_rps" \
+       --argjson avg "$final_avg" \
+       --argjson p99 "$final_p99" \
        '.[$name] = {"requests_per_sec": $rps, "avg_latency_ms": $avg, "p99_latency_ms": $p99}' \
        "$RESULTS_FILE" > "$tmp"
     mv "$tmp" "$RESULTS_FILE"
@@ -143,7 +157,7 @@ run_benchmark "flask_gunicorn_caddy" \
 run_benchmark "flask_caddysnake" \
     'cd $BENCH_DIR && $CADDY run --config Caddyfile.flask-caddysnake > /tmp/caddy-flask.log 2>&1 &
      sleep 5' \
-    'pkill -f "caddy-snake-bench" || true; sleep 2; cat /tmp/caddy-flask.log || true'
+    'pkill -f "caddy-snake-bench" || true; sleep 2'
 
 # Benchmark 3: FastAPI + Uvicorn + Caddy reverse proxy
 run_benchmark "fastapi_uvicorn_caddy" \
@@ -157,11 +171,11 @@ run_benchmark "fastapi_uvicorn_caddy" \
 run_benchmark "fastapi_caddysnake" \
     'cd $BENCH_DIR && $CADDY run --config Caddyfile.fastapi-caddysnake > /tmp/caddy-fastapi.log 2>&1 &
      sleep 5' \
-    'pkill -f "caddy-snake-bench" || true; sleep 2; cat /tmp/caddy-fastapi.log || true'
+    'pkill -f "caddy-snake-bench" || true; sleep 2'
 
 echo ""
 echo "============================================"
-echo " Results Summary"
+echo " Results Summary (avg of $NUM_RUNS runs)"
 echo "============================================"
 echo ""
 cat "$RESULTS_FILE" | jq .
