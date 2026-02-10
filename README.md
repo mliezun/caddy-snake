@@ -329,6 +329,23 @@ Make sure to match the Python version with your target environment.
 
 ---
 
+## Benchmarks
+
+Here's how it compares to traditional setups using a simple JSON "Hello, World!" endpoint:
+
+![Benchmark Chart](benchmarks/benchmark_chart.svg)
+
+| Configuration | Requests/sec | Avg Latency (ms) | P99 Latency (ms) |
+|---|---|---|---|
+| Flask + Gunicorn + Caddy | 3,249 | 30.87 | 57.99 |
+| Flask + Caddy Snake | 4,714 | 21.20 | 29.53 |
+| FastAPI + Uvicorn + Caddy | 12,742 | 7.90 | 93.90 |
+| FastAPI + Caddy Snake | 9,225 | 10.82 | 18.72 |
+
+> Benchmarked with [hey](https://github.com/rakyll/hey) — 100 concurrent connections, 10s duration, thread workers. See [benchmarks/](benchmarks/) for methodology and how to reproduce.
+
+---
+
 ## Platform support
 
 | Platform       | Workers runtime   | Notes                                    |
