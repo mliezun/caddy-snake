@@ -93,9 +93,9 @@ echo ">>> Installing base packages..."
 apt-get update -yyqq
 apt-get install -yyqq software-properties-common valgrind time curl gcc build-essential ca-certificates git pkg-config
 
-# Install Go 1.25
-echo ">>> Installing Go 1.25..."
-curl -fsSL "https://go.dev/dl/go1.25.0.linux-amd64.tar.gz" -o /tmp/go.tar.gz
+# Install Go 1.26
+echo ">>> Installing Go 1.26..."
+curl -fsSL "https://go.dev/dl/go1.26.0.linux-amd64.tar.gz" -o /tmp/go.tar.gz
 tar -C /usr/local -xzf /tmp/go.tar.gz
 export PATH="/usr/local/go/bin:$HOME/go/bin:$PATH"
 go version
