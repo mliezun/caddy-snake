@@ -1,6 +1,6 @@
 FROM ubuntu:22.04
 
-ARG GO_VERSION=1.25.0
+ARG GO_VERSION=1.26.0
 ARG PY_VERSION=3.13
 
 RUN export DEBIAN_FRONTEND=noninteractive &&\

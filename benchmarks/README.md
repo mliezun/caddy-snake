@@ -28,5 +28,5 @@ Results are saved to `benchmarks/results.json` and a chart is generated at `benc
 - 10 second duration per test
 - Warmup: 200 requests at 10 concurrency before each test
 - Platform: Ubuntu 22.04 on linux/amd64
-- Python 3.13, Go 1.25
+- Python 3.13, Go 1.26
 - Caddy Snake uses thread workers; Gunicorn uses 1 worker with 4 threads; Uvicorn uses 1 worker
