@@ -7,15 +7,12 @@
 #error "This code requires Python 3.10, 3.11, 3.12, 3.13 or 3.14"
 #endif
 
-struct WsgiApp {
-  PyObject *handler;
-};
-
 // WSGI: global variables
 static PyObject *wsgi_version;
 static PyObject *sys_stderr;
 static PyObject *BytesIO;
 static PyObject *task_queue_put;
+static PyThreadState *interp;
 
 // ASGI: global variables
 static PyObject *asgi_version;
@@ -27,6 +24,12 @@ static PyObject *build_send;
 static PyObject *build_lifespan;
 static PyObject *websocket_closed;
 
+// Section: Helper functions for string and buffer manipulation
+
+/*
+ * copy_string: Copies a C string to a newly allocated buffer.
+ * Returns a pointer to the new buffer or NULL on failure.
+ */
 static char *copy_string(const char *str1) {
   size_t buffer_size = strlen(str1) + 1;
   char *result = malloc(buffer_size * sizeof(char));
@@ -37,6 +40,11 @@ static char *copy_string(const char *str1) {
   return result;
 }
 
+/*
+ * concatenate_buffers: Concatenates two buffers into a new buffer.
+ * Returns a pointer to the new buffer and sets out_size to the total size.
+ * Returns NULL on failure.
+ */
 static char *concatenate_buffers(const char *buffer1, size_t size1,
                                  const char *buffer2, size_t size2,
                                  size_t *out_size) {
@@ -54,6 +62,10 @@ static char *concatenate_buffers(const char *buffer1, size_t size1,
   return result;
 }
 
+/*
+ * copy_pystring: Copies a Python string to a newly allocated C string.
+ * Returns a pointer to the new string or NULL on failure.
+ */
 static char *copy_pystring(PyObject *pystr) {
   Py_ssize_t og_size = 0;
   const char *og_str = PyUnicode_AsUTF8AndSize(pystr, &og_size);
@@ -66,6 +78,11 @@ static char *copy_pystring(PyObject *pystr) {
   return result;
 }
 
+/*
+ * copy_pybytes: Copies a Python bytes object to a newly allocated C string.
+ * Returns a pointer to the new string and sets size to the length of the bytes.
+ * Returns NULL on failure.
+ */
 static char *copy_pybytes(PyObject *pybytes, size_t *size) {
   Py_ssize_t og_size = 0;
   *size = 0;
@@ -83,6 +100,20 @@ static char *copy_pybytes(PyObject *pybytes, size_t *size) {
   return result;
 }
 
+/*
+ * Debug_obj: Prints the string representation of a Python object to stdout.
+ * Useful for debugging purposes.
+ */
+static void Debug_obj(PyObject *obj) {
+  PyObject *repr = PyObject_Repr(obj);
+  printf("%s\n", PyUnicode_AsUTF8(repr));
+  Py_DECREF(repr);
+}
+
+/*
+ * MapKeyVal: A simple key-value map implementation similar to Go slices.
+ * It stores keys and values as dynamically allocated arrays.
+ */
 MapKeyVal *MapKeyVal_new(size_t capacity) {
   MapKeyVal *new_map = (MapKeyVal *)malloc(sizeof(MapKeyVal));
   new_map->length = 0;
@@ -92,6 +123,10 @@ MapKeyVal *MapKeyVal_new(size_t capacity) {
   return new_map;
 }
 
+/*
+ * MapKeyVal_free: Frees the memory allocated for a MapKeyVal instance.
+ * It also frees each key and value stored in the map.
+ */
 void MapKeyVal_free(MapKeyVal *map) {
   for (size_t i = 0; i < map->length; i++) {
     free(map->keys[i]);
@@ -102,11 +137,20 @@ void MapKeyVal_free(MapKeyVal *map) {
   free(map);
 }
 
+/*
+ * MapKeyVal_append: Appends a key-value pair to the MapKeyVal instance.
+ * It assumes that the map has enough capacity to hold the new pair.
+ */
 static void MapKeyVal_append(MapKeyVal *map, char *key, char *value) {
   map->keys[map->length] = key;
   map->values[map->length] = value;
   map->length++;
 }
+
+// WSGI 1.0 protocol implementation
+struct WsgiApp {
+  PyObject *handler;
+};
 
 typedef struct {
   PyObject_HEAD WsgiApp *app;
@@ -116,12 +160,6 @@ typedef struct {
   PyObject *response_body;
   int response_status;
 } RequestResponse;
-
-static void Debug_obj(PyObject *obj) {
-  PyObject *repr = PyObject_Repr(obj);
-  printf("%s\n", PyUnicode_AsUTF8(repr));
-  Py_DECREF(repr);
-}
 
 static PyObject *Response_new(PyTypeObject *type, PyObject *args,
                               PyObject *kwds) {
@@ -222,13 +260,26 @@ static PyTypeObject ResponseType = {
     .tp_methods = Response_methods,
 };
 
+static PyThreadState *Interpreter_acquire(PyInterpreterState *interp) {
+  PyThreadState *ts = PyThreadState_New(interp);
+  PyEval_RestoreThread(ts);
+  return ts;
+}
+
+static void Interpreter_release(PyThreadState *ts) {
+  // clear ts
+  PyThreadState_Clear(ts);
+  // delete the current thread state and release the GIL
+  PyThreadState_DeleteCurrent();
+}
+
 WsgiApp *WsgiApp_import(const char *module_name, const char *app_name,
                         const char *working_dir, const char *venv_path) {
   WsgiApp *app = malloc(sizeof(WsgiApp));
   if (app == NULL) {
     return NULL;
   }
-  PyGILState_STATE gstate = PyGILState_Ensure();
+  PyThreadState *ts = Interpreter_acquire(interp->interp);
 
   // Add working_dir into sys.path list
   if (working_dir) {
@@ -245,7 +296,7 @@ WsgiApp *WsgiApp_import(const char *module_name, const char *app_name,
   PyObject *module = PyImport_ImportModule(module_name);
   if (module == NULL) {
     PyErr_Print();
-    PyGILState_Release(gstate);
+    Interpreter_release(ts);
     return NULL;
   }
 
@@ -254,25 +305,25 @@ WsgiApp *WsgiApp_import(const char *module_name, const char *app_name,
     if (PyErr_Occurred()) {
       PyErr_Print();
     }
-    PyGILState_Release(gstate);
+    Interpreter_release(ts);
     return NULL;
   }
 
-  PyGILState_Release(gstate);
+  Interpreter_release(ts);
   return app;
 }
 
 void WsgiApp_cleanup(WsgiApp *app) {
-  PyGILState_STATE gstate = PyGILState_Ensure();
+  PyThreadState *ts = Interpreter_acquire(interp->interp);
   Py_XDECREF(app->handler);
-  PyGILState_Release(gstate);
+  Interpreter_release(ts);
   free(app);
 }
 
 void WsgiApp_handle_request(WsgiApp *app, int64_t request_id,
                             MapKeyVal *headers, const char *body,
                             size_t body_len) {
-  PyGILState_STATE gstate = PyGILState_Ensure();
+  PyThreadState *ts = Interpreter_acquire(interp->interp);
 
   PyObject *env_dict = PyDict_New();
   for (size_t i = 0; i < headers->length; i++) {
@@ -306,7 +357,7 @@ void WsgiApp_handle_request(WsgiApp *app, int64_t request_id,
   r->request_environ = env_dict;
   PyObject_CallOneArg(task_queue_put, (PyObject *)r);
 
-  PyGILState_Release(gstate);
+  Interpreter_release(ts);
 }
 
 static PyObject *response_callback(PyObject *self, PyObject *args) {
@@ -478,7 +529,7 @@ AsgiApp *AsgiApp_import(const char *module_name, const char *app_name,
   }
   app->lifespan_startup = NULL;
   app->lifespan_shutdown = NULL;
-  PyGILState_STATE gstate = PyGILState_Ensure();
+  PyThreadState *ts = Interpreter_acquire(interp->interp);
 
   // Add working_dir into sys.path list
   if (working_dir) {
@@ -495,7 +546,7 @@ AsgiApp *AsgiApp_import(const char *module_name, const char *app_name,
   PyObject *module = PyImport_ImportModule(module_name);
   if (module == NULL) {
     PyErr_Print();
-    PyGILState_Release(gstate);
+    Interpreter_release(ts);
     return NULL;
   }
 
@@ -504,17 +555,17 @@ AsgiApp *AsgiApp_import(const char *module_name, const char *app_name,
     if (PyErr_Occurred()) {
       PyErr_Print();
     }
-    PyGILState_Release(gstate);
+    Interpreter_release(ts);
     return NULL;
   }
   app->state = PyDict_New();
 
-  PyGILState_Release(gstate);
+  Interpreter_release(ts);
   return app;
 }
 
 uint8_t AsgiApp_lifespan_startup(AsgiApp *app) {
-  PyGILState_STATE gstate = PyGILState_Ensure();
+  PyThreadState *ts = Interpreter_acquire(interp->interp);
 
   PyObject *args = PyTuple_New(2);
   PyTuple_SetItem(args, 0, app->handler);
@@ -529,7 +580,7 @@ uint8_t AsgiApp_lifespan_startup(AsgiApp *app) {
 
   uint8_t status = result == Py_True;
 
-  PyGILState_Release(gstate);
+  Interpreter_release(ts);
 
   return status;
 }
@@ -539,13 +590,13 @@ uint8_t AsgiApp_lifespan_shutdown(AsgiApp *app) {
     return 1;
   }
 
-  PyGILState_STATE gstate = PyGILState_Ensure();
+  PyThreadState *ts = Interpreter_acquire(interp->interp);
 
   PyObject *result = PyObject_CallNoArgs(app->lifespan_shutdown);
 
   uint8_t status = result == Py_True;
 
-  PyGILState_Release(gstate);
+  Interpreter_release(ts);
 
   return status;
 }
@@ -592,14 +643,14 @@ static void AsgiEvent_dealloc(AsgiEvent *self) {
 }
 
 void AsgiEvent_cleanup(AsgiEvent *event) {
-  PyGILState_STATE gstate = PyGILState_Ensure();
+  PyThreadState *ts = Interpreter_acquire(interp->interp);
   Py_DECREF(event);
-  PyGILState_Release(gstate);
+  Interpreter_release(ts);
 }
 
 void AsgiEvent_set(AsgiEvent *self, const char *body, size_t body_len,
                    uint8_t more_body, uint8_t is_send) {
-  PyGILState_STATE gstate = PyGILState_Ensure();
+  PyThreadState *ts = Interpreter_acquire(interp->interp);
   if (body) {
     if (self->request_body) {
       Py_DECREF(self->request_body);
@@ -615,12 +666,12 @@ void AsgiEvent_set(AsgiEvent *self, const char *body, size_t body_len,
   }
   PyObject_CallNoArgs(set_fn);
   Py_DECREF(set_fn);
-  PyGILState_Release(gstate);
+  Interpreter_release(ts);
 }
 
 void AsgiEvent_set_websocket(AsgiEvent *self, const char *body, size_t body_len,
                              uint8_t message_type, uint8_t is_send) {
-  PyGILState_STATE gstate = PyGILState_Ensure();
+  PyThreadState *ts = Interpreter_acquire(interp->interp);
   if (body_len) {
     if (!self->request_body) {
       self->request_body = PyList_New(0);
@@ -643,7 +694,7 @@ void AsgiEvent_set_websocket(AsgiEvent *self, const char *body, size_t body_len,
   }
   PyObject_CallNoArgs(set_fn);
   Py_DECREF(set_fn);
-  PyGILState_Release(gstate);
+  Interpreter_release(ts);
 }
 
 void AsgiEvent_websocket_set_connected(AsgiEvent *self) {
@@ -1021,7 +1072,7 @@ void AsgiApp_handle_request(AsgiApp *app, uint64_t request_id, MapKeyVal *scope,
                             MapKeyVal *headers, const char *client_host,
                             int client_port, const char *server_host,
                             int server_port, const char *subprotocols) {
-  PyGILState_STATE gstate = PyGILState_Ensure();
+  PyThreadState *ts = Interpreter_acquire(interp->interp);
 
   PyObject *scope_dict = PyDict_New();
   PyDict_SetItemString(scope_dict, "asgi", asgi_version);
@@ -1116,16 +1167,16 @@ void AsgiApp_handle_request(AsgiApp *app, uint64_t request_id, MapKeyVal *scope,
   Py_DECREF(add_done_callback);
   Py_DECREF(asgi_event_result);
 
-  PyGILState_Release(gstate);
+  Interpreter_release(ts);
 }
 
 void AsgiApp_cleanup(AsgiApp *app) {
-  PyGILState_STATE gstate = PyGILState_Ensure();
+  PyThreadState *ts = Interpreter_acquire(interp->interp);
   Py_XDECREF(app->handler);
   Py_XDECREF(app->state);
   Py_XDECREF(app->lifespan_startup);
   Py_XDECREF(app->lifespan_shutdown);
-  PyGILState_Release(gstate);
+  Interpreter_release(ts);
   free(app);
 }
 
@@ -1196,6 +1247,10 @@ void Py_init_and_release_gil(const char *setup_py) {
   }
   PyConfig_Clear(&config);
 
+  interp = Py_NewInterpreter();
+  PyThreadState *ts = PyThreadState_New(interp->interp);
+  PyThreadState_Swap(ts);
+
   // Configure python path to recognize modules in the current directory
   PyObject *sysPath = PySys_GetObject("path");
   PyList_Insert(sysPath, 0, PyUnicode_FromString(""));
@@ -1265,7 +1320,8 @@ void Py_init_and_release_gil(const char *setup_py) {
   // Py_DECREF(io_module);
   // Py_DECREF(caddysnake_module);
 
-  PyEval_ReleaseThread(PyGILState_GetThisThreadState());
+  PyThreadState_Clear(ts);
+  PyThreadState_DeleteCurrent();
   return;
 
 exception:
