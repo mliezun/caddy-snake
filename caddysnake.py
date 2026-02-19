@@ -106,6 +106,9 @@ def _parse_host_header(host_str, default_port=80):
 
 # ==================== WSGI Server ====================
 
+# Windows does not support Unix domain sockets (AF_UNIX). Use TCP there.
+_USE_TCP = sys.platform == "win32"
+
 
 class UnixWSGIServer(socketserver.ThreadingMixIn, HTTPServer):
     """WSGI-capable HTTP server listening on a Unix domain socket."""
@@ -140,6 +143,20 @@ class UnixWSGIServer(socketserver.ThreadingMixIn, HTTPServer):
                 os.unlink(self.server_address)
         except OSError:
             pass
+
+
+class TCPWSGIServer(socketserver.ThreadingMixIn, HTTPServer):
+    """WSGI-capable HTTP server listening on TCP (used on Windows)."""
+
+    address_family = socket.AF_INET
+    daemon_threads = True
+    request_queue_size = 128
+
+    def __init__(self, host, port, handler_class, wsgi_app):
+        self.wsgi_app = wsgi_app
+        super().__init__((host, port), handler_class)
+        self.server_name = host
+        self.server_port = self.server_address[1]
 
 
 class WSGIRequestHandler(BaseHTTPRequestHandler):
@@ -189,7 +206,7 @@ class WSGIRequestHandler(BaseHTTPRequestHandler):
         return b""
 
     def _handle_wsgi(self):
-        app = self.server.wsgi_app
+        app = getattr(self.server, "wsgi_app")
         parsed = urlparse(self.path)
         body = self._read_body()
 
@@ -288,9 +305,20 @@ class WSGIRequestHandler(BaseHTTPRequestHandler):
 
 
 def run_wsgi_server(app, socket_path):
-    """Run a WSGI server on the given Unix socket path."""
-    server = UnixWSGIServer(socket_path, WSGIRequestHandler, app)
-    print(f"WSGI server listening on {socket_path}", file=sys.stderr)
+    """Run a WSGI server. On Unix: Unix socket at socket_path. On Windows: TCP, write port to socket_path."""
+    if _USE_TCP:
+        server = TCPWSGIServer("127.0.0.1", 0, WSGIRequestHandler, app)
+        port = server.server_address[1]
+        try:
+            with open(socket_path, "w") as f:
+                f.write(str(port))
+        except OSError as e:
+            print(f"Failed to write port file: {e}", file=sys.stderr)
+            sys.exit(1)
+        print(f"WSGI server listening on 127.0.0.1:{port}", file=sys.stderr)
+    else:
+        server = UnixWSGIServer(socket_path, WSGIRequestHandler, app)
+        print(f"WSGI server listening on {socket_path}", file=sys.stderr)
 
     def shutdown_handler(signum, frame):
         server.shutdown()
@@ -302,6 +330,11 @@ def run_wsgi_server(app, socket_path):
         server.serve_forever()
     finally:
         server.server_close()
+        if _USE_TCP and os.path.exists(socket_path):
+            try:
+                os.unlink(socket_path)
+            except OSError:
+                pass
 
 
 # ==================== ASGI Server ====================
@@ -772,7 +805,7 @@ async def _handle_asgi_lifespan(app, state):
 
 
 async def run_asgi_server(app, socket_path, lifespan):
-    """Run an ASGI server on the given Unix socket path."""
+    """Run an ASGI server. On Unix: Unix socket at socket_path. On Windows: TCP, write port to socket_path."""
     state = {}
     shutdown_fn = None
 
@@ -782,20 +815,41 @@ async def run_asgi_server(app, socket_path, lifespan):
             print("ASGI lifespan startup failed, exiting", file=sys.stderr)
             sys.exit(1)
 
-    if os.path.exists(socket_path):
-        os.unlink(socket_path)
-
-    server = await asyncio.start_unix_server(
-        lambda r, w: _handle_asgi_connection(r, w, app, state),
-        path=socket_path,
-    )
-
-    print(f"ASGI server listening on {socket_path}", file=sys.stderr)
+    if _USE_TCP:
+        server = await asyncio.start_server(
+            lambda r, w: _handle_asgi_connection(r, w, app, state),
+            "127.0.0.1",
+            0,
+        )
+        port = server.sockets[0].getsockname()[1]
+        try:
+            with open(socket_path, "w") as f:
+                f.write(str(port))
+        except OSError as e:
+            print(f"Failed to write port file: {e}", file=sys.stderr)
+            sys.exit(1)
+        print(f"ASGI server listening on 127.0.0.1:{port}", file=sys.stderr)
+    else:
+        if os.path.exists(socket_path):
+            os.unlink(socket_path)
+        server = await asyncio.start_unix_server(
+            lambda r, w: _handle_asgi_connection(r, w, app, state),
+            path=socket_path,
+        )
+        print(f"ASGI server listening on {socket_path}", file=sys.stderr)
 
     stop_event = asyncio.Event()
     loop = asyncio.get_running_loop()
-    for sig in (signal.SIGTERM, signal.SIGINT):
-        loop.add_signal_handler(sig, stop_event.set)
+    try:
+        for sig in (signal.SIGTERM, signal.SIGINT):
+            loop.add_signal_handler(sig, stop_event.set)
+    except (ValueError, OSError):
+        # Windows and some platforms don't support add_signal_handler; use signal.signal
+        def _stop(*args):
+            stop_event.set()
+
+        signal.signal(signal.SIGTERM, _stop)
+        signal.signal(signal.SIGINT, _stop)
 
     await stop_event.wait()
 

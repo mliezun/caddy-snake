@@ -340,16 +340,24 @@ type PythonWorker struct {
 }
 
 func NewPythonWorker(iface, app, workingDir, venv, lifespan, pythonBin, scriptPath string) (*PythonWorker, error) {
-	socket, err := os.CreateTemp("", "caddysnake-worker.sock")
+	var socket *os.File
+	var err error
+	if runtime.GOOS == "windows" {
+		socket, err = os.CreateTemp("", "caddysnake-worker.port*")
+	} else {
+		socket, err = os.CreateTemp("", "caddysnake-worker.sock")
+	}
 	if err != nil {
 		return nil, err
 	}
+	path := socket.Name()
+	socket.Close() // close so Python can write (Windows) or replace with socket (Unix)
 
 	dialNet := "unix"
-	dialAddr := socket.Name()
+	dialAddr := path
 	if runtime.GOOS == "windows" {
 		dialNet = "tcp"
-		dialAddr = "127.0.0.1:0"
+		dialAddr = "" // set after Python writes port to path
 	}
 
 	w := &PythonWorker{
@@ -409,7 +417,35 @@ func (w *PythonWorker) Start() error {
 	w.Cmd.Env = append(os.Environ(), "PYTHONUNBUFFERED=1")
 	setSysProcAttr(w.Cmd)
 
-	return w.Cmd.Start()
+	if err := w.Cmd.Start(); err != nil {
+		return err
+	}
+	if runtime.GOOS == "windows" {
+		port, err := waitForPortFile(w.Socket.Name(), 10*time.Second)
+		if err != nil {
+			w.Cmd.Process.Kill()
+			_ = w.Cmd.Wait()
+			return fmt.Errorf("waiting for Python worker port file: %w", err)
+		}
+		w.DialAddr = "127.0.0.1:" + strconv.Itoa(port)
+	}
+	return nil
+}
+
+// waitForPortFile polls the given file path until it contains a valid port number.
+func waitForPortFile(path string, timeout time.Duration) (int, error) {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		data, err := os.ReadFile(path)
+		if err == nil && len(data) > 0 {
+			port, err := strconv.Atoi(strings.TrimSpace(string(data)))
+			if err == nil && port > 0 && port < 65536 {
+				return port, nil
+			}
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	return 0, fmt.Errorf("port file %s not ready within %v", path, timeout)
 }
 
 // dialWithRetry attempts to establish a connection with retry logic
