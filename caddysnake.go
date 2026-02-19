@@ -331,6 +331,8 @@ type PythonWorker struct {
 	PythonBin  string
 	Socket     *os.File
 	ScriptPath string
+	DialNet    string // "unix" or "tcp"
+	DialAddr   string // socket path or host:port
 
 	Cmd       *exec.Cmd
 	Transport *http.Transport
@@ -342,6 +344,14 @@ func NewPythonWorker(iface, app, workingDir, venv, lifespan, pythonBin, scriptPa
 	if err != nil {
 		return nil, err
 	}
+
+	dialNet := "unix"
+	dialAddr := socket.Name()
+	if runtime.GOOS == "windows" {
+		dialNet = "tcp"
+		dialAddr = "127.0.0.1:0"
+	}
+
 	w := &PythonWorker{
 		Interface:  iface,
 		App:        app,
@@ -351,6 +361,8 @@ func NewPythonWorker(iface, app, workingDir, venv, lifespan, pythonBin, scriptPa
 		PythonBin:  pythonBin,
 		Socket:     socket,
 		ScriptPath: scriptPath,
+		DialNet:    dialNet,
+		DialAddr:   dialAddr,
 	}
 	err = w.Start()
 	return w, err
@@ -359,13 +371,13 @@ func NewPythonWorker(iface, app, workingDir, venv, lifespan, pythonBin, scriptPa
 func (w *PythonWorker) Start() error {
 	w.Transport = &http.Transport{
 		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
-			return w.dialWithRetry(ctx, network, addr)
+			return w.dialWithRetry(ctx)
 		},
 	}
 	w.Proxy = &httputil.ReverseProxy{
 		Rewrite: func(req *httputil.ProxyRequest) {
 			req.Out.URL.Scheme = "http"
-			req.Out.URL.Host = w.Socket.Name()
+			req.Out.URL.Host = w.DialAddr
 		},
 		Transport: w.Transport,
 	}
@@ -394,12 +406,12 @@ func (w *PythonWorker) Start() error {
 }
 
 // dialWithRetry attempts to establish a connection with retry logic
-func (w *PythonWorker) dialWithRetry(ctx context.Context, network, addr string) (net.Conn, error) {
+func (w *PythonWorker) dialWithRetry(ctx context.Context) (net.Conn, error) {
 	const maxRetries = 5
 	const baseDelay = 100 * time.Millisecond
 
 	for attempt := 0; attempt < maxRetries; attempt++ {
-		conn, err := net.Dial("unix", w.Socket.Name())
+		conn, err := net.Dial(w.DialNet, w.DialAddr)
 		if err == nil {
 			return conn, nil
 		}

@@ -125,6 +125,12 @@ class UnixWSGIServer(socketserver.ThreadingMixIn, HTTPServer):
     def server_bind(self):
         self.socket.bind(self.server_address)
 
+    def get_request(self):
+        request, client_address = self.socket.accept()
+        if not isinstance(client_address, tuple):
+            client_address = ("127.0.0.1", 0)
+        return request, client_address
+
     def server_close(self):
         super().server_close()
         try:
@@ -467,7 +473,9 @@ async def _handle_asgi_http(writer, app, scope, body):
 
             if use_chunked:
                 if body_data:
-                    writer.write(f"{len(body_data):x}\r\n".encode() + body_data + b"\r\n")
+                    writer.write(
+                        f"{len(body_data):x}\r\n".encode() + body_data + b"\r\n"
+                    )
                 if not more_body:
                     writer.write(b"0\r\n\r\n")
             else:
@@ -503,16 +511,12 @@ async def _ws_read_loop(reader, receive_queue, closed_event, writer):
                     {"type": "websocket.receive", "text": payload.decode("utf-8")}
                 )
             elif opcode == WS_OPCODE_BINARY:
-                await receive_queue.put(
-                    {"type": "websocket.receive", "bytes": payload}
-                )
+                await receive_queue.put({"type": "websocket.receive", "bytes": payload})
             elif opcode == WS_OPCODE_CLOSE:
                 code = 1005
                 if len(payload) >= 2:
                     code = struct.unpack("!H", payload[:2])[0]
-                await receive_queue.put(
-                    {"type": "websocket.disconnect", "code": code}
-                )
+                await receive_queue.put({"type": "websocket.disconnect", "code": code})
                 break
             elif opcode == WS_OPCODE_PING:
                 frame = ws_build_frame(WS_OPCODE_PONG, payload)
@@ -567,9 +571,7 @@ async def _handle_asgi_websocket(reader, writer, app, scope, raw_headers):
 
         elif msg_type == "websocket.send":
             if "text" in message:
-                frame = ws_build_frame(
-                    WS_OPCODE_TEXT, message["text"].encode("utf-8")
-                )
+                frame = ws_build_frame(WS_OPCODE_TEXT, message["text"].encode("utf-8"))
             elif "bytes" in message:
                 frame = ws_build_frame(WS_OPCODE_BINARY, message["bytes"])
             else:
@@ -668,7 +670,12 @@ async def _handle_asgi_connection(reader, writer, app, state):
             connection = raw_headers.get("connection", "")
             if "close" in connection.lower():
                 break
-    except (asyncio.IncompleteReadError, ConnectionError, ConnectionResetError, OSError):
+    except (
+        asyncio.IncompleteReadError,
+        ConnectionError,
+        ConnectionResetError,
+        OSError,
+    ):
         pass
     finally:
         try:
