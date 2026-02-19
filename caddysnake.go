@@ -407,11 +407,7 @@ func (w *PythonWorker) Start() error {
 	w.Cmd.Stdout = os.Stdout
 	w.Cmd.Stderr = os.Stderr
 	w.Cmd.Env = append(os.Environ(), "PYTHONUNBUFFERED=1")
-	if runtime.GOOS != "windows" {
-		w.Cmd.SysProcAttr = &syscall.SysProcAttr{
-			Pdeathsig: syscall.SIGTERM,
-		}
-	}
+	setSysProcAttr(w.Cmd)
 
 	return w.Cmd.Start()
 }
@@ -444,12 +440,24 @@ func (w *PythonWorker) dialWithRetry(ctx context.Context) (net.Conn, error) {
 }
 
 func (w *PythonWorker) Cleanup() error {
-	var err error
+	if w.Transport != nil {
+		w.Transport.CloseIdleConnections()
+	}
 	if w.Cmd != nil && w.Cmd.Process != nil {
 		w.Cmd.Process.Signal(syscall.SIGTERM)
-		_, err = w.Cmd.Process.Wait()
-		if err != nil {
-			return err
+		done := make(chan error, 1)
+		go func() {
+			_, err := w.Cmd.Process.Wait()
+			done <- err
+		}()
+		select {
+		case err := <-done:
+			if err != nil {
+				return err
+			}
+		case <-time.After(5 * time.Second):
+			w.Cmd.Process.Kill()
+			<-done
 		}
 	}
 	if w.Socket != nil {

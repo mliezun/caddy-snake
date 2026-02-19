@@ -106,7 +106,12 @@ def find_and_terminate_process(process_name):
                 p.terminate()
                 p.wait(timeout=10)
                 print(f"Process {process_name} with PID {pid} terminated.")
-        except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess, psutil.TimeoutExpired):
+        except (
+            psutil.NoSuchProcess,
+            psutil.AccessDenied,
+            psutil.ZombieProcess,
+            psutil.TimeoutExpired,
+        ):
             pass
 
 

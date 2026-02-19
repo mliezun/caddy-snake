@@ -249,27 +249,38 @@ class WSGIRequestHandler(BaseHTTPRequestHandler):
             return lambda s: None
 
         result = None
+        headers_sent = False
         try:
             result = app(environ, start_response)
 
-            if not response_started:
-                raise RuntimeError("WSGI app did not call start_response")
-
-            status_str, response_headers = response_started[0]
-            status_code = int(status_str.split(" ", 1)[0])
-
-            self.send_response(status_code)
-            for name, value in response_headers:
-                self.send_header(name, value)
-            self.end_headers()
-
             for chunk in result:
+                if not headers_sent:
+                    if not response_started:
+                        raise RuntimeError("WSGI app did not call start_response")
+                    status_str, response_headers = response_started[0]
+                    status_code = int(status_str.split(" ", 1)[0])
+                    self.send_response(status_code)
+                    for name, value in response_headers:
+                        self.send_header(name, value)
+                    self.end_headers()
+                    headers_sent = True
                 if chunk:
                     self.wfile.write(chunk)
+
+            if not headers_sent:
+                if not response_started:
+                    raise RuntimeError("WSGI app did not call start_response")
+                status_str, response_headers = response_started[0]
+                status_code = int(status_str.split(" ", 1)[0])
+                self.send_response(status_code)
+                for name, value in response_headers:
+                    self.send_header(name, value)
+                self.end_headers()
+
             self.wfile.flush()
         except Exception:
             traceback.print_exc(file=sys.stderr)
-            if not response_started:
+            if not headers_sent:
                 self.send_error(500)
         finally:
             if result is not None and hasattr(result, "close"):
