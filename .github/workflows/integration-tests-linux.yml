@@ -16,13 +16,11 @@ jobs:
         python-version: ['3.10', '3.11', '3.12', '3.13', '3.13-nogil', '3.14']
         os: [ubuntu-22.04, ubuntu-22.04-arm]
     runs-on: ${{ matrix.os }}
-    env:
-      GOEXPERIMENT: cgocheck2
     steps:
       - uses: actions/checkout@v3
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.26'
+          go-version: '1.24'
           cache: false
       - name: Install Xcaddy
         run: go install github.com/caddyserver/xcaddy/cmd/xcaddy@latest
@@ -32,10 +30,9 @@ jobs:
         run: |
           export DEBIAN_FRONTEND=noninteractive
           sudo apt-get update -yyqq
-          sudo apt-get install -yyqq software-properties-common valgrind time
+          sudo apt-get install -yyqq software-properties-common
           sudo add-apt-repository -y ppa:deadsnakes/ppa
-          sudo apt-get install -yyqq python${{ matrix.python-version }}-dev python${{ matrix.python-version }}-venv
-          sudo mv /usr/lib/*-linux-gnu/pkgconfig/python-${{ matrix.python-version }}-embed.pc /usr/lib/*-linux-gnu/pkgconfig/python3-embed.pc
+          sudo apt-get install -yyqq python${{ matrix.python-version }}-venv
           rm -rf venv
           python${{ matrix.python-version }} -m venv venv
           source venv/bin/activate
@@ -47,11 +44,10 @@ jobs:
         run: |
           export DEBIAN_FRONTEND=noninteractive
           sudo apt-get update -yyqq
-          sudo apt-get install -yyqq software-properties-common valgrind curl gcc build-essential
+          sudo apt-get install -yyqq software-properties-common curl
           curl https://bootstrap.pypa.io/get-pip.py -o get-pip.py
           sudo add-apt-repository -y ppa:deadsnakes/ppa
-          sudo apt-get install -yyqq python${{ matrix.python-version }} python3.13-dev
-          sudo mv /usr/lib/*-linux-gnu/pkgconfig/python-${{ matrix.python-version }}-embed.pc /usr/lib/*-linux-gnu/pkgconfig/python3-embed.pc
+          sudo apt-get install -yyqq python${{ matrix.python-version }}
           python${{ matrix.python-version }} -m venv --without-pip venv
           source venv/bin/activate
           echo $(which python)
@@ -59,12 +55,12 @@ jobs:
           pip install -r requirements.txt
       - name: Build the server
         working-directory: tests/${{ matrix.tool-name }}/
-        run: CGO_ENABLED=1 xcaddy build --with github.com/mliezun/caddy-snake=../..
+        run: CGO_ENABLED=0 xcaddy build --with github.com/mliezun/caddy-snake=../..
       - name: Run integration tests
         working-directory: tests/${{ matrix.tool-name }}/
         if: matrix.python-version != '3.13-nogil'
         run: |
-          /usr/bin/time -v ./caddy run --config Caddyfile > caddy.log 2>&1 &
+          ./caddy run --config Caddyfile > caddy.log 2>&1 &
           timeout 60 bash -c 'while ! grep -q "finished cleaning storage units" caddy.log; do sleep 1; done'
           source venv/bin/activate
           python main_test.py
@@ -73,7 +69,7 @@ jobs:
         if: matrix.python-version == '3.13-nogil' && matrix.tool-name != 'flask'
         continue-on-error: true
         run: |
-          /usr/bin/time -v ./caddy run --config Caddyfile > caddy.log 2>&1 &
+          ./caddy run --config Caddyfile > caddy.log 2>&1 &
           source venv/bin/activate || true
           python main_test.py || true
       - name: Upload logs and report

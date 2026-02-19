@@ -1,9 +1,6 @@
 // Caddy plugin to serve Python apps.
 package caddysnake
 
-// #cgo pkg-config: python3-embed
-// #include "caddysnake.h"
-import "C"
 import (
 	"context"
 	_ "embed"
@@ -16,7 +13,6 @@ import (
 	"net/http/httputil"
 	"os"
 	"os/exec"
-	"os/signal"
 	"path/filepath"
 	"regexp"
 	"runtime"
@@ -24,7 +20,6 @@ import (
 	"strings"
 	"syscall"
 	"time"
-	"unsafe"
 
 	"github.com/caddyserver/caddy/v2"
 	"github.com/caddyserver/caddy/v2/caddyconfig"
@@ -46,74 +41,6 @@ import (
 //go:embed caddysnake.py
 var caddysnake_py string
 
-var SIZE_OF_CHAR_POINTER = unsafe.Sizeof((*C.char)(nil))
-
-// MapKeyVal wraps the same structure defined in the C layer
-type MapKeyVal struct {
-	m           *C.MapKeyVal
-	baseHeaders uintptr
-	baseValues  uintptr
-}
-
-func NewMapKeyVal(count int) *MapKeyVal {
-	m := C.MapKeyVal_new(C.size_t(count))
-	return &MapKeyVal{
-		m:           m,
-		baseHeaders: uintptr(unsafe.Pointer(m.keys)),
-		baseValues:  uintptr(unsafe.Pointer(m.values)),
-	}
-}
-
-func NewMapKeyValFromSource(m *C.MapKeyVal) *MapKeyVal {
-	return &MapKeyVal{
-		m:           m,
-		baseHeaders: uintptr(unsafe.Pointer(m.keys)),
-		baseValues:  uintptr(unsafe.Pointer(m.values)),
-	}
-}
-
-func (m *MapKeyVal) Cleanup() {
-	if m.m != nil {
-		C.MapKeyVal_free(m.m)
-	}
-}
-
-func (m *MapKeyVal) Append(k, v string) {
-	// Replicate the function MapKeyVal_append to avoid a CGO call
-	if m.m == nil || m.m.length == m.m.capacity {
-		panic("Maximum capacity reached")
-	}
-	pos := uintptr(m.m.length)
-	*(**C.char)(unsafe.Pointer(m.baseHeaders + pos*SIZE_OF_CHAR_POINTER)) = C.CString(k)
-	*(**C.char)(unsafe.Pointer(m.baseValues + pos*SIZE_OF_CHAR_POINTER)) = C.CString(v)
-	m.m.length++
-}
-
-func (m *MapKeyVal) Get(pos int) (string, string) {
-	if pos < 0 || pos > int(m.m.capacity) {
-		panic("Expected pos to be within limits")
-	}
-	headerNamePtr := unsafe.Pointer(uintptr(unsafe.Pointer(m.m.keys)) + uintptr(pos)*SIZE_OF_CHAR_POINTER)
-	headerValuePtr := unsafe.Pointer(uintptr(unsafe.Pointer(m.m.values)) + uintptr(pos)*SIZE_OF_CHAR_POINTER)
-	headerName := *(**C.char)(headerNamePtr)
-	headerValue := *(**C.char)(headerValuePtr)
-	return C.GoString(headerName), C.GoString(headerValue)
-}
-
-func (m *MapKeyVal) Len() int {
-	if m.m == nil {
-		return 0
-	}
-	return int(m.m.length)
-}
-
-func (m *MapKeyVal) Capacity() int {
-	if m.m == nil {
-		return 0
-	}
-	return int(m.m.capacity)
-}
-
 // AppServer defines the interface to interacting with a WSGI or ASGI server
 type AppServer interface {
 	Cleanup() error
@@ -130,6 +57,7 @@ type CaddySnake struct {
 	Workers        string `json:"workers,omitempty"`
 	WorkersRuntime string `json:"workers_runtime,omitempty"`
 	Autoreload     string `json:"autoreload,omitempty"`
+	PythonPath     string `json:"python_path,omitempty"`
 	logger         *zap.Logger
 	app            AppServer
 }
@@ -167,13 +95,17 @@ func (f *CaddySnake) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 					if !d.Args(&f.Workers) {
 						return d.Errf("expected exactly one argument for workers")
 					}
-			case "workers_runtime":
-				if !d.Args(&f.WorkersRuntime) || (f.WorkersRuntime != "thread" && f.WorkersRuntime != "process") {
-					return d.Errf("expected exactly one argument for workers_runtime: thread|process")
-				}
-			case "autoreload":
-				f.Autoreload = "on"
-			default:
+				case "workers_runtime":
+					if !d.Args(&f.WorkersRuntime) || (f.WorkersRuntime != "thread" && f.WorkersRuntime != "process") {
+						return d.Errf("expected exactly one argument for workers_runtime: thread|process")
+					}
+				case "autoreload":
+					f.Autoreload = "on"
+				case "python_path":
+					if !d.Args(&f.PythonPath) {
+						return d.Errf("expected exactly one argument for python_path")
+					}
+				default:
 					return d.Errf("unknown subdirective: %s", d.Val())
 				}
 			}
@@ -200,68 +132,35 @@ func (f *CaddySnake) Provision(ctx caddy.Context) error {
 	if workers <= 0 {
 		workers = runtime.GOMAXPROCS(0)
 	}
-	workersRuntime := f.WorkersRuntime
-	if workersRuntime == "" && runtime.GOOS != "windows" {
-		f.logger.Info("workers_runtime not specified, using process", zap.String("workers_runtime", workersRuntime))
-		workersRuntime = "process"
-	}
-	if workersRuntime != "thread" && runtime.GOOS == "windows" {
-		f.logger.Warn("workers_runtime forced to thread on windows", zap.String("workers_runtime", workersRuntime))
-		workersRuntime = "thread"
-	}
-	if workersRuntime == "thread" && workers > 1 {
-		f.logger.Warn("workers attribute is ignored when workers_runtime is thread, only 1 worker will be used", zap.String("workers_runtime", workersRuntime), zap.Int("workers", workers))
-		workers = 1
-	}
 
-	// Check if any configuration field contains Caddy placeholders.
-	// When placeholders are present, we use dynamic mode: apps are imported
-	// lazily at request time after resolving placeholders (e.g. {host.labels.2}).
 	isDynamic := containsPlaceholder(f.ModuleWsgi) || containsPlaceholder(f.ModuleAsgi) ||
 		containsPlaceholder(f.WorkingDir) || containsPlaceholder(f.VenvPath)
 
 	if isDynamic {
-		return f.provisionDynamic(workersRuntime, workers)
+		return f.provisionDynamic(workers)
 	}
 
+	pythonBin := resolvePythonInterpreter(f.PythonPath, f.VenvPath)
+
 	if f.ModuleWsgi != "" {
-		if workersRuntime == "thread" {
-			initPythonMainThread()
-			initWsgi()
-			f.app, err = NewWsgi(f.ModuleWsgi, f.WorkingDir, f.VenvPath)
-			if err != nil {
-				return err
-			}
-		} else {
-			f.app, err = NewPythonWorkerGroup("wsgi", f.ModuleWsgi, f.WorkingDir, f.VenvPath, f.Lifespan, workers)
-			if err != nil {
-				return err
-			}
+		f.app, err = NewPythonWorkerGroup("wsgi", f.ModuleWsgi, f.WorkingDir, f.VenvPath, f.Lifespan, workers, pythonBin)
+		if err != nil {
+			return err
 		}
 		if f.Lifespan != "" {
 			f.logger.Warn("lifespan attribute is ignored in WSGI mode", zap.String("lifespan", f.Lifespan))
 		}
-		f.logger.Info("serving wsgi app", zap.String("module_wsgi", f.ModuleWsgi), zap.String("working_dir", f.WorkingDir), zap.String("venv_path", f.VenvPath))
+		f.logger.Info("serving wsgi app", zap.String("module_wsgi", f.ModuleWsgi), zap.String("working_dir", f.WorkingDir), zap.String("venv_path", f.VenvPath), zap.String("python", pythonBin))
 	} else if f.ModuleAsgi != "" {
-		if workersRuntime == "thread" {
-			initPythonMainThread()
-			initAsgi()
-			f.app, err = NewAsgi(f.ModuleAsgi, f.WorkingDir, f.VenvPath, f.Lifespan == "on", f.logger)
-			if err != nil {
-				return err
-			}
-		} else {
-			f.app, err = NewPythonWorkerGroup("asgi", f.ModuleAsgi, f.WorkingDir, f.VenvPath, f.Lifespan, workers)
-			if err != nil {
-				return err
-			}
+		f.app, err = NewPythonWorkerGroup("asgi", f.ModuleAsgi, f.WorkingDir, f.VenvPath, f.Lifespan, workers, pythonBin)
+		if err != nil {
+			return err
 		}
-		f.logger.Info("serving asgi app", zap.String("module_asgi", f.ModuleAsgi), zap.String("working_dir", f.WorkingDir), zap.String("venv_path", f.VenvPath))
+		f.logger.Info("serving asgi app", zap.String("module_asgi", f.ModuleAsgi), zap.String("working_dir", f.WorkingDir), zap.String("venv_path", f.VenvPath), zap.String("python", pythonBin))
 	} else {
 		return errors.New("asgi or wsgi app needs to be specified")
 	}
 
-	// Wrap with autoreload if enabled
 	if f.Autoreload == "on" {
 		watchDir := f.WorkingDir
 		if watchDir == "" {
@@ -274,24 +173,12 @@ func (f *CaddySnake) Provision(ctx caddy.Context) error {
 
 		var factory func() (AppServer, error)
 		if f.ModuleWsgi != "" {
-			if workersRuntime == "thread" {
-				factory = func() (AppServer, error) {
-					return NewWsgi(f.ModuleWsgi, f.WorkingDir, f.VenvPath)
-				}
-			} else {
-				factory = func() (AppServer, error) {
-					return NewPythonWorkerGroup("wsgi", f.ModuleWsgi, f.WorkingDir, f.VenvPath, f.Lifespan, workers)
-				}
+			factory = func() (AppServer, error) {
+				return NewPythonWorkerGroup("wsgi", f.ModuleWsgi, f.WorkingDir, f.VenvPath, f.Lifespan, workers, pythonBin)
 			}
 		} else {
-			if workersRuntime == "thread" {
-				factory = func() (AppServer, error) {
-					return NewAsgi(f.ModuleAsgi, f.WorkingDir, f.VenvPath, f.Lifespan == "on", f.logger)
-				}
-			} else {
-				factory = func() (AppServer, error) {
-					return NewPythonWorkerGroup("asgi", f.ModuleAsgi, f.WorkingDir, f.VenvPath, f.Lifespan, workers)
-				}
+			factory = func() (AppServer, error) {
+				return NewPythonWorkerGroup("asgi", f.ModuleAsgi, f.WorkingDir, f.VenvPath, f.Lifespan, workers, pythonBin)
 			}
 		}
 
@@ -306,23 +193,15 @@ func (f *CaddySnake) Provision(ctx caddy.Context) error {
 
 // provisionDynamic sets up the module in dynamic mode where Caddy placeholders
 // in module_wsgi/module_asgi, working_dir, or venv are resolved per-request.
-// Each unique combination of resolved values gets its own Python app instance,
-// created lazily on first request.
-func (f *CaddySnake) provisionDynamic(workersRuntime string, workers int) error {
+func (f *CaddySnake) provisionDynamic(workers int) error {
 	autoreload := f.Autoreload == "on"
+	pythonPath := f.PythonPath
+
 	if f.ModuleWsgi != "" {
-		var factory appFactory
-		if workersRuntime == "thread" {
-			initPythonMainThread()
-			initWsgi()
-			factory = func(module, dir, venv string) (AppServer, error) {
-				return NewDynamicWsgiApp(module, dir, venv)
-			}
-		} else {
-			lifespan := f.Lifespan
-			factory = func(module, dir, venv string) (AppServer, error) {
-				return NewPythonWorkerGroup("wsgi", module, dir, venv, lifespan, workers)
-			}
+		lifespan := f.Lifespan
+		factory := func(module, dir, venv string) (AppServer, error) {
+			pythonBin := resolvePythonInterpreter(pythonPath, venv)
+			return NewPythonWorkerGroup("wsgi", module, dir, venv, lifespan, workers, pythonBin)
 		}
 		var err error
 		f.app, err = NewDynamicApp(f.ModuleWsgi, f.WorkingDir, f.VenvPath, factory, f.logger, autoreload)
@@ -338,20 +217,10 @@ func (f *CaddySnake) provisionDynamic(workersRuntime string, workers int) error 
 			zap.String("venv_path", f.VenvPath),
 		)
 	} else if f.ModuleAsgi != "" {
-		var factory appFactory
-		if workersRuntime == "thread" {
-			initPythonMainThread()
-			initAsgi()
-			lifespan := f.Lifespan == "on"
-			logger := f.logger
-			factory = func(module, dir, venv string) (AppServer, error) {
-				return NewDynamicAsgiApp(module, dir, venv, lifespan, logger)
-			}
-		} else {
-			lifespan := f.Lifespan
-			factory = func(module, dir, venv string) (AppServer, error) {
-				return NewPythonWorkerGroup("asgi", module, dir, venv, lifespan, workers)
-			}
+		lifespan := f.Lifespan
+		factory := func(module, dir, venv string) (AppServer, error) {
+			pythonBin := resolvePythonInterpreter(pythonPath, venv)
+			return NewPythonWorkerGroup("asgi", module, dir, venv, lifespan, workers, pythonBin)
 		}
 		var err error
 		f.app, err = NewDynamicApp(f.ModuleAsgi, f.WorkingDir, f.VenvPath, factory, f.logger, autoreload)
@@ -408,20 +277,67 @@ func parsePythonDirective(h httpcaddyfile.Helper) (caddyhttp.MiddlewareHandler, 
 	return app, nil
 }
 
+// resolvePythonInterpreter determines the Python interpreter to use.
+// Priority: explicit python_path > venv/bin/python > system python3.
+func resolvePythonInterpreter(pythonPath, venvPath string) string {
+	if pythonPath != "" {
+		return pythonPath
+	}
+
+	if venvPath != "" {
+		var binDir string
+		if runtime.GOOS == "windows" {
+			binDir = "Scripts"
+		} else {
+			binDir = "bin"
+		}
+		venvPython := filepath.Join(venvPath, binDir, "python3")
+		if runtime.GOOS == "windows" {
+			venvPython = filepath.Join(venvPath, binDir, "python.exe")
+		}
+		if _, err := os.Stat(venvPython); err == nil {
+			return venvPython
+		}
+		venvPython2 := filepath.Join(venvPath, binDir, "python")
+		if _, err := os.Stat(venvPython2); err == nil {
+			return venvPython2
+		}
+	}
+
+	return "python3"
+}
+
+// writeCaddysnakePy writes the embedded caddysnake.py to a temp file and returns the path.
+func writeCaddysnakePy() (string, error) {
+	f, err := os.CreateTemp("", "caddysnake-*.py")
+	if err != nil {
+		return "", err
+	}
+	if _, err := f.WriteString(caddysnake_py); err != nil {
+		f.Close()
+		os.Remove(f.Name())
+		return "", err
+	}
+	f.Close()
+	return f.Name(), nil
+}
+
 type PythonWorker struct {
 	Interface  string
 	App        string
 	WorkingDir string
 	Venv       string
 	Lifespan   string
+	PythonBin  string
 	Socket     *os.File
+	ScriptPath string
 
 	Cmd       *exec.Cmd
 	Transport *http.Transport
 	Proxy     *httputil.ReverseProxy
 }
 
-func NewPythonWorker(iface, app, workingDir, venv, lifespan string) (*PythonWorker, error) {
+func NewPythonWorker(iface, app, workingDir, venv, lifespan, pythonBin, scriptPath string) (*PythonWorker, error) {
 	socket, err := os.CreateTemp("", "caddysnake-worker.sock")
 	if err != nil {
 		return nil, err
@@ -432,18 +348,15 @@ func NewPythonWorker(iface, app, workingDir, venv, lifespan string) (*PythonWork
 		WorkingDir: workingDir,
 		Venv:       venv,
 		Lifespan:   lifespan,
+		PythonBin:  pythonBin,
 		Socket:     socket,
+		ScriptPath: scriptPath,
 	}
 	err = w.Start()
 	return w, err
 }
 
 func (w *PythonWorker) Start() error {
-	self, err := os.Executable()
-	if err != nil {
-		return err
-	}
-
 	w.Transport = &http.Transport{
 		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
 			return w.dialWithRetry(ctx, network, addr)
@@ -456,22 +369,24 @@ func (w *PythonWorker) Start() error {
 		},
 		Transport: w.Transport,
 	}
-	w.Cmd = exec.Command(
-		self,
-		"python-worker",
-		"--interface",
-		w.Interface,
-		"--app",
-		w.App,
-		"--working-dir",
-		w.WorkingDir,
-		"--venv",
-		w.Venv,
-		"--lifespan",
-		w.Lifespan,
-		"--socket",
-		w.Socket.Name(),
-	)
+
+	args := []string{
+		w.ScriptPath,
+		"--interface", w.Interface,
+		"--app", w.App,
+		"--socket", w.Socket.Name(),
+	}
+	if w.WorkingDir != "" {
+		args = append(args, "--working-dir", w.WorkingDir)
+	}
+	if w.Venv != "" {
+		args = append(args, "--venv", w.Venv)
+	}
+	if w.Lifespan != "" {
+		args = append(args, "--lifespan", w.Lifespan)
+	}
+
+	w.Cmd = exec.Command(w.PythonBin, args...)
 	w.Cmd.Stdout = os.Stdout
 	w.Cmd.Stderr = os.Stderr
 
@@ -489,20 +404,16 @@ func (w *PythonWorker) dialWithRetry(ctx context.Context, network, addr string) 
 			return conn, nil
 		}
 
-		// If this is the last attempt, return the error
 		if attempt == maxRetries-1 {
 			return nil, fmt.Errorf("failed to connect after %d attempts: %w", maxRetries, err)
 		}
 
-		// Calculate delay with exponential backoff
-		delay := baseDelay * time.Duration(1<<attempt) // 100ms, 200ms, 400ms
+		delay := baseDelay * time.Duration(1<<attempt)
 
-		// Check if context is cancelled
 		select {
 		case <-ctx.Done():
 			return nil, ctx.Err()
 		case <-time.After(delay):
-			// Continue to next attempt
 		}
 	}
 
@@ -530,89 +441,27 @@ func (w *PythonWorker) HandleRequest(rw http.ResponseWriter, req *http.Request) 
 	return nil
 }
 
-func cmdPythonWorker(fs caddycmd.Flags) (int, error) {
-	var handler AppServer
-	var err error
-
-	iface := fs.String("interface")
-	app := fs.String("app")
-	workingDir := fs.String("working-dir")
-	venv := fs.String("venv")
-	lifespan := fs.String("lifespan")
-	socket := fs.String("socket")
-
-	if _, err := os.Stat(socket); err == nil {
-		os.Remove(socket)
-	}
-	defer os.Remove(socket)
-
-	// Listen on the Unix domain socket
-	listener, err := net.Listen("unix", socket)
-	if err != nil {
-		return caddy.ExitCodeFailedStartup, err
-	}
-	defer listener.Close()
-
-	initPythonMainThread()
-
-	switch iface {
-	case "wsgi":
-		initWsgi()
-		handler, err = NewWsgi(app, workingDir, venv)
-		if err != nil {
-			return caddy.ExitCodeFailedStartup, err
-		}
-	case "asgi":
-		initAsgi()
-		handler, err = NewAsgi(app, workingDir, venv, lifespan == "on", zap.NewNop())
-		if err != nil {
-			return caddy.ExitCodeFailedStartup, err
-		}
-	default:
-		return caddy.ExitCodeFailedStartup, errors.New("invalid interface: " + iface)
-	}
-	defer handler.Cleanup()
-
-	// Define a simple HTTP handler
-	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		handler.HandleRequest(w, r)
-	})
-
-	cancelChan := make(chan os.Signal, 1)
-	errChan := make(chan error, 1)
-	// catch SIGETRM or SIGINTERRUPT
-	signal.Notify(cancelChan, syscall.SIGTERM, syscall.SIGINT)
-	go func() {
-		// Serve HTTP over the Unix socket
-		err = http.Serve(listener, nil)
-		if err != nil {
-			errChan <- err
-		}
-	}()
-	select {
-	case <-cancelChan:
-		listener.Close()
-	case err := <-errChan:
-		return caddy.ExitCodeFailedStartup, err
-	}
-
-	return 0, nil
-}
-
 type PythonWorkerGroup struct {
 	Workers    []*PythonWorker
 	RoundRobin int
+	ScriptPath string
 }
 
-func NewPythonWorkerGroup(iface, app, workingDir, venv, lifespan string, count int) (*PythonWorkerGroup, error) {
+func NewPythonWorkerGroup(iface, app, workingDir, venv, lifespan string, count int, pythonBin string) (*PythonWorkerGroup, error) {
+	scriptPath, err := writeCaddysnakePy()
+	if err != nil {
+		return nil, fmt.Errorf("failed to write caddysnake.py: %w", err)
+	}
+
 	errs := make([]error, count)
 	workers := make([]*PythonWorker, count)
 	for i := 0; i < count; i++ {
-		workers[i], errs[i] = NewPythonWorker(iface, app, workingDir, venv, lifespan)
+		workers[i], errs[i] = NewPythonWorker(iface, app, workingDir, venv, lifespan, pythonBin, scriptPath)
 	}
 	wg := &PythonWorkerGroup{
 		Workers:    workers,
 		RoundRobin: 0,
+		ScriptPath: scriptPath,
 	}
 	if err := errors.Join(errs...); err != nil {
 		return nil, errors.Join(wg.Cleanup(), err)
@@ -627,6 +476,9 @@ func (wg *PythonWorkerGroup) Cleanup() error {
 			errs[i] = worker.Cleanup()
 		}
 	}
+	if wg.ScriptPath != "" {
+		os.Remove(wg.ScriptPath)
+	}
 	return errors.Join(errs...)
 }
 
@@ -640,30 +492,13 @@ func init() {
 	caddy.RegisterModule(CaddySnake{})
 	httpcaddyfile.RegisterHandlerDirective("python", parsePythonDirective)
 	caddycmd.RegisterCommand(caddycmd.Command{
-		Name:  "python-worker",
-		Usage: "[--interface asgi|wsgi] [--app <module>] [--working-dir <dir>] [--venv <dir>] [--lifespan on|off] [--socket <socket>]",
-		Short: "Spins up a Python worker (used internally by caddy-snake)",
-		Long: `
-A Python worker designed for ASGI and WSGI apps.
-`,
-		CobraFunc: func(cmd *cobra.Command) {
-			cmd.Flags().StringP("interface", "i", "", "Interface to use: asgi|wsgi")
-			cmd.Flags().StringP("app", "a", "", "App module to be imported")
-			cmd.Flags().StringP("working-dir", "w", "", "The working directory")
-			cmd.Flags().StringP("venv", "v", "", "The venv directory")
-			cmd.Flags().StringP("lifespan", "l", "off", "The lifespan: on|off")
-			cmd.Flags().StringP("socket", "s", "", "The socket to bind to")
-			cmd.RunE = caddycmd.WrapCommandFuncForCobra(cmdPythonWorker)
-		},
-	})
-	caddycmd.RegisterCommand(caddycmd.Command{
 		Name:  "python-server",
-		Usage: "--server-type wsgi|asgi --app <module> [--domain <example.com>] [--listen <addr>] [--workers <count>] [--workers-runtime <runtime>] [--static-path <path>] [--static-route <route>] [--debug] [--access-logs] [--autoreload]",
+		Usage: "--server-type wsgi|asgi --app <module> [--domain <example.com>] [--listen <addr>] [--workers <count>] [--python-path <path>] [--static-path <path>] [--static-route <route>] [--debug] [--access-logs] [--autoreload]",
 		Short: "Spins up a Python server",
 		Long: `
 A Python WSGI or ASGI server designed for apps and frameworks.
 
-You can specify a custom socket address using the '--listen' option. You can also specify the number of workers to spawn and the runtime to use for the workers.
+You can specify a custom socket address using the '--listen' option. You can also specify the number of workers to spawn.
 
 Providing a domain name with the '--domain' flag enables HTTPS and sets the listener to the appropriate secure port.
 Ensure DNS A/AAAA records are correctly set up if using a public domain for secure connections.
@@ -674,12 +509,12 @@ Ensure DNS A/AAAA records are correctly set up if using a public domain for secu
 			cmd.Flags().StringP("domain", "d", "", "Domain name at which to serve the files")
 			cmd.Flags().StringP("listen", "l", "", "The address to which to bind the listener")
 			cmd.Flags().StringP("workers", "w", "0", "The number of workers to spawn")
-			cmd.Flags().StringP("workers-runtime", "r", "process", "The runtime to use for the workers: thread|process")
+			cmd.Flags().String("python-path", "", "Path to the Python interpreter")
 			cmd.Flags().String("static-path", "", "Path to a static directory to serve: path/to/static")
 			cmd.Flags().String("static-route", "/static", "Route to serve the static directory: /static")
 			cmd.Flags().Bool("debug", false, "Enable debug logs")
 			cmd.Flags().Bool("access-logs", false, "Enable access logs")
-			cmd.Flags().Bool("autoreload", false, "Watch .py files and reload on changes (requires workers-runtime thread)")
+			cmd.Flags().Bool("autoreload", false, "Watch .py files and reload on changes")
 			cmd.RunE = caddycmd.WrapCommandFuncForCobra(pythonServer)
 		},
 	})
@@ -693,13 +528,13 @@ func pythonServer(fs caddycmd.Flags) (int, error) {
 	app := fs.String("app")
 	listen := fs.String("listen")
 	workers := fs.String("workers")
-	workersRuntime := fs.String("workers-runtime")
 	debug := fs.Bool("debug")
 	accessLogs := fs.Bool("access-logs")
 	autoreload := fs.Bool("autoreload")
 	staticPath := fs.String("static-path")
 	staticRoute := fs.String("static-route")
 	serverType := fs.String("server-type")
+	pythonPath := fs.String("python-path")
 
 	if serverType == "" {
 		return caddy.ExitCodeFailedStartup, errors.New("--server-type is required")
@@ -735,16 +570,13 @@ func pythonServer(fs caddycmd.Flags) (int, error) {
 	}
 
 	pythonHandler.Workers = workers
-	pythonHandler.WorkersRuntime = workersRuntime
+	pythonHandler.PythonPath = pythonPath
 	if autoreload {
 		pythonHandler.Autoreload = "on"
-		pythonHandler.WorkersRuntime = "thread"
 	}
 
-	// Create routes list
 	routes := caddyhttp.RouteList{}
 
-	// Add static file route if staticPath is provided
 	if staticPath != "" {
 		if strings.HasSuffix(staticRoute, "/") {
 			staticRoute = staticRoute + "*"
@@ -771,7 +603,6 @@ func pythonServer(fs caddycmd.Flags) (int, error) {
 		routes = append(routes, staticRoute)
 	}
 
-	// Add main Python route
 	mainRoute := caddyhttp.Route{
 		MatcherSetsRaw: []caddy.ModuleMap{
 			{
@@ -860,7 +691,6 @@ func pythonServer(fs caddycmd.Flags) (int, error) {
 }
 
 // findSitePackagesInVenv searches for the site-packages directory in a given venv.
-// It returns the absolute path to the site-packages directory if found, or an error otherwise.
 func findSitePackagesInVenv(venvPath string) (string, error) {
 	var sitePackagesPath string
 	if runtime.GOOS == "windows" {
@@ -920,7 +750,6 @@ func findPythonDirectory(libPath string) (string, error) {
 		if matched {
 			pythonDir = info.Name()
 			found = true
-			// Use an error to stop walking the directory tree
 			return errors.New("python directory found")
 		}
 		return nil

@@ -15,13 +15,11 @@
           matrix:
             tool-name: ['simple_async']
             python-version: ['3.14']
-        env:
-          GOEXPERIMENT: cgocheck2
         steps:
           - uses: actions/checkout@v4
           - uses: actions/setup-go@v5
             with:
-              go-version: '1.26'
+              go-version: '1.24'
               cache: false
           - name: Install Xcaddy
             run: go install github.com/caddyserver/xcaddy/cmd/xcaddy@latest
@@ -37,37 +35,10 @@
               python -m pip install --upgrade pip
               pip install -r requirements.txt
             shell: pwsh
-          - name: Install MSYS2 pkg-config
-            run: |
-              choco install pkgconfiglite -y
-              echo "C:\Program Files (x86)\pkgconfiglite\bin" >> $env:GITHUB_PATH
-            shell: pwsh
-    
-          - name: Create python3-embed.pc
-            run: |
-              $pythonPath = (python -c "import sys; print(sys.base_prefix)").Replace("\", "/")
-              $includeDir = "$pythonPath/include"
-              $libDir = "$pythonPath/libs"
-              $pcContent = @"
-              prefix=$pythonPath
-              exec_prefix=\${prefix}
-              libdir=\${prefix}/libs
-              includedir=\${prefix}/include
-    
-              Name: Python 3 Embed
-              Description: Python language library (embedding)
-              Version: $(python -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
-              Cflags: -I\${includedir}
-              Libs: -L\${libdir} -lpython$($(python -c "import sys; print(f'{sys.version_info.major}{sys.version_info.minor}')"))
-              "@
-              New-Item -ItemType Directory -Force -Path C:/a/pkgconfig | Out-Null
-              $pcContent | Out-File -Encoding ascii C:/a/pkgconfig/python3-embed.pc
-            shell: pwsh
           - name: Build caddy
             working-directory: tests/${{ matrix.tool-name }}/
             run: |
-              $env:CGO_ENABLED = "1"
-              $env:PKG_CONFIG_PATH = "C:/a/pkgconfig"
+              $env:CGO_ENABLED = "0"
               xcaddy build --with github.com/mliezun/caddy-snake=../..
             shell: pwsh
           - name: Run integration tests

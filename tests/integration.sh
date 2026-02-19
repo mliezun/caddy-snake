@@ -86,16 +86,15 @@ PYTHON_VERSION="__PYTHON_VERSION__"
 IS_NOGIL="__IS_NOGIL__"
 PY_PKG_VERSION="__PY_PKG_VERSION__"
 
-export GOEXPERIMENT=cgocheck2
 export DEBIAN_FRONTEND=noninteractive
 
 echo ">>> Installing base packages..."
 apt-get update -yyqq
-apt-get install -yyqq software-properties-common valgrind time curl gcc build-essential ca-certificates git pkg-config
+apt-get install -yyqq software-properties-common curl ca-certificates git
 
-# Install Go 1.26
-echo ">>> Installing Go 1.26..."
-curl -fsSL "https://go.dev/dl/go1.26.0.linux-amd64.tar.gz" -o /tmp/go.tar.gz
+# Install Go
+echo ">>> Installing Go..."
+curl -fsSL "https://go.dev/dl/go1.24.0.linux-amd64.tar.gz" -o /tmp/go.tar.gz
 tar -C /usr/local -xzf /tmp/go.tar.gz
 export PATH="/usr/local/go/bin:$HOME/go/bin:$PATH"
 go version
@@ -111,45 +110,24 @@ apt-get update -yyqq
 
 cd "/workspace/tests/${TOOL_NAME}"
 
-PKGCONFIG_DIR=$(find /usr/lib -type d -name pkgconfig -path "*linux-gnu*" | head -1)
-echo ">>> pkgconfig dir: ${PKGCONFIG_DIR}"
-
 if [[ "$IS_NOGIL" == "1" ]]; then
-  apt-get install -yyqq python${PY_PKG_VERSION} python3.13-dev
-  echo ">>> Available python .pc files:"
-  ls -la "${PKGCONFIG_DIR}"/python* || true
-  PC_FILE=$(find "${PKGCONFIG_DIR}" -name "python-${PY_PKG_VERSION}*embed.pc" -o -name "python-3.13*embed.pc" | head -1)
-  if [[ -n "$PC_FILE" ]]; then
-    cp "$PC_FILE" "${PKGCONFIG_DIR}/python3-embed.pc"
-    echo ">>> Copied $PC_FILE -> ${PKGCONFIG_DIR}/python3-embed.pc"
-  else
-    echo ">>> WARNING: No embed .pc file found for ${PY_PKG_VERSION}"
-  fi
+  apt-get install -yyqq python${PY_PKG_VERSION}
   curl -fsSL https://bootstrap.pypa.io/get-pip.py -o get-pip.py
   python${PY_PKG_VERSION} -m venv --without-pip venv
   source venv/bin/activate
   python get-pip.py
   pip install -r requirements.txt
 else
-  apt-get install -yyqq python${PY_PKG_VERSION}-dev python${PY_PKG_VERSION}-venv
-  echo ">>> Available python .pc files:"
-  ls -la "${PKGCONFIG_DIR}"/python* || true
-  PC_FILE=$(find "${PKGCONFIG_DIR}" -name "python-${PY_PKG_VERSION}*embed.pc" | head -1)
-  if [[ -n "$PC_FILE" ]]; then
-    cp "$PC_FILE" "${PKGCONFIG_DIR}/python3-embed.pc"
-    echo ">>> Copied $PC_FILE -> ${PKGCONFIG_DIR}/python3-embed.pc"
-  else
-    echo ">>> WARNING: No embed .pc file found for ${PY_PKG_VERSION}"
-  fi
+  apt-get install -yyqq python${PY_PKG_VERSION}-venv
   rm -rf venv
   python${PY_PKG_VERSION} -m venv venv
   source venv/bin/activate
   pip install -r requirements.txt
 fi
 
-# Build caddy with caddy-snake plugin
+# Build caddy with caddy-snake plugin (no CGO needed)
 echo ">>> Building caddy with caddy-snake..."
-CGO_ENABLED=1 xcaddy build --with github.com/mliezun/caddy-snake=/workspace
+CGO_ENABLED=0 xcaddy build --with github.com/mliezun/caddy-snake=/workspace
 
 # Run integration tests
 echo ">>> Starting caddy..."

@@ -1,11 +1,11 @@
 module github.com/mliezun/caddy-snake
 
-go 1.26
+go 1.24.0
 
 require (
 	github.com/caddyserver/caddy/v2 v2.10.0
 	github.com/caddyserver/certmagic v0.23.0
-	github.com/gorilla/websocket v1.4.1
+	github.com/fsnotify/fsnotify v1.9.0
 	github.com/spf13/cobra v1.9.1
 	go.uber.org/zap v1.27.0
 )
@@ -38,7 +38,6 @@ require (
 	github.com/dlclark/regexp2 v1.11.4 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/francoispqt/gojay v1.2.13 // indirect
-	github.com/fsnotify/fsnotify v1.9.0 // indirect
 	github.com/go-jose/go-jose/v3 v3.0.4 // indirect
 	github.com/go-kit/kit v0.13.0 // indirect
 	github.com/go-kit/log v0.2.1 // indirect
