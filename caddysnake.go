@@ -537,6 +537,9 @@ func NewPythonWorkerGroup(iface, app, workingDir, venv, lifespan string, count i
 }
 
 func (wg *PythonWorkerGroup) Cleanup() error {
+	if wg == nil {
+		return nil
+	}
 	errs := make([]error, len(wg.Workers))
 	for i, worker := range wg.Workers {
 		if worker != nil {

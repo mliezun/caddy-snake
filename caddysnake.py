@@ -113,7 +113,8 @@ _USE_TCP = sys.platform == "win32"
 class UnixWSGIServer(socketserver.ThreadingMixIn, HTTPServer):
     """WSGI-capable HTTP server listening on a Unix domain socket."""
 
-    address_family = socket.AF_UNIX
+    # getattr avoids AttributeError on Windows where AF_UNIX is missing (we use TCPWSGIServer there)
+    address_family = getattr(socket, "AF_UNIX", socket.AF_INET)
     daemon_threads = True
     request_queue_size = 128
 
