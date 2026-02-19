@@ -382,14 +382,19 @@ func (w *PythonWorker) Start() error {
 		Transport: w.Transport,
 	}
 
+	workingDir := w.WorkingDir
+	if workingDir == "" {
+		workingDir, _ = os.Getwd()
+	}
+
 	args := []string{
 		w.ScriptPath,
 		"--interface", w.Interface,
 		"--app", w.App,
 		"--socket", w.Socket.Name(),
 	}
-	if w.WorkingDir != "" {
-		args = append(args, "--working-dir", w.WorkingDir)
+	if workingDir != "" {
+		args = append(args, "--working-dir", workingDir)
 	}
 	if w.Venv != "" {
 		args = append(args, "--venv", w.Venv)
@@ -401,6 +406,12 @@ func (w *PythonWorker) Start() error {
 	w.Cmd = exec.Command(w.PythonBin, args...)
 	w.Cmd.Stdout = os.Stdout
 	w.Cmd.Stderr = os.Stderr
+	w.Cmd.Env = append(os.Environ(), "PYTHONUNBUFFERED=1")
+	if runtime.GOOS != "windows" {
+		w.Cmd.SysProcAttr = &syscall.SysProcAttr{
+			Pdeathsig: syscall.SIGTERM,
+		}
+	}
 
 	return w.Cmd.Start()
 }

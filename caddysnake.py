@@ -435,13 +435,16 @@ async def _handle_asgi_http(writer, app, scope, body):
         await disconnect_event.wait()
         return {"type": "http.disconnect"}
 
+    response_started = False
+    response_complete = False
     use_chunked = False
 
     async def send(message):
-        nonlocal use_chunked
+        nonlocal response_started, response_complete, use_chunked
         msg_type = message["type"]
 
         if msg_type == "http.response.start":
+            response_started = True
             status = message["status"]
             resp_headers = message.get("headers", [])
 
@@ -485,18 +488,22 @@ async def _handle_asgi_http(writer, app, scope, body):
             await writer.drain()
 
             if not more_body:
+                response_complete = True
                 disconnect_event.set()
 
     try:
         await app(scope, receive, send)
     except Exception:
         traceback.print_exc(file=sys.stderr)
-        if not use_chunked:
+        if not response_started:
             writer.write(
                 b"HTTP/1.1 500 Internal Server Error\r\n"
                 b"Content-Length: 21\r\n\r\n"
                 b"Internal Server Error"
             )
+            await writer.drain()
+        elif use_chunked and not response_complete:
+            writer.write(b"0\r\n\r\n")
             await writer.drain()
 
 
@@ -775,7 +782,6 @@ async def run_asgi_server(app, socket_path, lifespan):
     print(f"ASGI server listening on {socket_path}", file=sys.stderr)
 
     stop_event = asyncio.Event()
-
     loop = asyncio.get_running_loop()
     for sig in (signal.SIGTERM, signal.SIGINT):
         loop.add_signal_handler(sig, stop_event.set)
@@ -787,6 +793,9 @@ async def run_asgi_server(app, socket_path, lifespan):
 
     if shutdown_fn:
         await shutdown_fn()
+
+    sys.stderr.flush()
+    sys.stdout.flush()
 
     try:
         if os.path.exists(socket_path):
