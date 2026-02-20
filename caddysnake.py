@@ -841,16 +841,24 @@ async def run_asgi_server(app, socket_path, lifespan):
 
     stop_event = asyncio.Event()
     loop = asyncio.get_running_loop()
-    try:
-        for sig in (signal.SIGTERM, signal.SIGINT):
-            loop.add_signal_handler(sig, stop_event.set)
-    except (ValueError, OSError):
-        # Windows and some platforms don't support add_signal_handler; use signal.signal
+    if sys.platform == "win32":
+        # add_signal_handler raises NotImplementedError on Windows; use signal.signal
         def _stop(*args):
             stop_event.set()
 
         signal.signal(signal.SIGTERM, _stop)
         signal.signal(signal.SIGINT, _stop)
+    else:
+        try:
+            for sig in (signal.SIGTERM, signal.SIGINT):
+                loop.add_signal_handler(sig, stop_event.set)
+        except (ValueError, OSError):
+
+            def _stop(*args):
+                stop_event.set()
+
+            signal.signal(signal.SIGTERM, _stop)
+            signal.signal(signal.SIGINT, _stop)
 
     await stop_event.wait()
 
