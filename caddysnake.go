@@ -480,7 +480,13 @@ func (w *PythonWorker) Cleanup() error {
 		w.Transport.CloseIdleConnections()
 	}
 	if w.Cmd != nil && w.Cmd.Process != nil {
-		w.Cmd.Process.Signal(syscall.SIGTERM)
+		// On Windows, Signal(SIGTERM) is not supported; only Kill works.
+		// Send SIGTERM on Unix for graceful shutdown (ASGI lifespan), Kill on Windows.
+		if runtime.GOOS == "windows" {
+			w.Cmd.Process.Kill()
+		} else {
+			_ = w.Cmd.Process.Signal(syscall.SIGTERM)
+		}
 		done := make(chan error, 1)
 		go func() {
 			_, err := w.Cmd.Process.Wait()

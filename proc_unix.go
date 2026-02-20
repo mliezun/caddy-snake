@@ -1,14 +1,9 @@
-//go:build !windows
+//go:build !windows && !linux
 
 package caddysnake
 
-import (
-	"os/exec"
-	"syscall"
-)
+import "os/exec"
 
 func setSysProcAttr(cmd *exec.Cmd) {
-	cmd.SysProcAttr = &syscall.SysProcAttr{
-		Pdeathsig: syscall.SIGTERM,
-	}
+	// Pdeathsig is Linux-only; not available on darwin/BSD.
 }

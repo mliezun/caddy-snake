@@ -13,6 +13,7 @@ Usage:
 import argparse
 import asyncio
 import base64
+import copy
 import hashlib
 import importlib
 import io
@@ -214,6 +215,7 @@ class WSGIRequestHandler(BaseHTTPRequestHandler):
         host_header = self.headers.get("Host", "localhost")
         server_name, server_port = _parse_host_header(host_header)
 
+        remote_addr = self.client_address[0] if self.client_address else "127.0.0.1"
         environ = {
             "REQUEST_METHOD": self.command,
             "SCRIPT_NAME": "",
@@ -222,6 +224,8 @@ class WSGIRequestHandler(BaseHTTPRequestHandler):
             "SERVER_NAME": server_name,
             "SERVER_PORT": str(server_port),
             "SERVER_PROTOCOL": self.request_version,
+            "REMOTE_ADDR": remote_addr,
+            "REMOTE_HOST": remote_addr,
             "X_FROM": "caddy-snake",
             "wsgi.version": (1, 0),
             "wsgi.url_scheme": "http",
@@ -632,15 +636,27 @@ async def _handle_asgi_websocket(reader, writer, app, scope, raw_headers):
             await writer.drain()
 
         elif msg_type == "websocket.close":
-            code = message.get("code", 1000)
-            reason = message.get("reason", "")
-            payload = struct.pack("!H", code) + reason.encode("utf-8")
-            frame = ws_build_frame(WS_OPCODE_CLOSE, payload)
-            try:
-                writer.write(frame)
-                await writer.drain()
-            except (ConnectionError, OSError):
-                pass
+            if not ws_accepted.is_set():
+                # ASGI app rejected connection before accept: respond with HTTP 403
+                try:
+                    writer.write(
+                        b"HTTP/1.1 403 Forbidden\r\n"
+                        b"Content-Length: 13\r\n\r\n"
+                        b"403 Forbidden"
+                    )
+                    await writer.drain()
+                except (ConnectionError, OSError):
+                    pass
+            else:
+                code = message.get("code", 1000)
+                reason = message.get("reason", "")
+                payload = struct.pack("!H", code) + reason.encode("utf-8")
+                frame = ws_build_frame(WS_OPCODE_CLOSE, payload)
+                try:
+                    writer.write(frame)
+                    await writer.drain()
+                except (ConnectionError, OSError):
+                    pass
             ws_closed.set()
 
     try:
@@ -707,7 +723,7 @@ async def _handle_asgi_connection(reader, writer, app, state):
             }
 
             if state is not None:
-                scope["state"] = state
+                scope["state"] = copy.deepcopy(state)
 
             if is_websocket:
                 subprotocols_str = raw_headers.get("sec-websocket-protocol", "")
