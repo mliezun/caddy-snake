@@ -15,8 +15,6 @@ jobs:
         python-version: ['3.10', '3.11', '3.12', '3.13', '3.13-nogil', '3.14']
         os: [ubuntu-22.04, ubuntu-22.04-arm]
     runs-on: ${{ matrix.os }}
-    env:
-      GOEXPERIMENT: cgocheck2
     steps:
       - uses: actions/checkout@v3
       - uses: actions/setup-go@v5
@@ -25,27 +23,9 @@ jobs:
           cache: false
       - name: Install Xcaddy
         run: go install github.com/caddyserver/xcaddy/cmd/xcaddy@latest
-      - name: Set up Python ${{ matrix.python-version }}
-        if: matrix.python-version != '3.13-nogil'
-        run: |
-          export DEBIAN_FRONTEND=noninteractive
-          sudo apt-get update -yyqq
-          sudo apt-get install -yyqq software-properties-common valgrind time
-          sudo add-apt-repository -y ppa:deadsnakes/ppa
-          sudo apt-get install -yyqq python${{ matrix.python-version }}-dev python${{ matrix.python-version }}-venv
-          sudo mv /usr/lib/*-linux-gnu/pkgconfig/python-${{ matrix.python-version }}-embed.pc /usr/lib/*-linux-gnu/pkgconfig/python3-embed.pc
-      - name: Set up Python (nogil)
-        if: matrix.python-version == '3.13-nogil'
-        run: |
-          export DEBIAN_FRONTEND=noninteractive
-          sudo apt-get update -yyqq
-          sudo apt-get install -yyqq software-properties-common valgrind gcc build-essential
-          sudo add-apt-repository -y ppa:deadsnakes/ppa
-          sudo apt-get install -yyqq python${{ matrix.python-version }} python3.13-dev
-          sudo mv /usr/lib/*-linux-gnu/pkgconfig/python-${{ matrix.python-version }}-embed.pc /usr/lib/*-linux-gnu/pkgconfig/python3-embed.pc
       - name: Build the server
         working-directory: cmd/embed
-        run: CGO_ENABLED=1 xcaddy build --with github.com/mliezun/caddy-snake=../..
+        run: CGO_ENABLED=0 xcaddy build --with github.com/mliezun/caddy-snake=../..
       - name: Choose architecture
         id: choose-arch
         run: |
@@ -55,7 +35,12 @@ jobs:
             PYBS_ARCH=x86_64_v2-unknown-linux-gnu
           fi
           echo "PYBS_ARCH=${PYBS_ARCH}" >> $GITHUB_OUTPUT
-      - name: Retrive python build standalone
+      - name: Set up Python for pybs script
+        run: |
+          export DEBIAN_FRONTEND=noninteractive
+          sudo apt-get update -yyqq
+          sudo apt-get install -yyqq python3
+      - name: Retrieve python build standalone
         if: matrix.python-version != '3.13-nogil'
         working-directory: cmd/embed
         run: |
@@ -63,7 +48,7 @@ jobs:
           mv cpython-*.tar.gz python-standalone.tar.gz
           go build main.go
           mv main caddy
-      - name: Retrive python build standalone (nogil)
+      - name: Retrieve python build standalone (nogil)
         if: matrix.python-version == '3.13-nogil'
         working-directory: cmd/embed
         run: |
@@ -91,4 +76,3 @@ jobs:
           gh release upload ${{ github.event.release.tag_name }} caddy-standalone-${{ matrix.python-version }}-${{ steps.choose-arch.outputs.PYBS_ARCH }}.tar.gz --repo ${{ github.repository }} --clobber
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-  
