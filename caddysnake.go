@@ -18,6 +18,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -376,6 +377,10 @@ func (w *PythonWorker) Start() error {
 		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
 			return w.dialWithRetry(ctx)
 		},
+		MaxIdleConns:        1024,
+		MaxIdleConnsPerHost: 256,
+		IdleConnTimeout:     90 * time.Second,
+		DisableCompression:  true,
 	}
 	w.Proxy = &httputil.ReverseProxy{
 		Rewrite: func(req *httputil.ProxyRequest) {
@@ -511,7 +516,7 @@ func (w *PythonWorker) HandleRequest(rw http.ResponseWriter, req *http.Request) 
 
 type PythonWorkerGroup struct {
 	Workers    []*PythonWorker
-	RoundRobin int
+	roundRobin atomic.Uint64
 	ScriptPath string
 }
 
@@ -528,7 +533,6 @@ func NewPythonWorkerGroup(iface, app, workingDir, venv, lifespan string, count i
 	}
 	wg := &PythonWorkerGroup{
 		Workers:    workers,
-		RoundRobin: 0,
 		ScriptPath: scriptPath,
 	}
 	if err := errors.Join(errs...); err != nil {
@@ -554,8 +558,9 @@ func (wg *PythonWorkerGroup) Cleanup() error {
 }
 
 func (wg *PythonWorkerGroup) HandleRequest(rw http.ResponseWriter, req *http.Request) error {
-	wg.RoundRobin = (wg.RoundRobin + 1) % len(wg.Workers)
-	wg.Workers[wg.RoundRobin].HandleRequest(rw, req)
+	n := wg.roundRobin.Add(1)
+	idx := int(n % uint64(len(wg.Workers)))
+	wg.Workers[idx].HandleRequest(rw, req)
 	return nil
 }
 

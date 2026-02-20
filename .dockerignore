@@ -32,6 +32,7 @@ tests/*/venv
 buildenv*
 bin
 *.dSYM
+cmd/cli/target
 
 # Byte-compiled / optimized / DLL files
 **/__pycache__/

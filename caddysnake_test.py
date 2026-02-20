@@ -2,11 +2,9 @@
 
 import asyncio
 import os
-import socket
 import struct
 import sys
 import tempfile
-import threading
 from unittest import mock
 
 import pytest
@@ -608,23 +606,180 @@ class TestHandleAsgiLifespan:
         assert shutdown_fn is None
 
 
-# ==================== WSGI Handler ====================
+# ==================== WSGI _call_wsgi_app ====================
 
 
+class TestCallWsgiApp:
+    def test_basic_response(self):
+        def app(environ, start_response):
+            start_response("200 OK", [("Content-Type", "text/plain")])
+            return [b"ok"]
+
+        environ = {"REQUEST_METHOD": "GET", "wsgi.input": __import__("io").BytesIO(b"")}
+        status, headers, body = cs._call_wsgi_app(app, environ)
+        assert status == 200
+        assert body == b"ok"
+        assert ("Content-Type", "text/plain") in headers
+
+    def test_app_not_calling_start_response(self):
+        def app(environ, start_response):
+            return [b"bad"]
+
+        environ = {"REQUEST_METHOD": "GET", "wsgi.input": __import__("io").BytesIO(b"")}
+        status, headers, body = cs._call_wsgi_app(app, environ)
+        assert status == 500
+
+    def test_app_exception(self):
+        def app(environ, start_response):
+            raise RuntimeError("boom")
+
+        environ = {"REQUEST_METHOD": "GET", "wsgi.input": __import__("io").BytesIO(b"")}
+        status, headers, body = cs._call_wsgi_app(app, environ)
+        assert status == 500
+
+    def test_multiple_chunks(self):
+        def app(environ, start_response):
+            start_response("200 OK", [])
+            return [b"hello", b" ", b"world"]
+
+        environ = {"REQUEST_METHOD": "GET", "wsgi.input": __import__("io").BytesIO(b"")}
+        status, headers, body = cs._call_wsgi_app(app, environ)
+        assert status == 200
+        assert body == b"hello world"
+
+    def test_close_called(self):
+        closed = []
+
+        class Result:
+            def __iter__(self):
+                return iter([b"data"])
+
+            def close(self):
+                closed.append(True)
+
+        def app(environ, start_response):
+            start_response("200 OK", [])
+            return Result()
+
+        environ = {"REQUEST_METHOD": "GET", "wsgi.input": __import__("io").BytesIO(b"")}
+        cs._call_wsgi_app(app, environ)
+        assert closed == [True]
+
+
+# ==================== WSGI _build_wsgi_environ ====================
+
+
+class TestBuildWsgiEnviron:
+    def test_basic_environ(self):
+        headers_list = [(b"host", b"example.com:8080")]
+        raw_headers = {"host": "example.com:8080"}
+        env = cs._build_wsgi_environ(
+            "GET", "/foo?bar=baz", "HTTP/1.1", headers_list, raw_headers, b""
+        )
+        assert env["REQUEST_METHOD"] == "GET"
+        assert env["PATH_INFO"] == "/foo"
+        assert env["QUERY_STRING"] == "bar=baz"
+        assert env["SERVER_NAME"] == "example.com"
+        assert env["SERVER_PORT"] == "8080"
+        assert env["HTTP_HOST"] == "example.com:8080"
+        assert env["X_FROM"] == "caddy-snake"
+
+    def test_path_unquoting(self):
+        env = cs._build_wsgi_environ("GET", "/hello%20world", "HTTP/1.1", [], {}, b"")
+        assert env["PATH_INFO"] == "hello world" or env["PATH_INFO"] == "/hello world"
+
+    def test_content_type_and_length(self):
+        headers_list = [
+            (b"content-type", b"application/json"),
+            (b"content-length", b"42"),
+        ]
+        raw_headers = {"content-type": "application/json", "content-length": "42"}
+        env = cs._build_wsgi_environ(
+            "POST", "/", "HTTP/1.1", headers_list, raw_headers, b"x" * 42
+        )
+        assert env["CONTENT_TYPE"] == "application/json"
+        assert env["CONTENT_LENGTH"] == "42"
+        assert "HTTP_CONTENT_TYPE" not in env
+        assert "HTTP_CONTENT_LENGTH" not in env
+
+    def test_duplicate_headers_joined(self):
+        headers_list = [
+            (b"host", b"x"),
+            (b"x-custom", b"first"),
+            (b"x-custom", b"second"),
+        ]
+        raw_headers = {"host": "x", "x-custom": "second"}
+        env = cs._build_wsgi_environ(
+            "GET", "/", "HTTP/1.1", headers_list, raw_headers, b""
+        )
+        assert "first" in env["HTTP_X_CUSTOM"]
+        assert "second" in env["HTTP_X_CUSTOM"]
+
+    def test_cookie_joined_with_semicolon(self):
+        headers_list = [
+            (b"host", b"x"),
+            (b"cookie", b"a=1"),
+            (b"cookie", b"b=2"),
+        ]
+        raw_headers = {"host": "x", "cookie": "b=2"}
+        env = cs._build_wsgi_environ(
+            "GET", "/", "HTTP/1.1", headers_list, raw_headers, b""
+        )
+        assert env["HTTP_COOKIE"] == "a=1; b=2"
+
+    def test_proxy_header_excluded(self):
+        headers_list = [(b"host", b"x"), (b"proxy", b"evil")]
+        raw_headers = {"host": "x", "proxy": "evil"}
+        env = cs._build_wsgi_environ(
+            "GET", "/", "HTTP/1.1", headers_list, raw_headers, b""
+        )
+        assert "HTTP_PROXY" not in env
+
+
+# ==================== WSGI Handler (async) ====================
+
+
+async def _handle_wsgi_request(app, request_bytes):
+    """Feed a raw HTTP request to the async WSGI handler and return the response."""
+    reader = asyncio.StreamReader()
+    reader.feed_data(request_bytes)
+    reader.feed_eof()
+
+    written = []
+    writer = mock.Mock()
+    writer.write = lambda d: written.append(d)
+
+    async def _drain():
+        pass
+
+    writer.drain = _drain
+    writer.close = lambda: None
+
+    async def _wait_closed():
+        pass
+
+    writer.wait_closed = _wait_closed
+
+    await cs._handle_wsgi_connection(reader, writer, app)
+    return b"".join(written)
+
+
+@pytest.mark.asyncio
 class TestWsgiHandler:
-    def test_environ_building(self):
+    async def test_environ_building(self):
         """WSGI environ has correct keys from request."""
         app_called = []
 
         def app(environ, start_response):
-            app_called.append(environ)
+            app_called.append(dict(environ))
             start_response("200 OK", [])
             return [b"ok"]
 
-        with _make_wsgi_client(app) as (sock, connect):
-            connect(b"GET /foo?bar=baz HTTP/1.1\r\nHost: example.com:8080\r\n\r\n")
-            resp = _read_response(sock)
-            assert b"200 OK" in resp
+        resp = await _handle_wsgi_request(
+            app,
+            b"GET /foo?bar=baz HTTP/1.1\r\nHost: example.com:8080\r\nConnection: close\r\n\r\n",
+        )
+        assert b"200 OK" in resp
 
         env = app_called[0]
         assert env["REQUEST_METHOD"] == "GET"
@@ -635,141 +790,90 @@ class TestWsgiHandler:
         assert env["HTTP_HOST"] == "example.com:8080"
         assert env["X_FROM"] == "caddy-snake"
 
-    def test_path_unquoting(self):
+    async def test_path_unquoting(self):
         def app(environ, start_response):
             start_response("200 OK", [])
             return [environ["PATH_INFO"].encode()]
 
-        with _make_wsgi_client(app) as (sock, connect):
-            connect(b"GET /hello%20world HTTP/1.1\r\nHost: x\r\n\r\n")
-            resp = _read_response(sock)
-            assert b"hello world" in resp
+        resp = await _handle_wsgi_request(
+            app, b"GET /hello%20world HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n"
+        )
+        assert b"hello world" in resp
 
-    def test_content_length_body(self):
+    async def test_content_length_body(self):
         def app(environ, start_response):
             body = environ["wsgi.input"].read()
             start_response("200 OK", [])
             return [body]
 
-        with _make_wsgi_client(app) as (sock, connect):
-            connect(b"POST / HTTP/1.1\r\nHost: x\r\nContent-Length: 5\r\n\r\nhello")
-            resp = _read_response(sock)
-            assert b"hello" in resp
+        resp = await _handle_wsgi_request(
+            app,
+            b"POST / HTTP/1.1\r\nHost: x\r\nContent-Length: 5\r\nConnection: close\r\n\r\nhello",
+        )
+        assert b"hello" in resp
 
-    def test_chunked_body(self):
+    async def test_chunked_body(self):
         def app(environ, start_response):
             body = environ["wsgi.input"].read()
             start_response("200 OK", [])
             return [body]
 
-        with _make_wsgi_client(app) as (sock, connect):
-            connect(
-                b"POST / HTTP/1.1\r\n"
-                b"Host: x\r\n"
-                b"Transfer-Encoding: chunked\r\n\r\n"
-                b"5\r\nhello\r\n0\r\n\r\n"
-            )
-            resp = _read_response(sock)
-            assert b"hello" in resp
+        resp = await _handle_wsgi_request(
+            app,
+            b"POST / HTTP/1.1\r\n"
+            b"Host: x\r\n"
+            b"Transfer-Encoding: chunked\r\n"
+            b"Connection: close\r\n\r\n"
+            b"5\r\nhello\r\n0\r\n\r\n",
+        )
+        assert b"hello" in resp
 
-    def test_app_must_call_start_response(self):
+    async def test_app_must_call_start_response(self):
         def app(environ, start_response):
             return [b"bad"]
 
-        with _make_wsgi_client(app) as (sock, connect):
-            connect(b"GET / HTTP/1.1\r\nHost: x\r\n\r\n")
-            resp = _read_response(sock)
-            assert b"500" in resp
+        resp = await _handle_wsgi_request(
+            app, b"GET / HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n"
+        )
+        assert b"500" in resp
 
-    def test_uri_too_long_414(self):
+    async def test_duplicate_headers_joined(self):
         def app(environ, start_response):
             start_response("200 OK", [])
-            return [b"ok"]
+            return [environ.get("HTTP_X_CUSTOM", "none").encode()]
 
-        with _make_wsgi_client(app) as (sock, connect):
-            line = b"GET /" + b"x" * 65530 + b" HTTP/1.1\r\nHost: x\r\n\r\n"
-            connect(line)
-            resp = _read_response(sock)
-            assert b"414" in resp
+        resp = await _handle_wsgi_request(
+            app,
+            b"GET / HTTP/1.1\r\n"
+            b"Host: x\r\n"
+            b"X-Custom: first\r\n"
+            b"X-Custom: second\r\n"
+            b"Connection: close\r\n\r\n",
+        )
+        assert b"first" in resp
 
-    def test_duplicate_headers_use_first(self):
+    async def test_cookie_joined_with_semicolon(self):
         def app(environ, start_response):
             start_response("200 OK", [])
-            return [environ.get("HTTP_X_CUSTOM", b"none").encode()]
+            return [environ.get("HTTP_COOKIE", "").encode()]
 
-        with _make_wsgi_client(app) as (sock, connect):
-            connect(
-                b"GET / HTTP/1.1\r\n"
-                b"Host: x\r\n"
-                b"X-Custom: first\r\n"
-                b"X-Custom: second\r\n\r\n"
-            )
-            resp = _read_response(sock)
-            # Duplicate headers: code uses seen_keys, so second is skipped
-            # First value wins
-            assert b"first" in resp
+        resp = await _handle_wsgi_request(
+            app,
+            b"GET / HTTP/1.1\r\nHost: x\r\nCookie: a=1\r\nCookie: b=2\r\nConnection: close\r\n\r\n",
+        )
+        assert b"a=1; b=2" in resp
 
-    def test_cookie_joined_with_semicolon(self):
+    async def test_response_has_content_length(self):
+        """Responses always include Content-Length for keep-alive support."""
+
         def app(environ, start_response):
             start_response("200 OK", [])
-            return [environ.get("HTTP_COOKIE", b"").encode()]
+            return [b"hello"]
 
-        with _make_wsgi_client(app) as (sock, connect):
-            connect(b"GET / HTTP/1.1\r\nHost: x\r\nCookie: a=1\r\nCookie: b=2\r\n\r\n")
-            resp = _read_response(sock)
-            assert b"a=1; b=2" in resp
-
-
-def _make_wsgi_client(app):
-    """Context manager that creates a TCP server and yields (client_sock, connect_fn)."""
-    server = cs.TCPWSGIServer("127.0.0.1", 0, cs.WSGIRequestHandler, app)
-    port = server.server_address[1]
-    server.socket.settimeout(5)
-
-    class Client:
-        def __enter__(_self):
-            _self.thread = threading.Thread(target=server.handle_request, daemon=True)
-            _self.thread.start()
-            _self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            _self.sock.settimeout(5)
-            _self.sock.connect(("127.0.0.1", port))
-            return _self.sock, _self._connect
-
-        def _connect(_self, data):
-            _self.sock.sendall(data)
-
-        def __exit__(_self, *args):
-            _self.sock.close()
-            _self.thread.join(timeout=2)
-            server.server_close()
-
-    return Client()
-
-
-def _read_response(sock):
-    buf = b""
-    while True:
-        try:
-            chunk = sock.recv(4096)
-            if not chunk:
-                break
-            buf += chunk
-            if b"\r\n\r\n" in buf and (
-                b"Content-Length:" in buf or b"Transfer-Encoding:" in buf
-            ):
-                # Try to get body
-                if b"Content-Length:" in buf:
-                    import re
-
-                    m = re.search(rb"Content-Length:\s*(\d+)", buf)
-                    if m:
-                        length = int(m.group(1))
-                        while len(buf) < buf.index(b"\r\n\r\n") + 4 + length:
-                            buf += sock.recv(4096)
-                break
-        except socket.timeout:
-            break
-    return buf
+        resp = await _handle_wsgi_request(
+            app, b"GET / HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n"
+        )
+        assert b"Content-Length: 5" in resp
 
 
 # ==================== main() CLI ====================

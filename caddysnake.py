@@ -19,13 +19,10 @@ import importlib
 import io
 import os
 import signal
-import socket
-import socketserver
 import struct
 import sys
 import traceback
 from http import HTTPStatus
-from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import unquote, urlparse
 
 
@@ -111,209 +108,161 @@ def _parse_host_header(host_str, default_port=80):
 _USE_TCP = sys.platform == "win32"
 
 
-class UnixWSGIServer(socketserver.ThreadingMixIn, HTTPServer):
-    """WSGI-capable HTTP server listening on a Unix domain socket."""
+def _call_wsgi_app(app, environ):
+    """Call a WSGI app synchronously. Returns (status_code, headers_list, body_bytes)."""
+    response_started = []
 
-    # getattr avoids AttributeError on Windows where AF_UNIX is missing (we use TCPWSGIServer there)
-    address_family = getattr(socket, "AF_UNIX", socket.AF_INET)
-    daemon_threads = True
-    request_queue_size = 128
+    def start_response(status, response_headers, exc_info=None):
+        if exc_info:
+            try:
+                if response_started:
+                    raise exc_info[1].with_traceback(exc_info[2])
+            finally:
+                exc_info = None
+        response_started.append((status, response_headers))
+        return lambda s: None
 
-    def __init__(self, socket_path, handler_class, wsgi_app):
-        self.wsgi_app = wsgi_app
-        if os.path.exists(socket_path):
-            os.unlink(socket_path)
-        super().__init__(socket_path, handler_class)
-        self.server_name = "localhost"
-        self.server_port = 0
+    result = None
+    try:
+        result = app(environ, start_response)
+        output = []
+        for chunk in result:
+            if chunk:
+                output.append(chunk)
+        if not response_started:
+            return 500, [("Content-Type", "text/plain")], b"Internal Server Error"
+        status_str, response_headers = response_started[0]
+        status_code = int(status_str.split(" ", 1)[0])
+        body = b"".join(output)
+        return status_code, response_headers, body
+    except Exception:
+        traceback.print_exc(file=sys.stderr)
+        return 500, [("Content-Type", "text/plain")], b"Internal Server Error"
+    finally:
+        if result is not None and hasattr(result, "close"):
+            result.close()
 
-    def server_bind(self):
-        self.socket.bind(self.server_address)
 
-    def get_request(self):
-        request, client_address = self.socket.accept()
-        if not isinstance(client_address, tuple):
-            client_address = ("127.0.0.1", 0)
-        return request, client_address
+def _build_wsgi_environ(method, path, version, headers_list, raw_headers, body):
+    """Build a WSGI environ dict from parsed HTTP request components."""
+    parsed = urlparse(path)
+    host_str = raw_headers.get("host", "localhost")
+    server_name, server_port = _parse_host_header(host_str)
 
-    def server_close(self):
-        super().server_close()
+    environ = {
+        "REQUEST_METHOD": method,
+        "SCRIPT_NAME": "",
+        "PATH_INFO": unquote(parsed.path),
+        "QUERY_STRING": parsed.query or "",
+        "SERVER_NAME": server_name,
+        "SERVER_PORT": str(server_port),
+        "SERVER_PROTOCOL": version,
+        "REMOTE_ADDR": "127.0.0.1",
+        "REMOTE_HOST": "127.0.0.1",
+        "X_FROM": "caddy-snake",
+        "wsgi.version": (1, 0),
+        "wsgi.url_scheme": "http",
+        "wsgi.input": io.BytesIO(body),
+        "wsgi.errors": sys.stderr,
+        "wsgi.multithread": True,
+        "wsgi.multiprocess": True,
+        "wsgi.run_once": False,
+    }
+
+    content_type = raw_headers.get("content-type")
+    if content_type:
+        environ["CONTENT_TYPE"] = content_type
+    content_length_val = raw_headers.get("content-length")
+    if content_length_val:
+        environ["CONTENT_LENGTH"] = content_length_val
+
+    header_groups = {}
+    for h_name_bytes, h_value_bytes in headers_list:
+        key = h_name_bytes.decode("latin-1")
+        key_upper = key.upper().replace("-", "_")
+        if key_upper in ("CONTENT_TYPE", "CONTENT_LENGTH", "PROXY"):
+            continue
+        http_key = "HTTP_" + key_upper
+        if http_key not in header_groups:
+            header_groups[http_key] = []
+        header_groups[http_key].append(h_value_bytes.decode("latin-1"))
+
+    for http_key, values in header_groups.items():
+        key_upper = http_key[5:]  # Remove "HTTP_" prefix
+        if key_upper == "COOKIE":
+            environ[http_key] = "; ".join(values)
+        else:
+            environ[http_key] = ", ".join(values)
+
+    return environ
+
+
+async def _handle_wsgi_connection(reader, writer, app):
+    """Handle a single connection for WSGI (supports HTTP/1.1 keep-alive)."""
+    try:
+        while True:
+            result = await _read_http_request(reader)
+            if result is None:
+                break
+
+            method, path, version, headers_list, raw_headers, body = result
+            environ = _build_wsgi_environ(
+                method, path, version, headers_list, raw_headers, body
+            )
+
+            loop = asyncio.get_running_loop()
+            status_code, resp_headers, resp_body = await loop.run_in_executor(
+                None, _call_wsgi_app, app, environ
+            )
+
+            phrase = _status_phrase(status_code)
+            writer.write(f"HTTP/1.1 {status_code} {phrase}\r\n".encode("latin-1"))
+
+            has_content_length = False
+            for name, value in resp_headers:
+                if isinstance(name, bytes):
+                    name = name.decode("latin-1")
+                if isinstance(value, bytes):
+                    value = value.decode("latin-1")
+                writer.write(f"{name}: {value}\r\n".encode("latin-1"))
+                if name.lower() == "content-length":
+                    has_content_length = True
+
+            if not has_content_length:
+                writer.write(f"Content-Length: {len(resp_body)}\r\n".encode("latin-1"))
+
+            writer.write(b"\r\n")
+            if resp_body:
+                writer.write(resp_body)
+            await writer.drain()
+
+            connection = raw_headers.get("connection", "")
+            if "close" in connection.lower():
+                break
+    except (
+        asyncio.IncompleteReadError,
+        ConnectionError,
+        ConnectionResetError,
+        OSError,
+    ):
+        pass
+    finally:
         try:
-            if isinstance(self.server_address, str) and os.path.exists(
-                self.server_address
-            ):
-                os.unlink(self.server_address)
-        except OSError:
+            writer.close()
+            await writer.wait_closed()
+        except Exception:
             pass
 
 
-class TCPWSGIServer(socketserver.ThreadingMixIn, HTTPServer):
-    """WSGI-capable HTTP server listening on TCP (used on Windows)."""
-
-    address_family = socket.AF_INET
-    daemon_threads = True
-    request_queue_size = 128
-
-    def __init__(self, host, port, handler_class, wsgi_app):
-        self.wsgi_app = wsgi_app
-        super().__init__((host, port), handler_class)
-        self.server_name = host
-        self.server_port = self.server_address[1]
-
-
-class WSGIRequestHandler(BaseHTTPRequestHandler):
-    """Handles HTTP requests and dispatches them to a WSGI application."""
-
-    server_version = "caddysnake/1.0"
-
-    def log_message(self, format, *args):
-        pass
-
-    def handle_one_request(self):
-        try:
-            self.raw_requestline = self.rfile.readline(65537)
-            if len(self.raw_requestline) > 65536:
-                self.requestline = ""
-                self.request_version = ""
-                self.command = ""
-                self.send_error(414)
-                return
-            if not self.raw_requestline:
-                self.close_connection = True
-                return
-            if not self.parse_request():
-                return
-            self._handle_wsgi()
-        except Exception:
-            self.close_connection = True
-
-    def _read_body(self):
-        content_length = self.headers.get("Content-Length")
-        if content_length:
-            return self.rfile.read(int(content_length))
-
-        transfer_encoding = self.headers.get("Transfer-Encoding", "")
-        if "chunked" in transfer_encoding.lower():
-            body = bytearray()
-            while True:
-                line = self.rfile.readline().strip()
-                chunk_size = int(line, 16)
-                if chunk_size == 0:
-                    self.rfile.readline()
-                    break
-                body.extend(self.rfile.read(chunk_size))
-                self.rfile.readline()
-            return bytes(body)
-
-        return b""
-
-    def _handle_wsgi(self):
-        app = getattr(self.server, "wsgi_app")
-        parsed = urlparse(self.path)
-        body = self._read_body()
-
-        host_header = self.headers.get("Host", "localhost")
-        server_name, server_port = _parse_host_header(host_header)
-
-        remote_addr = self.client_address[0] if self.client_address else "127.0.0.1"
-        environ = {
-            "REQUEST_METHOD": self.command,
-            "SCRIPT_NAME": "",
-            "PATH_INFO": unquote(parsed.path),
-            "QUERY_STRING": parsed.query or "",
-            "SERVER_NAME": server_name,
-            "SERVER_PORT": str(server_port),
-            "SERVER_PROTOCOL": self.request_version,
-            "REMOTE_ADDR": remote_addr,
-            "REMOTE_HOST": remote_addr,
-            "X_FROM": "caddy-snake",
-            "wsgi.version": (1, 0),
-            "wsgi.url_scheme": "http",
-            "wsgi.input": io.BytesIO(body),
-            "wsgi.errors": sys.stderr,
-            "wsgi.multithread": True,
-            "wsgi.multiprocess": True,
-            "wsgi.run_once": False,
-        }
-
-        content_type = self.headers.get("Content-Type")
-        if content_type:
-            environ["CONTENT_TYPE"] = content_type
-        content_length = self.headers.get("Content-Length")
-        if content_length:
-            environ["CONTENT_LENGTH"] = content_length
-
-        seen_keys = set()
-        for key in self.headers:
-            key_upper = key.upper().replace("-", "_")
-            if key_upper in ("CONTENT_TYPE", "CONTENT_LENGTH", "PROXY"):
-                continue
-            http_key = "HTTP_" + key_upper
-            if http_key in seen_keys:
-                continue
-            seen_keys.add(http_key)
-            values = self.headers.get_all(key, [])
-            if key_upper == "COOKIE":
-                environ[http_key] = "; ".join(values)
-            else:
-                environ[http_key] = ", ".join(values)
-
-        response_started = []
-
-        def start_response(status, response_headers, exc_info=None):
-            if exc_info:
-                try:
-                    if response_started:
-                        raise exc_info[1].with_traceback(exc_info[2])
-                finally:
-                    exc_info = None
-            response_started.append((status, response_headers))
-            return lambda s: None
-
-        result = None
-        headers_sent = False
-        try:
-            result = app(environ, start_response)
-
-            for chunk in result:
-                if not headers_sent:
-                    if not response_started:
-                        raise RuntimeError("WSGI app did not call start_response")
-                    status_str, response_headers = response_started[0]
-                    status_code = int(status_str.split(" ", 1)[0])
-                    self.send_response(status_code)
-                    for name, value in response_headers:
-                        self.send_header(name, value)
-                    self.end_headers()
-                    headers_sent = True
-                if chunk:
-                    self.wfile.write(chunk)
-
-            if not headers_sent:
-                if not response_started:
-                    raise RuntimeError("WSGI app did not call start_response")
-                status_str, response_headers = response_started[0]
-                status_code = int(status_str.split(" ", 1)[0])
-                self.send_response(status_code)
-                for name, value in response_headers:
-                    self.send_header(name, value)
-                self.end_headers()
-
-            self.wfile.flush()
-        except Exception:
-            traceback.print_exc(file=sys.stderr)
-            if not headers_sent:
-                self.send_error(500)
-        finally:
-            if result is not None and hasattr(result, "close"):
-                result.close()
-
-
-def run_wsgi_server(app, socket_path):
-    """Run a WSGI server. On Unix: Unix socket at socket_path. On Windows: TCP, write port to socket_path."""
+async def _run_wsgi_server_async(app, socket_path):
+    """Run a WSGI server using asyncio."""
     if _USE_TCP:
-        server = TCPWSGIServer("127.0.0.1", 0, WSGIRequestHandler, app)
-        port = server.server_address[1]
+        server = await asyncio.start_server(
+            lambda r, w: _handle_wsgi_connection(r, w, app),
+            "127.0.0.1",
+            0,
+        )
+        port = server.sockets[0].getsockname()[1]
         try:
             with open(socket_path, "w") as f:
                 f.write(str(port))
@@ -322,24 +271,53 @@ def run_wsgi_server(app, socket_path):
             sys.exit(1)
         print(f"WSGI server listening on 127.0.0.1:{port}", file=sys.stderr)
     else:
-        server = UnixWSGIServer(socket_path, WSGIRequestHandler, app)
+        if os.path.exists(socket_path):
+            os.unlink(socket_path)
+        server = await asyncio.start_unix_server(
+            lambda r, w: _handle_wsgi_connection(r, w, app),
+            path=socket_path,
+        )
         print(f"WSGI server listening on {socket_path}", file=sys.stderr)
 
-    def shutdown_handler(signum, frame):
-        server.shutdown()
+    stop_event = asyncio.Event()
+    loop = asyncio.get_running_loop()
+    if sys.platform == "win32":
 
-    signal.signal(signal.SIGTERM, shutdown_handler)
-    signal.signal(signal.SIGINT, shutdown_handler)
+        def _stop(*args):
+            stop_event.set()
+
+        signal.signal(signal.SIGTERM, _stop)
+        signal.signal(signal.SIGINT, _stop)
+    else:
+        try:
+            for sig in (signal.SIGTERM, signal.SIGINT):
+                loop.add_signal_handler(sig, stop_event.set)
+        except (ValueError, OSError):
+
+            def _stop(*args):
+                stop_event.set()
+
+            signal.signal(signal.SIGTERM, _stop)
+            signal.signal(signal.SIGINT, _stop)
+
+    await stop_event.wait()
+
+    server.close()
+    await server.wait_closed()
+
+    sys.stderr.flush()
+    sys.stdout.flush()
 
     try:
-        server.serve_forever()
-    finally:
-        server.server_close()
-        if _USE_TCP and os.path.exists(socket_path):
-            try:
-                os.unlink(socket_path)
-            except OSError:
-                pass
+        if os.path.exists(socket_path):
+            os.unlink(socket_path)
+    except OSError:
+        pass
+
+
+def run_wsgi_server(app, socket_path):
+    """Run a WSGI server. On Unix: Unix socket at socket_path. On Windows: TCP, write port to socket_path."""
+    asyncio.run(_run_wsgi_server_async(app, socket_path))
 
 
 # ==================== ASGI Server ====================
