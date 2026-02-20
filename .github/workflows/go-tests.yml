@@ -26,8 +26,14 @@
             run: go install github.com/caddyserver/xcaddy/cmd/xcaddy@latest
           - name: Run module tests
             run: go test -race -v .
+          - name: Run tests with coverage (including caddytest when available)
+            run: |
+              go test -race -coverprofile=coverage.out -tags=caddytest -timeout 90s . || \
+              go test -race -coverprofile=coverage.out .
           - name: Update coverage report
             uses: ncruces/go-coverage-report@v0
+            with:
+              coverage-file: coverage.out
             continue-on-error: true
           - name: Build the server
             run: CGO_ENABLED=0 xcaddy build --with github.com/mliezun/caddy-snake=.

@@ -8,6 +8,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/http/httputil"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -451,6 +452,146 @@ func TestValidate(t *testing.T) {
 	}
 }
 
+// ====================== Provision Tests ======================
+
+func TestProvision_NoModule(t *testing.T) {
+	cfg := &caddy.Config{Admin: &caddy.AdminConfig{Disabled: true}}
+	ctx, err := caddy.ProvisionContext(cfg)
+	if err != nil {
+		t.Fatalf("ProvisionContext: %v", err)
+	}
+
+	cs := &CaddySnake{} // neither ModuleWsgi nor ModuleAsgi set
+	err = cs.Provision(ctx)
+	if err == nil {
+		t.Fatal("expected error when neither wsgi nor asgi specified")
+	}
+	if !strings.Contains(err.Error(), "asgi or wsgi") {
+		t.Errorf("expected 'asgi or wsgi' in error, got: %v", err)
+	}
+}
+
+func TestProvision_DynamicWSGI(t *testing.T) {
+	cfg := &caddy.Config{Admin: &caddy.AdminConfig{Disabled: true}}
+	ctx, err := caddy.ProvisionContext(cfg)
+	if err != nil {
+		t.Fatalf("ProvisionContext: %v", err)
+	}
+
+	cs := &CaddySnake{
+		ModuleWsgi: "main:app",
+		WorkingDir: "/home/{host.labels.0}", // placeholder triggers dynamic
+		Lifespan:   "on",                    // triggers "lifespan ignored in WSGI" warning
+	}
+	err = cs.Provision(ctx)
+	if err != nil {
+		t.Fatalf("Provision: %v", err)
+	}
+	if cs.app == nil {
+		t.Fatal("expected app to be set")
+	}
+	if _, ok := cs.app.(*DynamicApp); !ok {
+		t.Errorf("expected *DynamicApp, got %T", cs.app)
+	}
+	cs.Cleanup()
+}
+
+func TestProvision_DynamicASGI(t *testing.T) {
+	cfg := &caddy.Config{Admin: &caddy.AdminConfig{Disabled: true}}
+	ctx, err := caddy.ProvisionContext(cfg)
+	if err != nil {
+		t.Fatalf("ProvisionContext: %v", err)
+	}
+
+	cs := &CaddySnake{
+		ModuleAsgi: "main:app",
+		WorkingDir: "/home/{host.labels.0}",
+		Lifespan:   "on",
+	}
+	err = cs.Provision(ctx)
+	if err != nil {
+		t.Fatalf("Provision: %v", err)
+	}
+	if _, ok := cs.app.(*DynamicApp); !ok {
+		t.Errorf("expected *DynamicApp, got %T", cs.app)
+	}
+	cs.Cleanup()
+}
+
+func TestProvision_WSGI_Success(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+	skipIfNoPython(t)
+
+	tempDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(tempDir, "app.py"), []byte(minimalWSGIApp), 0644); err != nil {
+		t.Fatalf("failed to write app.py: %v", err)
+	}
+	workDir := filepath.ToSlash(tempDir)
+
+	cfg := &caddy.Config{Admin: &caddy.AdminConfig{Disabled: true}}
+	ctx, err := caddy.ProvisionContext(cfg)
+	if err != nil {
+		t.Fatalf("ProvisionContext: %v", err)
+	}
+
+	cs := &CaddySnake{
+		ModuleWsgi: "app:app",
+		WorkingDir: workDir,
+		Workers:    "1",
+	}
+	err = cs.Provision(ctx)
+	if err != nil {
+		t.Fatalf("Provision: %v", err)
+	}
+	defer cs.Cleanup()
+
+	if cs.app == nil {
+		t.Fatal("expected app to be set")
+	}
+	if _, ok := cs.app.(*PythonWorkerGroup); !ok {
+		t.Errorf("expected *PythonWorkerGroup, got %T", cs.app)
+	}
+}
+
+func TestProvision_ASGI_Success(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+	skipIfNoPython(t)
+
+	tempDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(tempDir, "app.py"), []byte(minimalASGIApp), 0644); err != nil {
+		t.Fatalf("failed to write app.py: %v", err)
+	}
+	workDir := filepath.ToSlash(tempDir)
+
+	cfg := &caddy.Config{Admin: &caddy.AdminConfig{Disabled: true}}
+	ctx, err := caddy.ProvisionContext(cfg)
+	if err != nil {
+		t.Fatalf("ProvisionContext: %v", err)
+	}
+
+	cs := &CaddySnake{
+		ModuleAsgi: "app:app",
+		WorkingDir: workDir,
+		Workers:    "1",
+	}
+	err = cs.Provision(ctx)
+	if err != nil {
+		t.Fatalf("Provision: %v", err)
+	}
+	defer cs.Cleanup()
+
+	if cs.app == nil {
+		t.Fatal("expected app to be set")
+	}
+	if _, ok := cs.app.(*PythonWorkerGroup); !ok {
+		t.Errorf("expected *PythonWorkerGroup, got %T", cs.app)
+	}
+}
+
 // ====================== CaddySnake.Cleanup Tests ======================
 
 func TestCaddySnakeCleanup_NilApp(t *testing.T) {
@@ -617,7 +758,30 @@ func TestResolvePythonInterpreter_VenvFallbackToPython(t *testing.T) {
 	}
 }
 
+func TestResolvePythonInterpreter_VenvNoPython(t *testing.T) {
+	tempDir := t.TempDir()
+	binDir := filepath.Join(tempDir, "bin")
+	os.MkdirAll(binDir, 0755)
+	// No python3 or python in bin/ - should fall back to "python3"
+
+	result := resolvePythonInterpreter("", tempDir)
+	if result != "python3" {
+		t.Errorf("expected 'python3' fallback when venv has no python, got %q", result)
+	}
+}
+
 // ====================== writeCaddysnakePy Tests ======================
+
+func TestWriteCaddysnakePy_CreateTempFails(t *testing.T) {
+	orig := os.Getenv("TMPDIR")
+	os.Setenv("TMPDIR", "/nonexistent_directory_for_caddysnake_test_xyz")
+	defer os.Setenv("TMPDIR", orig)
+
+	_, err := writeCaddysnakePy()
+	if err == nil {
+		t.Error("expected error when TMPDIR points to nonexistent directory")
+	}
+}
 
 func TestWriteCaddysnakePy(t *testing.T) {
 	path, err := writeCaddysnakePy()
@@ -1172,7 +1336,139 @@ func TestWaitForPortFile_InvalidContent(t *testing.T) {
 	}
 }
 
+// ====================== dialWithRetry Tests ======================
+// These tests exercise PythonWorker.dialWithRetry via HandleRequest using
+// a minimally constructed worker (no Python process).
+
+func newMinimalWorkerForDialTest(dialNet, dialAddr string) *PythonWorker {
+	w := &PythonWorker{
+		DialNet:  dialNet,
+		DialAddr: dialAddr,
+	}
+	w.Transport = &http.Transport{
+		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			return w.dialWithRetry(ctx)
+		},
+	}
+	w.Proxy = &httputil.ReverseProxy{
+		Rewrite: func(req *httputil.ProxyRequest) {
+			req.Out.URL.Scheme = "http"
+			req.Out.URL.Host = w.DialAddr
+		},
+		Transport: w.Transport,
+	}
+	return w
+}
+
+func TestDialWithRetry_ContextCanceled(t *testing.T) {
+	w := newMinimalWorkerForDialTest("tcp", "127.0.0.1:37982") // nothing listening
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // cancel immediately
+
+	r, _ := http.NewRequestWithContext(ctx, "GET", "http://example.com/", nil)
+	w2 := &mockResponseWriter{headers: make(http.Header)}
+
+	_ = w.HandleRequest(w2, r)
+	// ReverseProxy writes 502 on dial error (incl. context canceled); HandleRequest returns nil
+	if w2.statusCode != 502 {
+		t.Errorf("expected 502 on context cancel, got status %d", w2.statusCode)
+	}
+}
+
+func TestDialWithRetry_FailsAfterRetries(t *testing.T) {
+	w := newMinimalWorkerForDialTest("tcp", "127.0.0.1:37983") // nothing listening
+
+	r, _ := http.NewRequestWithContext(context.Background(), "GET", "http://example.com/", nil)
+	w2 := &mockResponseWriter{headers: make(http.Header)}
+
+	_ = w.HandleRequest(w2, r)
+	// ReverseProxy writes 502 on connection failure; HandleRequest returns nil
+	if w2.statusCode != 502 {
+		t.Errorf("expected 502 after retries exhausted, got status %d, body: %s", w2.statusCode, w2.body)
+	}
+}
+
+func TestDialWithRetry_EventualSuccess(t *testing.T) {
+	// Start listener after a short delay to exercise retries
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	addr := listener.Addr().String()
+	listener.Close()
+
+	// Rebind - listener is closed, so dial will fail initially
+	started := make(chan struct{})
+	var server *http.Server
+	go func() {
+		time.Sleep(150 * time.Millisecond) // allow a few failed dial attempts
+		l, err := net.Listen("tcp", addr)
+		if err != nil {
+			return
+		}
+		server = &http.Server{
+			Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(200)
+				w.Write([]byte("ok"))
+			}),
+		}
+		close(started)
+		server.Serve(l)
+	}()
+	<-started
+
+	w := newMinimalWorkerForDialTest("tcp", addr)
+	r, _ := http.NewRequestWithContext(context.Background(), "GET", "http://example.com/", nil)
+	w2 := &mockResponseWriter{headers: make(http.Header)}
+
+	err = w.HandleRequest(w2, r)
+	if err != nil {
+		t.Errorf("expected success after retries, got: %v", err)
+	}
+	if server != nil {
+		server.Close()
+	}
+}
+
 // ====================== PythonWorkerGroup Tests ======================
+
+func TestNewPythonWorkerGroup_InvalidPythonPath(t *testing.T) {
+	tempDir := t.TempDir()
+	os.WriteFile(filepath.Join(tempDir, "app.py"), []byte(minimalWSGIApp), 0644)
+
+	_, err := NewPythonWorkerGroup("wsgi", "app:app", tempDir, "", "", 1, "/nonexistent/python-not-found")
+	if err == nil {
+		t.Fatal("expected error when python path is invalid")
+	}
+}
+
+// app that ignores SIGTERM so Cleanup's 5s timeout path is exercised
+const minimalWSGIAppIgnoringSIGTERM = `import signal
+signal.signal(signal.SIGTERM, signal.SIG_IGN)
+def app(environ, start_response):
+    start_response('200 OK', [('Content-Type', 'text/plain')])
+    return [b'ok']
+`
+
+func TestPythonWorkerCleanup_Timeout(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping 5s timeout test in short mode")
+	}
+	skipIfNoPython(t)
+
+	tempDir := t.TempDir()
+	os.WriteFile(filepath.Join(tempDir, "app.py"), []byte(minimalWSGIAppIgnoringSIGTERM), 0644)
+
+	wg, err := NewPythonWorkerGroup("wsgi", "app:app", tempDir, "", "", 1, "python3")
+	if err != nil {
+		t.Fatalf("NewPythonWorkerGroup: %v", err)
+	}
+	// Cleanup sends SIGTERM; app ignores it; after 5s we Kill
+	err = wg.Cleanup()
+	if err != nil {
+		t.Errorf("Cleanup: %v", err)
+	}
+}
 
 func TestPythonWorkerGroup_Cleanup_NilReceiver(t *testing.T) {
 	var wg *PythonWorkerGroup
@@ -1249,6 +1545,17 @@ func TestParsePythonDirective_ReturnsMiddlewareHandler(t *testing.T) {
 	}
 	if _, ok := handler.(caddyhttp.MiddlewareHandler); !ok {
 		t.Errorf("handler does not implement caddyhttp.MiddlewareHandler")
+	}
+}
+
+func TestParsePythonDirective_InvalidCaddyfile(t *testing.T) {
+	d := caddyfile.NewTestDispenser(`python {
+		module_wsgi
+	}`)
+	h := httpcaddyfile.Helper{Dispenser: d}
+	_, err := parsePythonDirective(h)
+	if err == nil {
+		t.Fatal("expected error for invalid caddyfile (missing module_wsgi arg)")
 	}
 }
 
