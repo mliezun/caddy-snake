@@ -23,16 +23,14 @@
               cache: false
           - name: Install Xcaddy
             run: go install github.com/caddyserver/xcaddy/cmd/xcaddy@latest
-          - name: Set up Python ${{ matrix.python-version }}
+          - uses: actions/setup-python@v5
+            with:
+              python-version: ${{ matrix.python-version }}
+          - name: Set up venv and install dependencies
             working-directory: tests/${{ matrix.tool-name }}/
             run: |
-              export DEBIAN_FRONTEND=noninteractive
-              sudo apt-get update -yyqq
-              sudo apt-get install -yyqq software-properties-common
-              sudo add-apt-repository -y ppa:deadsnakes/ppa
-              sudo apt-get install -yyqq python${{ matrix.python-version }}-venv
               rm -rf venv
-              python${{ matrix.python-version }} -m venv venv
+              python -m venv venv
               source venv/bin/activate
               pip install -r requirements.txt
           - name: Build the server

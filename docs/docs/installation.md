@@ -39,7 +39,6 @@ caddysnake \
     --app main:app \
     --domain example.com \
     --workers 4 \
-    --workers-runtime process \
     --static-path ./static \
     --access-logs
 ```
@@ -53,7 +52,6 @@ caddysnake \
 | `--domain` | `-d` | Domain name for HTTPS with automatic certificates | — |
 | `--listen` | `-l` | Custom listen address | `:9080` |
 | `--workers` | `-w` | Number of worker processes (0 = CPU count) | `0` |
-| `--workers-runtime` | `-r` | Worker type: `process` or `thread` | `process` |
 | `--static-path` | | Path to a static files directory | — |
 | `--static-route` | | Route prefix for static files | `/static` |
 | `--debug` | | Enable debug logging | `false` |

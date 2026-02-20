@@ -19,7 +19,7 @@ Caddy-Snake is a Caddy plugin that bridges the gap between Caddy's HTTP server a
 3. The plugin translates the request into Python objects:
    - For WSGI: Creates a WSGI environment dictionary
    - For ASGI: Creates an ASGI scope dictionary
-4. The request is dispatched to a worker (process or thread) running the Python application
+4. The request is dispatched to a worker process running the Python application
 5. The Python application processes the request and returns a response
 6. The plugin translates the response back to HTTP
 7. Caddy sends the response to the client
@@ -40,26 +40,12 @@ Key aspects of the integration:
 
 ## Worker Model
 
-Caddy-Snake supports two worker runtimes to handle concurrent requests:
-
-### Process Workers (`workers_runtime process`)
-
-The default on Linux and macOS. Each worker runs in a separate OS process with its own Python interpreter.
+Caddy-Snake uses process-based workers. Each worker runs in a separate OS process with its own Python interpreter:
 
 - **True parallelism** — each process has its own GIL, so CPU-bound work runs in parallel
 - **Isolation** — a crash in one worker doesn't affect others
 - **Higher memory usage** — each process loads its own copy of the Python interpreter and application
 - **Best for** — production deployments, CPU-bound workloads
-
-### Thread Workers (`workers_runtime thread`)
-
-Runs Python in the main Caddy process using a single interpreter. The default (and only option) on Windows.
-
-- **Lower memory** — single interpreter shared across requests
-- **Simpler setup** — no IPC overhead
-- **GIL-bound** — limited by Python's GIL for CPU-bound work (though I/O-bound apps perform well)
-- **Required for** — `autoreload` and dynamic module loading
-- **Best for** — development, I/O-bound workloads, dynamic multi-tenant setups
 
 ---
 
@@ -109,7 +95,6 @@ The `DynamicApp` struct manages a cache of Python app instances keyed by their r
         python {
             module_asgi "{http.request.host.labels.2}:app"
             working_dir "{http.request.host.labels.2}/"
-            workers_runtime thread
         }
     }
 }
@@ -152,17 +137,6 @@ The ASGI implementation follows the [ASGI specification](https://asgi.readthedoc
 ---
 
 ## Current Limitations
-
-### Shared Interpreter (Thread Mode)
-
-When using `workers_runtime thread`, all Python applications share the same interpreter:
-
-- No isolation between different applications
-- Shared `sys.path` and `sys.modules`
-- One application could potentially affect another's state
-- Not suitable for running untrusted code
-
-Process workers (`workers_runtime process`) provide better isolation since each worker has its own interpreter.
 
 ### Virtual Environment Sharing
 

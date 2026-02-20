@@ -43,7 +43,6 @@ This starts a server on port `9080` serving your app. See `caddysnake --help` fo
 | `--domain <example.com>` | Enable HTTPS with automatic certificates | — |
 | `--listen <addr>` | Custom listen address | `:9080` |
 | `--workers <count>` | Number of worker processes | CPU count |
-| `--workers-runtime <type>` | Worker type: `process` or `thread` | `process` |
 | `--static-path <path>` | Serve a static files directory | — |
 | `--static-route <route>` | Route prefix for static files | `/static` |
 | `--debug` | Enable debug logging | `false` |
@@ -58,7 +57,6 @@ caddysnake \
     --server-type asgi \
     --app main:app \
     --workers 4 \
-    --workers-runtime thread \
     --static-path ./static \
     --access-logs
 ```
@@ -242,12 +240,11 @@ The venv packages are added to the global `sys.path`, which means all Python app
 
 ## Platform support
 
-| Platform       | Workers runtime   | Notes                                    |
-|----------------|-------------------|------------------------------------------|
-| Linux (x86_64) | process, thread   | Primary platform, full support           |
-| Linux (arm64)  | process, thread   | Full support                             |
-| macOS          | process, thread   | Full support                             |
-| Windows        | thread only       | Process workers not supported on Windows |
+| Platform       | Notes                    |
+|----------------|--------------------------|
+| Linux (x86_64) | Primary platform         |
+| Linux (arm64)  | Full support             |
+| macOS          | Full support             |
 
 **Python versions:** 3.10, 3.11, 3.12, 3.13, 3.13-nogil (free-threaded), 3.14
 

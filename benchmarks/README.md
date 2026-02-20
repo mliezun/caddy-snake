@@ -7,9 +7,9 @@ Compares Caddy Snake performance against traditional reverse proxy setups.
 | Configuration | Description |
 |---|---|
 | Flask + Gunicorn + Caddy | Gunicorn (1 worker, 4 threads) behind Caddy reverse proxy |
-| Flask + Caddy Snake | Flask served directly by Caddy via caddy-snake (thread worker) |
+| Flask + Caddy Snake | Flask served directly by Caddy via caddy-snake (process worker) |
 | FastAPI + Uvicorn + Caddy | Uvicorn (1 worker) behind Caddy reverse proxy |
-| FastAPI + Caddy Snake | FastAPI served directly by Caddy via caddy-snake (thread worker) |
+| FastAPI + Caddy Snake | FastAPI served directly by Caddy via caddy-snake (process worker) |
 
 ## How to run
 
@@ -27,15 +27,15 @@ Results are saved to `benchmarks/results.json` and a chart is generated at `benc
 - 100 concurrent connections
 - 10 second duration per test
 - Warmup: 200 requests at 10 concurrency before each test
-- Platform: Scaleway POP2-2C-8G (2 vCPUs, 8GB RAM), Ubuntu 22.04 on linux/amd64
+- Platform: Scaleway, Docker Ubuntu 22.04 on linux/amd64
 - Python 3.13, Go 1.26
-- Caddy Snake uses thread workers; Gunicorn uses 1 worker with 4 threads; Uvicorn uses 1 worker
+- Caddy Snake uses process workers; Gunicorn uses 1 worker with 4 threads; Uvicorn uses 1 worker
 
 ## Results
 
 | Configuration | Requests/sec | Avg Latency (ms) | P99 Latency (ms) |
 |---|---|---|---|
-| Flask + Gunicorn + Caddy | 1,815 | 54.92 | 66.85 |
-| Flask + Caddy Snake | 2,008 | 49.67 | 54.90 |
-| FastAPI + Uvicorn + Caddy | 3,601 | 27.70 | 261.59 |
-| FastAPI + Caddy Snake | 3,361 | 29.72 | 45.63 |
+| Flask + Gunicorn + Caddy | 1,917 | 52.00 | 62.82 |
+| Flask + Caddy Snake | 1,448 | 68.81 | 76.58 |
+| FastAPI + Uvicorn + Caddy | 3,701 | 26.96 | 261.02 |
+| FastAPI + Caddy Snake | 3,076 | 32.45 | 59.76 |

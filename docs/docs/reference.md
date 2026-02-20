@@ -40,7 +40,6 @@ python {
     working_dir <path>
     venv <path>
     workers <count>
-    workers_runtime process|thread
     autoreload
 }
 ```
@@ -125,7 +124,7 @@ The venv packages are added to the global `sys.path`, which means all Python app
 
 ### `workers`
 
-Number of worker processes (or threads) to spawn. Defaults to the number of CPUs (`GOMAXPROCS`).
+Number of worker processes to spawn. Defaults to the number of CPUs (`GOMAXPROCS`).
 
 ```caddyfile
 python {
@@ -133,29 +132,6 @@ python {
     workers 4
 }
 ```
-
-When using `workers_runtime thread`, only **1 worker** is used regardless of this setting, because all requests are handled within a single Python interpreter.
-
-### `workers_runtime`
-
-Controls how requests are handled concurrently:
-
-| Value | Description |
-|-------|-------------|
-| `process` | **(default on Linux/macOS)** Spawns separate worker processes, each with its own Python interpreter. Best for CPU-bound workloads and production use. Provides true parallelism. |
-| `thread` | Runs Python in the main Caddy process using a single interpreter. **Required on Windows.** Also required for `autoreload` and `dynamic module loading`. |
-
-```caddyfile
-python {
-    module_wsgi "main:app"
-    workers 4
-    workers_runtime process
-}
-```
-
-:::note
-Process-based workers are not supported on Windows. Use `thread` instead.
-:::
 
 ### `autoreload`
 
@@ -164,13 +140,9 @@ Watches the working directory for `.py` file changes and automatically reloads t
 ```caddyfile
 python {
     module_wsgi "main:app"
-    workers_runtime thread
     autoreload
 }
 ```
-
-**Requirements:**
-- Requires `workers_runtime thread` since it reloads the Python module within the same interpreter.
 
 **How it works:**
 - Uses filesystem notifications (via [fsnotify](https://github.com/fsnotify/fsnotify)) to watch for `.py` file changes (write, create, remove, rename)
@@ -194,7 +166,6 @@ This is useful for multi-tenant setups where each subdomain or route serves a di
         python {
             module_asgi "{http.request.host.labels.2}:app"
             working_dir "{http.request.host.labels.2}/"
-            workers_runtime thread
         }
     }
 }
@@ -225,7 +196,6 @@ Dynamic module loading works with `autoreload`. When enabled, each resolved work
         python {
             module_asgi "{http.request.host.labels.2}:app"
             working_dir "{http.request.host.labels.2}/"
-            workers_runtime thread
             autoreload
         }
     }
@@ -242,5 +212,3 @@ Old app instances are cleaned up after a 10-second grace period to allow in-flig
 - The `lifespan` directive is only used in ASGI mode
 - When `working_dir` is specified, the path must exist and be a directory
 - When specified, the `venv` path must point to a valid Python virtual environment
-- `autoreload` requires `workers_runtime thread`
-- Dynamic module loading (using placeholders) requires `workers_runtime thread`

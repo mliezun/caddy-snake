@@ -222,6 +222,15 @@ Results:
 - `benchmarks/benchmark_chart.png`
 - `benchmarks/benchmark_chart.svg`
 
+### After re-running benchmarks
+
+Always update the following with the new results:
+
+1. **README.md** — Benchmark table and footnote
+2. **docs/docs/benchmarks.md** — Results table, methodology, and analysis
+3. **benchmarks/README.md** — Results table
+4. **docs/static/img/benchmark_chart.svg** — Copy from `benchmarks/benchmark_chart.svg`
+
 ### Manual load testing with hey
 
 Install [hey](https://github.com/rakyll/hey):

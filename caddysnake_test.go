@@ -272,7 +272,6 @@ func TestUnmarshalCaddyfile_BlockAllOptions(t *testing.T) {
 		working_dir /tmp
 		venv /tmp/venv
 		workers 4
-		workers_runtime thread
 	}`
 	d := caddyfile.NewTestDispenser(input)
 	var cs CaddySnake
@@ -291,9 +290,6 @@ func TestUnmarshalCaddyfile_BlockAllOptions(t *testing.T) {
 	}
 	if cs.Workers != "4" {
 		t.Errorf("expected Workers '4', got %q", cs.Workers)
-	}
-	if cs.WorkersRuntime != "thread" {
-		t.Errorf("expected WorkersRuntime 'thread', got %q", cs.WorkersRuntime)
 	}
 }
 
@@ -332,22 +328,6 @@ func TestUnmarshalCaddyfile_LifespanOff(t *testing.T) {
 	}
 }
 
-func TestUnmarshalCaddyfile_WorkersRuntimeProcess(t *testing.T) {
-	input := `python {
-		module_wsgi main:app
-		workers_runtime process
-	}`
-	d := caddyfile.NewTestDispenser(input)
-	var cs CaddySnake
-	err := cs.UnmarshalCaddyfile(d)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if cs.WorkersRuntime != "process" {
-		t.Errorf("expected WorkersRuntime 'process', got %q", cs.WorkersRuntime)
-	}
-}
-
 func TestUnmarshalCaddyfile_InvalidLifespan(t *testing.T) {
 	input := `python {
 		module_asgi main:app
@@ -358,19 +338,6 @@ func TestUnmarshalCaddyfile_InvalidLifespan(t *testing.T) {
 	err := cs.UnmarshalCaddyfile(d)
 	if err == nil {
 		t.Fatal("expected error for invalid lifespan, got nil")
-	}
-}
-
-func TestUnmarshalCaddyfile_InvalidWorkersRuntime(t *testing.T) {
-	input := `python {
-		module_wsgi main:app
-		workers_runtime invalid
-	}`
-	d := caddyfile.NewTestDispenser(input)
-	var cs CaddySnake
-	err := cs.UnmarshalCaddyfile(d)
-	if err == nil {
-		t.Fatal("expected error for invalid workers_runtime, got nil")
 	}
 }
 
@@ -1189,19 +1156,6 @@ func TestUnmarshalCaddyfile_LifespanMissingArg(t *testing.T) {
 	err := cs.UnmarshalCaddyfile(d)
 	if err == nil {
 		t.Fatal("expected error for missing lifespan argument")
-	}
-}
-
-func TestUnmarshalCaddyfile_WorkersRuntimeMissingArg(t *testing.T) {
-	input := `python {
-		module_wsgi main:app
-		workers_runtime
-	}`
-	d := caddyfile.NewTestDispenser(input)
-	var cs CaddySnake
-	err := cs.UnmarshalCaddyfile(d)
-	if err == nil {
-		t.Fatal("expected error for missing workers_runtime argument")
 	}
 }
 

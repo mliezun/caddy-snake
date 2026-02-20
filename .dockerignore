@@ -18,6 +18,15 @@ Dockerfile
 # Python configs
 .python-version
 venv
+.venv
+
+# Docs
+docs/node_modules
+docs/build
+
+# Test binaries
+tests/*/caddy
+tests/*/venv
 
 # Build artifacts
 buildenv*

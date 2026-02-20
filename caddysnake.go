@@ -54,9 +54,8 @@ type CaddySnake struct {
 	Lifespan       string `json:"lifespan,omitempty"`
 	WorkingDir     string `json:"working_dir,omitempty"`
 	VenvPath       string `json:"venv_path,omitempty"`
-	Workers        string `json:"workers,omitempty"`
-	WorkersRuntime string `json:"workers_runtime,omitempty"`
-	Autoreload     string `json:"autoreload,omitempty"`
+	Workers    string `json:"workers,omitempty"`
+	Autoreload string `json:"autoreload,omitempty"`
 	PythonPath     string `json:"python_path,omitempty"`
 	logger         *zap.Logger
 	app            AppServer
@@ -94,10 +93,6 @@ func (f *CaddySnake) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 				case "workers":
 					if !d.Args(&f.Workers) {
 						return d.Errf("expected exactly one argument for workers")
-					}
-				case "workers_runtime":
-					if !d.Args(&f.WorkersRuntime) || (f.WorkersRuntime != "thread" && f.WorkersRuntime != "process") {
-						return d.Errf("expected exactly one argument for workers_runtime: thread|process")
 					}
 				case "autoreload":
 					f.Autoreload = "on"

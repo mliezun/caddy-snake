@@ -16,7 +16,7 @@ jobs:
         os: [ubuntu-22.04, ubuntu-22.04-arm]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
           go-version: '1.26'
@@ -35,11 +35,9 @@ jobs:
             PYBS_ARCH=x86_64_v2-unknown-linux-gnu
           fi
           echo "PYBS_ARCH=${PYBS_ARCH}" >> $GITHUB_OUTPUT
-      - name: Set up Python for pybs script
-        run: |
-          export DEBIAN_FRONTEND=noninteractive
-          sudo apt-get update -yyqq
-          sudo apt-get install -yyqq python3
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
       - name: Retrieve python build standalone
         if: matrix.python-version != '3.13-nogil'
         working-directory: cmd/embed
