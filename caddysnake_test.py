@@ -6,6 +6,7 @@ import socket
 import struct
 import sys
 import tempfile
+import threading
 from unittest import mock
 
 import pytest
@@ -727,6 +728,8 @@ def _make_wsgi_client(app):
 
     class Client:
         def __enter__(_self):
+            _self.thread = threading.Thread(target=server.handle_request, daemon=True)
+            _self.thread.start()
             _self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             _self.sock.settimeout(5)
             _self.sock.connect(("127.0.0.1", port))
@@ -737,7 +740,7 @@ def _make_wsgi_client(app):
 
         def __exit__(_self, *args):
             _self.sock.close()
-            server.shutdown()
+            _self.thread.join(timeout=2)
             server.server_close()
 
     return Client()
