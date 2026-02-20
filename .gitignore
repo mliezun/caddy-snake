@@ -4,6 +4,7 @@
 # Python configs
 .python-version
 venv
+.venv
 
 # Build artifacts
 buildenv*

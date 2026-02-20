@@ -1,11 +1,15 @@
 package caddysnake
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"net"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -15,6 +19,8 @@ import (
 
 	"github.com/caddyserver/caddy/v2"
 	"github.com/caddyserver/caddy/v2/caddyconfig/caddyfile"
+	"github.com/caddyserver/caddy/v2/caddyconfig/httpcaddyfile"
+	"github.com/caddyserver/caddy/v2/modules/caddyhttp"
 	"go.uber.org/zap"
 )
 
@@ -1109,6 +1115,143 @@ func TestDynamicAppCleanup_EmptyApps(t *testing.T) {
 	}
 }
 
+// ====================== waitForPortFile Tests ======================
+
+func TestWaitForPortFile_Success(t *testing.T) {
+	f, err := os.CreateTemp("", "portfile-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := f.Name()
+	defer os.Remove(path)
+	if _, err := f.WriteString("9090"); err != nil {
+		f.Close()
+		t.Fatal(err)
+	}
+	f.Close()
+
+	port, err := waitForPortFile(path, 2*time.Second)
+	if err != nil {
+		t.Errorf("waitForPortFile: %v", err)
+	}
+	if port != 9090 {
+		t.Errorf("expected port 9090, got %d", port)
+	}
+}
+
+func TestWaitForPortFile_Timeout(t *testing.T) {
+	f, err := os.CreateTemp("", "portfile-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.Remove(f.Name())
+	f.Close()
+	// Empty file - will never have valid port
+
+	_, err = waitForPortFile(f.Name(), 100*time.Millisecond)
+	if err == nil {
+		t.Error("expected timeout error")
+	}
+	if !strings.Contains(err.Error(), "not ready within") {
+		t.Errorf("expected 'not ready within' in error, got: %v", err)
+	}
+}
+
+func TestWaitForPortFile_InvalidContent(t *testing.T) {
+	f, err := os.CreateTemp("", "portfile-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.Remove(f.Name())
+	f.WriteString("not-a-port")
+	f.Close()
+
+	_, err = waitForPortFile(f.Name(), 100*time.Millisecond)
+	if err == nil {
+		t.Error("expected error for invalid port content")
+	}
+}
+
+// ====================== PythonWorkerGroup Tests ======================
+
+func TestPythonWorkerGroup_Cleanup_NilReceiver(t *testing.T) {
+	var wg *PythonWorkerGroup
+	err := wg.Cleanup()
+	if err != nil {
+		t.Errorf("expected nil error for nil receiver, got: %v", err)
+	}
+}
+
+func TestPythonWorkerGroup_Cleanup_EmptyWorkers(t *testing.T) {
+	wg := &PythonWorkerGroup{
+		Workers:    []*PythonWorker{},
+		ScriptPath: "",
+	}
+	err := wg.Cleanup()
+	if err != nil {
+		t.Errorf("expected nil error, got: %v", err)
+	}
+}
+
+// ====================== parsePythonDirective Tests ======================
+
+func TestParsePythonDirective(t *testing.T) {
+	d := caddyfile.NewTestDispenser("python main:app")
+	h := httpcaddyfile.Helper{Dispenser: d}
+	handler, err := parsePythonDirective(h)
+	if err != nil {
+		t.Fatalf("parsePythonDirective: %v", err)
+	}
+	if handler == nil {
+		t.Fatal("expected non-nil handler")
+	}
+	cs, ok := handler.(CaddySnake)
+	if !ok {
+		t.Fatalf("expected CaddySnake, got %T", handler)
+	}
+	if cs.ModuleWsgi != "main:app" {
+		t.Errorf("expected ModuleWsgi 'main:app', got %q", cs.ModuleWsgi)
+	}
+}
+
+func TestParsePythonDirective_Block(t *testing.T) {
+	d := caddyfile.NewTestDispenser(`python {
+		module_wsgi main:app
+		working_dir /tmp
+		workers 2
+	}`)
+	h := httpcaddyfile.Helper{Dispenser: d}
+	handler, err := parsePythonDirective(h)
+	if err != nil {
+		t.Fatalf("parsePythonDirective: %v", err)
+	}
+	cs, ok := handler.(CaddySnake)
+	if !ok {
+		t.Fatalf("expected CaddySnake, got %T", handler)
+	}
+	if cs.ModuleWsgi != "main:app" {
+		t.Errorf("expected ModuleWsgi 'main:app', got %q", cs.ModuleWsgi)
+	}
+	if cs.WorkingDir != "/tmp" {
+		t.Errorf("expected WorkingDir '/tmp', got %q", cs.WorkingDir)
+	}
+	if cs.Workers != "2" {
+		t.Errorf("expected Workers '2', got %q", cs.Workers)
+	}
+}
+
+func TestParsePythonDirective_ReturnsMiddlewareHandler(t *testing.T) {
+	d := caddyfile.NewTestDispenser("python main:app")
+	h := httpcaddyfile.Helper{Dispenser: d}
+	handler, err := parsePythonDirective(h)
+	if err != nil {
+		t.Fatalf("parsePythonDirective: %v", err)
+	}
+	if _, ok := handler.(caddyhttp.MiddlewareHandler); !ok {
+		t.Errorf("handler does not implement caddyhttp.MiddlewareHandler")
+	}
+}
+
 func TestDynamicAppResolveWithNilReplacer(t *testing.T) {
 	d, _ := NewDynamicApp("main:app", "/home/static", "",
 		func(module, dir, venv string) (AppServer, error) {
@@ -1128,5 +1271,128 @@ func TestDynamicAppResolveWithNilReplacer(t *testing.T) {
 	}
 	if dir != "/home/static" {
 		t.Errorf("expected '/home/static', got %q", dir)
+	}
+}
+
+// ====================== Integration Tests: Real Python Workers ======================
+
+func skipIfNoPython(t *testing.T) {
+	t.Helper()
+	if _, err := exec.LookPath("python3"); err != nil {
+		t.Skipf("python3 not found in PATH, skipping integration test: %v", err)
+	}
+}
+
+const minimalWSGIApp = `def app(environ, start_response):
+    start_response('200 OK', [('Content-Type', 'text/plain')])
+    return [b'Hello from Python']
+`
+
+const minimalASGIApp = `async def app(scope, receive, send):
+    await send({"type": "http.response.start", "status": 200, "headers": [[b"content-type", b"text/plain"]]})
+    await send({"type": "http.response.body", "body": b"Hello from ASGI"})
+`
+
+func TestPythonWorkerGroup_LoadsAndServesWSGI(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+	skipIfNoPython(t)
+
+	tempDir := t.TempDir()
+	appPath := filepath.Join(tempDir, "app.py")
+	if err := os.WriteFile(appPath, []byte(minimalWSGIApp), 0644); err != nil {
+		t.Fatalf("failed to write app.py: %v", err)
+	}
+
+	wg, err := NewPythonWorkerGroup("wsgi", "app:app", tempDir, "", "", 1, "python3")
+	if err != nil {
+		t.Fatalf("NewPythonWorkerGroup failed: %v", err)
+	}
+	defer wg.Cleanup()
+
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("failed to listen: %v", err)
+	}
+	defer listener.Close()
+
+	server := &http.Server{
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			_ = wg.HandleRequest(w, r)
+		}),
+		ReadHeaderTimeout: 5 * time.Second,
+	}
+	go server.Serve(listener)
+	defer server.Close()
+
+	baseURL := "http://" + listener.Addr().String()
+	resp, err := http.Get(baseURL + "/")
+	if err != nil {
+		t.Fatalf("GET request failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("failed to read response: %v", err)
+	}
+	if resp.StatusCode != 200 {
+		t.Errorf("expected status 200, got %d; body: %s", resp.StatusCode, body)
+	}
+	if !bytes.Contains(body, []byte("Hello from Python")) {
+		t.Errorf("expected body to contain 'Hello from Python', got: %s", body)
+	}
+}
+
+func TestPythonWorkerGroup_LoadsAndServesASGI(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+	skipIfNoPython(t)
+
+	tempDir := t.TempDir()
+	appPath := filepath.Join(tempDir, "app.py")
+	if err := os.WriteFile(appPath, []byte(minimalASGIApp), 0644); err != nil {
+		t.Fatalf("failed to write app.py: %v", err)
+	}
+
+	wg, err := NewPythonWorkerGroup("asgi", "app:app", tempDir, "", "", 1, "python3")
+	if err != nil {
+		t.Fatalf("NewPythonWorkerGroup failed: %v", err)
+	}
+	defer wg.Cleanup()
+
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("failed to listen: %v", err)
+	}
+	defer listener.Close()
+
+	server := &http.Server{
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			_ = wg.HandleRequest(w, r)
+		}),
+		ReadHeaderTimeout: 5 * time.Second,
+	}
+	go server.Serve(listener)
+	defer server.Close()
+
+	baseURL := "http://" + listener.Addr().String()
+	resp, err := http.Get(baseURL + "/")
+	if err != nil {
+		t.Fatalf("GET request failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("failed to read response: %v", err)
+	}
+	if resp.StatusCode != 200 {
+		t.Errorf("expected status 200, got %d; body: %s", resp.StatusCode, body)
+	}
+	if !bytes.Contains(body, []byte("Hello from ASGI")) {
+		t.Errorf("expected body to contain 'Hello from ASGI', got: %s", body)
 	}
 }
