@@ -8,7 +8,6 @@ localhost:9080 {
 			module_asgi "app_fastapi:app"
 			venv "./venv"
 			workers 1
-			workers_runtime thread
 		}
 	}
 }

@@ -1,15 +1,11 @@
 package caddysnake
 
-// #include "caddysnake.h"
-import "C"
 import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"strings"
 	"sync"
 	"time"
-	"unsafe"
 
 	"github.com/fsnotify/fsnotify"
 	"go.uber.org/zap"
@@ -46,7 +42,7 @@ func isPythonFileEvent(event fsnotify.Event) bool {
 }
 
 // handleNewDirEvent checks if the event is a newly created directory and adds
-// it to the watcher if appropriate. Returns true if a directory was added.
+// it to the watcher if appropriate.
 func handleNewDirEvent(event fsnotify.Event, watcher *fsnotify.Watcher) {
 	if !event.Has(fsnotify.Create) {
 		return
@@ -143,24 +139,18 @@ func (a *AutoreloadableApp) watch() {
 	}
 }
 
-// reload performs the actual app reload. It holds a write lock so all in-flight
-// requests complete before the swap happens.
+// reload performs the actual app reload by stopping the old worker processes
+// and starting new ones via the factory function.
 func (a *AutoreloadableApp) reload() {
 	a.logger.Info("reloading python app due to file changes")
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
-	// Invalidate Python module cache for all modules in the working directory
-	// so PyImport_ImportModule picks up fresh code.
-	invalidatePythonModuleCache(a.workingDir)
-
-	// Cleanup old app (removes from wsgi/asgi app caches)
 	oldApp := a.app
 	if err := oldApp.Cleanup(); err != nil {
 		a.logger.Error("failed to cleanup old python app during reload", zap.Error(err))
 	}
 
-	// Create new app (will re-import the Python module)
 	newApp, err := a.factory()
 	if err != nil {
 		a.logger.Error("failed to reload python app, requests will return 500",
@@ -187,26 +177,6 @@ func (a *AutoreloadableApp) Cleanup() error {
 	close(a.stopCh)
 	a.watcher.Close()
 	return a.app.Cleanup()
-}
-
-// invalidatePythonModuleCache removes all Python modules from sys.modules
-// whose __file__ starts with the given directory path.
-// It is a no-op when the Python main thread is not initialized (e.g. process
-// runtime where each worker has its own interpreter).
-func invalidatePythonModuleCache(workingDir string) {
-	if pythonMainThread == nil {
-		return
-	}
-	// Ensure the path ends with a separator so we don't match partial directory names
-	// e.g. "/app" should not match "/application/module.py"
-	if !strings.HasSuffix(workingDir, string(filepath.Separator)) {
-		workingDir += string(filepath.Separator)
-	}
-	cWorkingDir := C.CString(workingDir)
-	defer C.free(unsafe.Pointer(cWorkingDir))
-	pythonMainThread.do(func() {
-		C.Py_invalidate_module_cache(cWorkingDir)
-	})
 }
 
 // errorApp is a stub AppServer returned when a reload fails.

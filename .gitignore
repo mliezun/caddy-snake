@@ -4,12 +4,15 @@
 # Python configs
 .python-version
 venv
+.venv
 
 # Build artifacts
 buildenv*
 bin
 *.dSYM
 __pycache__
+.coverage
+coverage.out
 
 # Local python builds
 Python-3.12*

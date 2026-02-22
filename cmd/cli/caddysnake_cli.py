@@ -26,13 +26,6 @@ import click
     help="The number of workers to spawn (default: 0, uses CPU count)",
 )
 @click.option(
-    "--workers-runtime",
-    "-r",
-    type=click.Choice(["thread", "process"], case_sensitive=False),
-    default="process",
-    help="The runtime to use for the workers: thread|process",
-)
-@click.option(
     "--static-path", help="Path to a static directory to serve: path/to/static"
 )
 @click.option(
@@ -45,7 +38,7 @@ import click
 @click.option(
     "--autoreload",
     is_flag=True,
-    help="Watch .py files and reload on changes (forces workers-runtime to thread)",
+    help="Watch .py files and reload on changes",
 )
 def main(
     server_type,
@@ -53,7 +46,6 @@ def main(
     app,
     listen,
     workers,
-    workers_runtime,
     static_path,
     static_route,
     debug,
@@ -63,7 +55,7 @@ def main(
     """
     A Python WSGI or ASGI server designed for apps and frameworks.
 
-    You can specify a custom socket address using the '--listen' option. You can also specify the number of workers to spawn and the runtime to use for the workers.
+    You can specify a custom socket address using the '--listen' option. You can also specify the number of workers to spawn.
 
     Providing a domain name with the '--domain' flag enables HTTPS and sets the listener to the appropriate secure port.
     Ensure DNS A/AAAA records are correctly set up if using a public domain for secure connections.
@@ -88,8 +80,6 @@ def main(
         args.extend(["--listen", listen])
     if workers:
         args.extend(["--workers", workers])
-    if workers_runtime:
-        args.extend(["--workers-runtime", workers_runtime])
     if static_path:
         args.extend(["--static-path", static_path])
     if static_route:

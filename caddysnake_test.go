@@ -1,14 +1,16 @@
 package caddysnake
 
 import (
+	"bytes"
 	"context"
-	"crypto/tls"
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
-	"net/url"
+	"net/http/httputil"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -18,46 +20,39 @@ import (
 
 	"github.com/caddyserver/caddy/v2"
 	"github.com/caddyserver/caddy/v2/caddyconfig/caddyfile"
+	"github.com/caddyserver/caddy/v2/caddyconfig/httpcaddyfile"
+	"github.com/caddyserver/caddy/v2/modules/caddyhttp"
 	"go.uber.org/zap"
 )
 
 func TestFindSitePackagesInVenv(t *testing.T) {
-	// Set up a temporary directory for the virtual environment simulation
 	tempDir := t.TempDir()
 	venvLibPath := filepath.Join(tempDir, "lib", "python3.12", "site-packages")
 
-	// Create the directory structure
 	err := os.MkdirAll(venvLibPath, 0755)
 	if err != nil {
 		t.Fatalf("failed to create test directory structure: %v", err)
 	}
 
-	// Test the function
 	result, err := findSitePackagesInVenv(tempDir)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	// Verify the result
 	expectedPath := venvLibPath
 	if result != expectedPath {
 		t.Errorf("expected %s, got %s", expectedPath, result)
 	}
-
-	// Clean up is handled automatically by t.TempDir()
 }
 
 func TestFindSitePackagesInVenv_NoPythonDirectory(t *testing.T) {
-	// Set up a temporary directory for the virtual environment simulation
 	tempDir := t.TempDir()
 
-	// Test the function
 	_, err := findSitePackagesInVenv(tempDir)
 	if err == nil {
 		t.Fatalf("expected an error, but got none")
 	}
 
-	// Verify the error message
 	expectedError := "unable to find a python3.* directory in the venv"
 	if err.Error() != expectedError {
 		t.Errorf("expected error %q, got %q", expectedError, err.Error())
@@ -65,439 +60,22 @@ func TestFindSitePackagesInVenv_NoPythonDirectory(t *testing.T) {
 }
 
 func TestFindSitePackagesInVenv_NoSitePackages(t *testing.T) {
-	// Set up a temporary directory for the virtual environment simulation
 	tempDir := t.TempDir()
 	libPath := filepath.Join(tempDir, "lib", "python3.12")
 
-	// Create the lib/python3.12 directory, but omit site-packages
 	err := os.MkdirAll(libPath, 0755)
 	if err != nil {
 		t.Fatalf("failed to create test directory structure: %v", err)
 	}
 
-	// Test the function
 	_, err = findSitePackagesInVenv(tempDir)
 	if err == nil {
 		t.Fatalf("expected an error, but got none")
 	}
 
-	// Verify the error message
 	expectedError := "site-packages directory does not exist"
 	if !strings.HasPrefix(err.Error(), expectedError) {
 		t.Errorf("expected error %q, got %q", expectedError, err.Error())
-	}
-}
-
-func TestNewMapKeyVal(t *testing.T) {
-	m := NewMapKeyVal(3)
-	for i := 0; i < m.Capacity(); i++ {
-		m.Append(fmt.Sprintf("key%d", i), fmt.Sprintf("value%d", i))
-	}
-	if m == nil {
-		t.Fatal("Expected non-nil MapKeyVal")
-	}
-	if m.Len() != 3 {
-		t.Fatalf("Expected length 3, got %d", m.Len())
-	}
-	defer m.Cleanup()
-}
-
-func TestNewMapKeyValFromSource(t *testing.T) {
-	m := NewMapKeyVal(3)
-	for i := 0; i < m.Capacity(); i++ {
-		m.Append(fmt.Sprintf("key%d", i), fmt.Sprintf("value%d", i))
-	}
-	m = NewMapKeyValFromSource(m.m)
-	if m == nil {
-		t.Fatal("Expected non-nil MapKeyVal")
-	}
-	if m.Len() != 3 {
-		t.Fatalf("Expected length 3, got %d", m.Len())
-	}
-	defer m.Cleanup()
-}
-
-func TestSetAndGet(t *testing.T) {
-	m := NewMapKeyVal(2)
-	defer m.Cleanup()
-
-	m.Append("Content-Type", "application/json")
-	m.Append("Accept", "text/plain")
-
-	k0, v0 := m.Get(0)
-	if k0 != "Content-Type" || v0 != "application/json" {
-		t.Errorf("Unexpected result at pos 0: got (%s, %s)", k0, v0)
-	}
-
-	k1, v1 := m.Get(1)
-	if k1 != "Accept" || v1 != "text/plain" {
-		t.Errorf("Unexpected result at pos 1: got (%s, %s)", k1, v1)
-	}
-}
-
-func TestSetGetBounds(t *testing.T) {
-	m := NewMapKeyVal(1)
-	m.Append("Content-Type", "application/json")
-	defer m.Cleanup()
-
-	defer func() {
-		if r := recover(); r == nil {
-			t.Errorf("Expected panic for out-of-bounds Set, but did not panic")
-		}
-	}()
-	m.Append("Overflow", "Oops")
-}
-
-func TestGetBounds(t *testing.T) {
-	m := NewMapKeyVal(1)
-	m.Append("Content-Type", "application/json")
-	defer m.Cleanup()
-
-	defer func() {
-		if r := recover(); r == nil {
-			t.Errorf("Expected panic for out-of-bounds Get, but did not panic")
-		}
-	}()
-	m.Get(5)
-}
-
-func TestLenNull(t *testing.T) {
-	m := MapKeyVal{}
-
-	if m.Len() != 0 {
-		t.Errorf("Expected length 0, got %d", m.Len())
-	}
-
-	if m.Capacity() != 0 {
-		t.Errorf("Expected capacity 0, got %d", m.Capacity())
-	}
-}
-
-func TestUpperCaseAndUnderscore(t *testing.T) {
-	tests := []struct {
-		input    rune
-		expected rune
-	}{
-		{'a', 'A'},
-		{'z', 'Z'},
-		{'m', 'M'},
-		{'-', '_'},
-		{'=', '_'},
-		{'A', 'A'}, // already uppercase
-		{'_', '_'}, // should remain the same
-		{'1', '1'}, // number
-		{'$', '$'}, // symbol
-	}
-
-	for _, tt := range tests {
-		got := upperCaseAndUnderscore(tt.input)
-		if got != tt.expected {
-			t.Errorf("upperCaseAndUnderscore(%q) = %q, want %q", tt.input, got, tt.expected)
-		}
-	}
-}
-
-func TestBytesAsBuffer(t *testing.T) {
-	// Test with a non-empty byte slice
-	input := []byte("hello world")
-	buffer, bufferLen := bytesAsBuffer(input)
-
-	if buffer == nil {
-		t.Errorf("Expected non-nil buffer, got nil")
-	}
-
-	if int(bufferLen) != len(input) {
-		t.Errorf("Expected buffer length %d, got %d", len(input), bufferLen)
-	}
-
-	// Test with an empty byte slice
-	emptyInput := []byte("")
-	emptyBuffer, emptyBufferLen := bytesAsBuffer(emptyInput)
-
-	if emptyBuffer == nil {
-		t.Errorf("Expected non-nil buffer for empty input, got nil")
-	}
-
-	if emptyBufferLen != 0 {
-		t.Errorf("Expected buffer length 0 for empty input, got %d", emptyBufferLen)
-	}
-}
-
-type mockNetAddr struct {
-	addr string
-}
-
-func (m *mockNetAddr) Network() string {
-	return "tcp"
-}
-
-func (m *mockNetAddr) String() string {
-	return m.addr
-}
-
-func TestBuildWsgiHeaders(t *testing.T) {
-	// Create a sample HTTP request
-	r := &http.Request{
-		Method: "GET",
-		Proto:  "HTTP/1.1",
-		Header: http.Header{
-			"Content-Type":   []string{"application/json"},
-			"Content-Length": []string{"123"},
-			"Custom-Header":  []string{"CustomValue"},
-		},
-		URL: &url.URL{
-			Path:     "/test/path",
-			RawQuery: "key=value",
-		},
-		Host: "localhost:8080",
-		Body: io.NopCloser(strings.NewReader("")),
-	}
-	ctx := context.WithValue(context.Background(), http.LocalAddrContextKey, &mockNetAddr{"localhost:8080"})
-	r = r.WithContext(ctx)
-
-	// Call the function
-	headers := buildWsgiHeaders(r)
-	defer headers.Cleanup()
-
-	// Check the headers
-	expectedHeaders := map[string]string{
-		"SERVER_NAME":        "localhost",
-		"SERVER_PORT":        "8080",
-		"SERVER_PROTOCOL":    "HTTP/1.1",
-		"REQUEST_METHOD":     "GET",
-		"PATH_INFO":          "/test/path",
-		"QUERY_STRING":       "key=value",
-		"CONTENT_TYPE":       "application/json",
-		"CONTENT_LENGTH":     "123",
-		"HTTP_CUSTOM_HEADER": "CustomValue",
-		"SCRIPT_NAME":        "",
-		"X_FROM":             "caddy-snake",
-		"wsgi.url_scheme":    "http",
-	}
-
-	for i := 0; i < headers.Len(); i++ {
-		key, value := headers.Get(i)
-		if expectedValue, ok := expectedHeaders[key]; ok {
-			if value != expectedValue {
-				t.Errorf("Header %s: expected %s, got %s", key, expectedValue, value)
-			}
-			delete(expectedHeaders, key)
-		} else {
-			t.Errorf("Unexpected header: %s=%s", key, value)
-		}
-	}
-
-	if len(expectedHeaders) > 0 {
-		t.Errorf("Missing headers: %v", expectedHeaders)
-	}
-}
-
-func TestWsgiState(t *testing.T) {
-	state := &WsgiGlobalState{
-		handlers: make(map[int64]chan WsgiResponse),
-	}
-
-	// Test Request method
-	requestID := state.Request()
-	if requestID != 1 {
-		t.Errorf("Expected request ID 1, got %d", requestID)
-	}
-	if _, exists := state.handlers[requestID]; !exists {
-		t.Errorf("Handler for request ID %d does not exist", requestID)
-	}
-
-	// Test Response method
-	response := WsgiResponse{
-		statusCode: 200,
-		body:       nil,
-		bodySize:   0,
-	}
-	go state.Response(requestID, response)
-
-	result := state.WaitResponse(requestID)
-	if result.statusCode != 200 {
-		t.Errorf("Expected status code 200, got %d", result.statusCode)
-	}
-}
-
-func TestWsgiResponseWrite(t *testing.T) {
-	// Mock HTTP ResponseWriter
-	mockWriter := &mockResponseWriter{
-		headers: make(http.Header),
-	}
-
-	// Create a WsgiResponse with mock data
-	response := &WsgiResponse{
-		statusCode: 200,
-		headers:    nil,
-		body:       nil,
-		bodySize:   0,
-	}
-
-	// Set headers in the WsgiResponse
-	responseHeaders := NewMapKeyVal(2)
-	responseHeaders.Append("Content-Type", "text/plain")
-	responseHeaders.Append("X-Custom-Header", "CustomValue")
-	response.headers = responseHeaders.m
-	// defer responseHeaders.Cleanup()
-
-	// Call the Write method
-	response.Write(mockWriter)
-
-	// Validate the response
-	if mockWriter.statusCode != 200 {
-		t.Errorf("Expected status code 200, got %d", mockWriter.statusCode)
-	}
-
-	if mockWriter.body != "" {
-		t.Errorf("Expected body to be empty, got '%s'", mockWriter.body)
-	}
-
-	if mockWriter.headers.Get("Content-Type") != "text/plain" {
-		t.Errorf("Expected Content-Type 'text/plain', got '%s'", mockWriter.headers.Get("Content-Type"))
-	}
-
-	if mockWriter.headers.Get("X-Custom-Header") != "CustomValue" {
-		t.Errorf("Expected X-Custom-Header 'CustomValue', got '%s'", mockWriter.headers.Get("X-Custom-Header"))
-	}
-}
-
-type mockResponseWriter struct {
-	headers    http.Header
-	body       string
-	statusCode int
-}
-
-func (m *mockResponseWriter) Header() http.Header {
-	return m.headers
-}
-
-func (m *mockResponseWriter) Write(data []byte) (int, error) {
-	m.body = string(data)
-	return len(data), nil
-}
-
-func (m *mockResponseWriter) WriteHeader(statusCode int) {
-	m.statusCode = statusCode
-}
-
-func TestWebsocketUpgrade(t *testing.T) {
-	// Create a simple GET request
-	r := &http.Request{
-		Method: "POST",
-		Header: http.Header{},
-	}
-	if needsWebsocketUpgrade(r) {
-		t.Error("Expected POST request not to be upgraded to websockets")
-	}
-
-	r.Method = "GET"
-	if needsWebsocketUpgrade(r) {
-		t.Error("Expected request not to be upgraded to websockets, missing headers")
-	}
-
-	r.Header.Add("connection", "upgrade")
-	if needsWebsocketUpgrade(r) {
-		t.Error("Expected request not to be upgraded to websockets, missing header: upgrade")
-	}
-
-	r.Header.Add("upgrade", "websocket")
-	if !needsWebsocketUpgrade(r) {
-		t.Error("Expected requests to be upgraded to websockets")
-	}
-}
-
-func TestRemoteHostPort(t *testing.T) {
-	r := &http.Request{
-		RemoteAddr: "10.10.10.10:54321",
-	}
-	host, port := getRemoteHostPort(r)
-	if host != "10.10.10.10" {
-		t.Error("Expected host to be 10.10.10.10")
-	}
-	if port != 54321 {
-		t.Error("Expected port to be 54321")
-	}
-}
-
-func TestBuildAsgiHeaders(t *testing.T) {
-	// Create a sample HTTP request
-	r := &http.Request{
-		Method:     "GET",
-		Proto:      "HTTP/1.1",
-		ProtoMajor: 1,
-		ProtoMinor: 1,
-		Header: http.Header{
-			"Content-Type":   []string{"application/json"},
-			"Content-Length": []string{"123"},
-			"Custom-Header":  []string{"CustomValue"},
-		},
-		URL: &url.URL{
-			Path:     "/test/path",
-			RawQuery: "key=value",
-		},
-		Host: "localhost:8080",
-		Body: io.NopCloser(strings.NewReader("")),
-	}
-	ctx := context.WithValue(context.Background(), http.LocalAddrContextKey, &mockNetAddr{"localhost:8080"})
-	r = r.WithContext(ctx)
-
-	// Call the function
-	headers, scope, err := buildAsgiHeaders(r, false)
-	if err != nil {
-		t.Error("Expected err to be nil")
-	}
-	defer headers.Cleanup()
-
-	// Check the headers
-	expectedHeaders := map[string]string{
-		"content-type":   "application/json",
-		"content-length": "123",
-		"custom-header":  "CustomValue",
-	}
-
-	for i := 0; i < headers.Len(); i++ {
-		key, value := headers.Get(i)
-		if expectedValue, ok := expectedHeaders[key]; ok {
-			if value != expectedValue {
-				t.Errorf("Header %s: expected %s, got %s", key, expectedValue, value)
-			}
-			delete(expectedHeaders, key)
-		} else {
-			t.Errorf("Unexpected header: %s=%s", key, value)
-		}
-	}
-
-	if len(expectedHeaders) > 0 {
-		t.Errorf("Missing headers: %v", expectedHeaders)
-	}
-
-	// Check the scope
-	expectedScope := map[string]string{
-		"type":         "http",
-		"http_version": "1.1",
-		"method":       "GET",
-		"scheme":       "http",
-		"path":         "/test/path",
-		"raw_path":     r.URL.EscapedPath(),
-		"query_string": r.URL.RawQuery,
-		"root_path":    "",
-	}
-
-	for i := 0; i < scope.Len(); i++ {
-		key, value := scope.Get(i)
-		if expectedValue, ok := expectedScope[key]; ok {
-			if value != expectedValue {
-				t.Errorf("Scope %s: expected %s, got %s", key, expectedValue, value)
-			}
-			delete(expectedScope, key)
-		} else {
-			t.Errorf("Unexpected header: %s=%s", key, value)
-		}
-	}
-
-	if len(expectedScope) > 0 {
-		t.Errorf("Missing scope: %v", expectedScope)
 	}
 }
 
@@ -526,8 +104,6 @@ func TestContainsPlaceholder(t *testing.T) {
 }
 
 func TestDynamicAppResolveWithoutReplacer(t *testing.T) {
-	// When there is no Caddy replacer in the context, resolve should return
-	// the patterns as-is.
 	d, _ := NewDynamicApp("main:app", "/home/{host.labels.0}", "/venvs/{host.labels.0}",
 		func(module, dir, venv string) (AppServer, error) {
 			return nil, nil
@@ -569,7 +145,6 @@ func TestDynamicAppGetOrCreate(t *testing.T) {
 		false,
 	)
 
-	// First call should create the app.
 	app1, err := d.getOrCreateApp("key1", "main:app", "/home/test", "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -581,7 +156,6 @@ func TestDynamicAppGetOrCreate(t *testing.T) {
 		t.Errorf("expected factory to be called once, got %d", createCount)
 	}
 
-	// Second call with same key should return cached app without calling factory.
 	app2, err := d.getOrCreateApp("key1", "main:app", "/home/test", "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -593,7 +167,6 @@ func TestDynamicAppGetOrCreate(t *testing.T) {
 		t.Errorf("expected factory to still be called once, got %d", createCount)
 	}
 
-	// Third call with different key should create a new app.
 	_, err = d.getOrCreateApp("key2", "main:app", "/home/other", "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -613,7 +186,6 @@ func TestDynamicAppCleanup(t *testing.T) {
 		false,
 	)
 
-	// Create two apps.
 	_, _ = d.getOrCreateApp("key1", "main:app", "/home/a", "")
 	_, _ = d.getOrCreateApp("key2", "main:app", "/home/b", "")
 
@@ -625,7 +197,6 @@ func TestDynamicAppCleanup(t *testing.T) {
 		t.Errorf("expected 2 cleanups, got %d", cleanupCount)
 	}
 
-	// After cleanup, the apps map should be empty.
 	d.mu.RLock()
 	remaining := len(d.apps)
 	d.mu.RUnlock()
@@ -658,7 +229,6 @@ func (m *mockAppServer) Cleanup() error {
 func TestFindWorkingDirectory(t *testing.T) {
 	tempDir := t.TempDir()
 
-	// Should succeed for existing directory
 	abs, err := findWorkingDirectory(tempDir)
 	if err != nil {
 		t.Fatalf("expected no error, got: %v", err)
@@ -667,14 +237,12 @@ func TestFindWorkingDirectory(t *testing.T) {
 		t.Errorf("expected %q, got %q", tempDir, abs)
 	}
 
-	// Should fail for non-existent directory
 	nonExistent := tempDir + "-doesnotexist"
 	_, err = findWorkingDirectory(nonExistent)
 	if err == nil || !strings.Contains(err.Error(), "working_dir directory does not exist") {
 		t.Errorf("expected error for non-existent directory, got: %v", err)
 	}
 
-	// Should fail for a file (not a directory)
 	filePath := filepath.Join(tempDir, "afile.txt")
 	os.WriteFile(filePath, []byte("test"), 0644)
 	_, err = findWorkingDirectory(filePath)
@@ -704,7 +272,6 @@ func TestUnmarshalCaddyfile_BlockAllOptions(t *testing.T) {
 		working_dir /tmp
 		venv /tmp/venv
 		workers 4
-		workers_runtime thread
 	}`
 	d := caddyfile.NewTestDispenser(input)
 	var cs CaddySnake
@@ -723,9 +290,6 @@ func TestUnmarshalCaddyfile_BlockAllOptions(t *testing.T) {
 	}
 	if cs.Workers != "4" {
 		t.Errorf("expected Workers '4', got %q", cs.Workers)
-	}
-	if cs.WorkersRuntime != "thread" {
-		t.Errorf("expected WorkersRuntime 'thread', got %q", cs.WorkersRuntime)
 	}
 }
 
@@ -764,22 +328,6 @@ func TestUnmarshalCaddyfile_LifespanOff(t *testing.T) {
 	}
 }
 
-func TestUnmarshalCaddyfile_WorkersRuntimeProcess(t *testing.T) {
-	input := `python {
-		module_wsgi main:app
-		workers_runtime process
-	}`
-	d := caddyfile.NewTestDispenser(input)
-	var cs CaddySnake
-	err := cs.UnmarshalCaddyfile(d)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if cs.WorkersRuntime != "process" {
-		t.Errorf("expected WorkersRuntime 'process', got %q", cs.WorkersRuntime)
-	}
-}
-
 func TestUnmarshalCaddyfile_InvalidLifespan(t *testing.T) {
 	input := `python {
 		module_asgi main:app
@@ -790,19 +338,6 @@ func TestUnmarshalCaddyfile_InvalidLifespan(t *testing.T) {
 	err := cs.UnmarshalCaddyfile(d)
 	if err == nil {
 		t.Fatal("expected error for invalid lifespan, got nil")
-	}
-}
-
-func TestUnmarshalCaddyfile_InvalidWorkersRuntime(t *testing.T) {
-	input := `python {
-		module_wsgi main:app
-		workers_runtime invalid
-	}`
-	d := caddyfile.NewTestDispenser(input)
-	var cs CaddySnake
-	err := cs.UnmarshalCaddyfile(d)
-	if err == nil {
-		t.Fatal("expected error for invalid workers_runtime, got nil")
 	}
 }
 
@@ -848,6 +383,22 @@ func TestUnmarshalCaddyfile_DynamicWorkingDir(t *testing.T) {
 	}
 }
 
+func TestUnmarshalCaddyfile_PythonPath(t *testing.T) {
+	input := `python {
+		module_wsgi main:app
+		python_path /usr/local/bin/python3.12
+	}`
+	d := caddyfile.NewTestDispenser(input)
+	var cs CaddySnake
+	err := cs.UnmarshalCaddyfile(d)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cs.PythonPath != "/usr/local/bin/python3.12" {
+		t.Errorf("expected PythonPath '/usr/local/bin/python3.12', got %q", cs.PythonPath)
+	}
+}
+
 // ====================== CaddyModule and Validate Tests ======================
 
 func TestCaddyModule(t *testing.T) {
@@ -865,6 +416,146 @@ func TestValidate(t *testing.T) {
 	cs := &CaddySnake{}
 	if err := cs.Validate(); err != nil {
 		t.Errorf("expected nil error from Validate, got: %v", err)
+	}
+}
+
+// ====================== Provision Tests ======================
+
+func TestProvision_NoModule(t *testing.T) {
+	cfg := &caddy.Config{Admin: &caddy.AdminConfig{Disabled: true}}
+	ctx, err := caddy.ProvisionContext(cfg)
+	if err != nil {
+		t.Fatalf("ProvisionContext: %v", err)
+	}
+
+	cs := &CaddySnake{} // neither ModuleWsgi nor ModuleAsgi set
+	err = cs.Provision(ctx)
+	if err == nil {
+		t.Fatal("expected error when neither wsgi nor asgi specified")
+	}
+	if !strings.Contains(err.Error(), "asgi or wsgi") {
+		t.Errorf("expected 'asgi or wsgi' in error, got: %v", err)
+	}
+}
+
+func TestProvision_DynamicWSGI(t *testing.T) {
+	cfg := &caddy.Config{Admin: &caddy.AdminConfig{Disabled: true}}
+	ctx, err := caddy.ProvisionContext(cfg)
+	if err != nil {
+		t.Fatalf("ProvisionContext: %v", err)
+	}
+
+	cs := &CaddySnake{
+		ModuleWsgi: "main:app",
+		WorkingDir: "/home/{host.labels.0}", // placeholder triggers dynamic
+		Lifespan:   "on",                    // triggers "lifespan ignored in WSGI" warning
+	}
+	err = cs.Provision(ctx)
+	if err != nil {
+		t.Fatalf("Provision: %v", err)
+	}
+	if cs.app == nil {
+		t.Fatal("expected app to be set")
+	}
+	if _, ok := cs.app.(*DynamicApp); !ok {
+		t.Errorf("expected *DynamicApp, got %T", cs.app)
+	}
+	cs.Cleanup()
+}
+
+func TestProvision_DynamicASGI(t *testing.T) {
+	cfg := &caddy.Config{Admin: &caddy.AdminConfig{Disabled: true}}
+	ctx, err := caddy.ProvisionContext(cfg)
+	if err != nil {
+		t.Fatalf("ProvisionContext: %v", err)
+	}
+
+	cs := &CaddySnake{
+		ModuleAsgi: "main:app",
+		WorkingDir: "/home/{host.labels.0}",
+		Lifespan:   "on",
+	}
+	err = cs.Provision(ctx)
+	if err != nil {
+		t.Fatalf("Provision: %v", err)
+	}
+	if _, ok := cs.app.(*DynamicApp); !ok {
+		t.Errorf("expected *DynamicApp, got %T", cs.app)
+	}
+	cs.Cleanup()
+}
+
+func TestProvision_WSGI_Success(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+	skipIfNoPython(t)
+
+	tempDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(tempDir, "app.py"), []byte(minimalWSGIApp), 0644); err != nil {
+		t.Fatalf("failed to write app.py: %v", err)
+	}
+	workDir := filepath.ToSlash(tempDir)
+
+	cfg := &caddy.Config{Admin: &caddy.AdminConfig{Disabled: true}}
+	ctx, err := caddy.ProvisionContext(cfg)
+	if err != nil {
+		t.Fatalf("ProvisionContext: %v", err)
+	}
+
+	cs := &CaddySnake{
+		ModuleWsgi: "app:app",
+		WorkingDir: workDir,
+		Workers:    "1",
+	}
+	err = cs.Provision(ctx)
+	if err != nil {
+		t.Fatalf("Provision: %v", err)
+	}
+	defer cs.Cleanup()
+
+	if cs.app == nil {
+		t.Fatal("expected app to be set")
+	}
+	if _, ok := cs.app.(*PythonWorkerGroup); !ok {
+		t.Errorf("expected *PythonWorkerGroup, got %T", cs.app)
+	}
+}
+
+func TestProvision_ASGI_Success(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+	skipIfNoPython(t)
+
+	tempDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(tempDir, "app.py"), []byte(minimalASGIApp), 0644); err != nil {
+		t.Fatalf("failed to write app.py: %v", err)
+	}
+	workDir := filepath.ToSlash(tempDir)
+
+	cfg := &caddy.Config{Admin: &caddy.AdminConfig{Disabled: true}}
+	ctx, err := caddy.ProvisionContext(cfg)
+	if err != nil {
+		t.Fatalf("ProvisionContext: %v", err)
+	}
+
+	cs := &CaddySnake{
+		ModuleAsgi: "app:app",
+		WorkingDir: workDir,
+		Workers:    "1",
+	}
+	err = cs.Provision(ctx)
+	if err != nil {
+		t.Fatalf("Provision: %v", err)
+	}
+	defer cs.Cleanup()
+
+	if cs.app == nil {
+		t.Fatal("expected app to be set")
+	}
+	if _, ok := cs.app.(*PythonWorkerGroup); !ok {
+		t.Errorf("expected *PythonWorkerGroup, got %T", cs.app)
 	}
 }
 
@@ -903,7 +594,6 @@ func TestCaddySnakeCleanup_NilReceiver(t *testing.T) {
 
 // ====================== ServeHTTP Tests ======================
 
-// mockNextHandler implements caddyhttp.Handler for testing.
 type mockNextHandler struct {
 	called bool
 	err    error
@@ -974,555 +664,105 @@ func TestServeHTTP_NextError(t *testing.T) {
 	}
 }
 
-// ====================== getHostPort Tests ======================
+type mockResponseWriter struct {
+	headers    http.Header
+	body       string
+	statusCode int
+}
 
-func TestGetHostPort_WithPort(t *testing.T) {
-	r := &http.Request{
-		Host: "example.com:9080",
-	}
-	ctx := context.WithValue(context.Background(), http.LocalAddrContextKey, &mockNetAddr{"0.0.0.0:9080"})
-	r = r.WithContext(ctx)
+func (m *mockResponseWriter) Header() http.Header {
+	return m.headers
+}
 
-	host, port := getHostPort(r)
-	if host != "example.com" {
-		t.Errorf("expected host 'example.com', got %q", host)
-	}
-	if port != 9080 {
-		t.Errorf("expected port 9080, got %d", port)
+func (m *mockResponseWriter) Write(data []byte) (int, error) {
+	m.body = string(data)
+	return len(data), nil
+}
+
+func (m *mockResponseWriter) WriteHeader(statusCode int) {
+	m.statusCode = statusCode
+}
+
+// ====================== resolvePythonInterpreter Tests ======================
+
+func TestResolvePythonInterpreter_ExplicitPath(t *testing.T) {
+	result := resolvePythonInterpreter("/usr/local/bin/python3.12", "/some/venv")
+	if result != "/usr/local/bin/python3.12" {
+		t.Errorf("expected explicit path, got %q", result)
 	}
 }
 
-func TestGetHostPort_WithoutPort(t *testing.T) {
-	r := &http.Request{
-		Host: "example.com",
-	}
-	ctx := context.WithValue(context.Background(), http.LocalAddrContextKey, &mockNetAddr{"0.0.0.0:443"})
-	r = r.WithContext(ctx)
+func TestResolvePythonInterpreter_VenvPath(t *testing.T) {
+	tempDir := t.TempDir()
+	binDir := filepath.Join(tempDir, "bin")
+	os.MkdirAll(binDir, 0755)
+	pythonPath := filepath.Join(binDir, "python3")
+	os.WriteFile(pythonPath, []byte("#!/bin/sh"), 0755)
 
-	host, port := getHostPort(r)
-	if host != "example.com" {
-		t.Errorf("expected host 'example.com', got %q", host)
-	}
-	if port != 443 {
-		t.Errorf("expected port 443, got %d", port)
+	result := resolvePythonInterpreter("", tempDir)
+	if result != pythonPath {
+		t.Errorf("expected venv python %q, got %q", pythonPath, result)
 	}
 }
 
-// ====================== buildWsgiHeaders Extended Tests ======================
-
-func TestBuildWsgiHeaders_ProxyHeaderExcluded(t *testing.T) {
-	r := &http.Request{
-		Method: "GET",
-		Proto:  "HTTP/1.1",
-		Header: http.Header{
-			"Proxy":  []string{"malicious"},
-			"Accept": []string{"text/html"},
-		},
-		URL:  &url.URL{Path: "/", RawQuery: ""},
-		Host: "localhost:8080",
-	}
-	ctx := context.WithValue(context.Background(), http.LocalAddrContextKey, &mockNetAddr{"localhost:8080"})
-	r = r.WithContext(ctx)
-
-	headers := buildWsgiHeaders(r)
-	defer headers.Cleanup()
-
-	for i := 0; i < headers.Len(); i++ {
-		key, _ := headers.Get(i)
-		if key == "HTTP_PROXY" {
-			t.Error("Proxy header should be excluded from WSGI headers")
-		}
+func TestResolvePythonInterpreter_Fallback(t *testing.T) {
+	result := resolvePythonInterpreter("", "")
+	if result != "python3" {
+		t.Errorf("expected 'python3' fallback, got %q", result)
 	}
 }
 
-func TestBuildWsgiHeaders_CookieJoinedWithSemicolon(t *testing.T) {
-	r := &http.Request{
-		Method: "GET",
-		Proto:  "HTTP/1.1",
-		Header: http.Header{
-			"Cookie": []string{"session=abc", "token=xyz"},
-		},
-		URL:  &url.URL{Path: "/", RawQuery: ""},
-		Host: "localhost:8080",
-	}
-	ctx := context.WithValue(context.Background(), http.LocalAddrContextKey, &mockNetAddr{"localhost:8080"})
-	r = r.WithContext(ctx)
+func TestResolvePythonInterpreter_VenvFallbackToPython(t *testing.T) {
+	tempDir := t.TempDir()
+	binDir := filepath.Join(tempDir, "bin")
+	os.MkdirAll(binDir, 0755)
+	pythonPath := filepath.Join(binDir, "python")
+	os.WriteFile(pythonPath, []byte("#!/bin/sh"), 0755)
 
-	headers := buildWsgiHeaders(r)
-	defer headers.Cleanup()
-
-	found := false
-	for i := 0; i < headers.Len(); i++ {
-		key, value := headers.Get(i)
-		if key == "HTTP_COOKIE" {
-			found = true
-			if value != "session=abc; token=xyz" {
-				t.Errorf("expected cookie joined with '; ', got %q", value)
-			}
-		}
-	}
-	if !found {
-		t.Error("HTTP_COOKIE header not found")
+	result := resolvePythonInterpreter("", tempDir)
+	if result != pythonPath {
+		t.Errorf("expected venv python %q, got %q", pythonPath, result)
 	}
 }
 
-func TestBuildWsgiHeaders_MultipleHeaderValues(t *testing.T) {
-	r := &http.Request{
-		Method: "GET",
-		Proto:  "HTTP/1.1",
-		Header: http.Header{
-			"Accept-Encoding": []string{"gzip", "deflate"},
-		},
-		URL:  &url.URL{Path: "/", RawQuery: ""},
-		Host: "localhost:8080",
-	}
-	ctx := context.WithValue(context.Background(), http.LocalAddrContextKey, &mockNetAddr{"localhost:8080"})
-	r = r.WithContext(ctx)
+func TestResolvePythonInterpreter_VenvNoPython(t *testing.T) {
+	tempDir := t.TempDir()
+	binDir := filepath.Join(tempDir, "bin")
+	os.MkdirAll(binDir, 0755)
+	// No python3 or python in bin/ - should fall back to "python3"
 
-	headers := buildWsgiHeaders(r)
-	defer headers.Cleanup()
-
-	found := false
-	for i := 0; i < headers.Len(); i++ {
-		key, value := headers.Get(i)
-		if key == "HTTP_ACCEPT_ENCODING" {
-			found = true
-			if value != "gzip, deflate" {
-				t.Errorf("expected 'gzip, deflate', got %q", value)
-			}
-		}
-	}
-	if !found {
-		t.Error("HTTP_ACCEPT_ENCODING header not found")
+	result := resolvePythonInterpreter("", tempDir)
+	if result != "python3" {
+		t.Errorf("expected 'python3' fallback when venv has no python, got %q", result)
 	}
 }
 
-// ====================== buildAsgiHeaders Extended Tests ======================
+// ====================== writeCaddysnakePy Tests ======================
 
-func TestBuildAsgiHeaders_WebsocketMode(t *testing.T) {
-	r := &http.Request{
-		Method:     "GET",
-		Proto:      "HTTP/1.1",
-		ProtoMajor: 1,
-		ProtoMinor: 1,
-		Header:     http.Header{},
-		URL:        &url.URL{Path: "/ws", RawQuery: ""},
-		Host:       "localhost:8080",
+func TestWriteCaddysnakePy_CreateTempFails(t *testing.T) {
+	orig := os.Getenv("TMPDIR")
+	os.Setenv("TMPDIR", "/nonexistent_directory_for_caddysnake_test_xyz")
+	defer os.Setenv("TMPDIR", orig)
+
+	_, err := writeCaddysnakePy()
+	if err == nil {
+		t.Error("expected error when TMPDIR points to nonexistent directory")
 	}
-	ctx := context.WithValue(context.Background(), http.LocalAddrContextKey, &mockNetAddr{"localhost:8080"})
-	r = r.WithContext(ctx)
+}
 
-	headers, scope, err := buildAsgiHeaders(r, true)
+func TestWriteCaddysnakePy(t *testing.T) {
+	path, err := writeCaddysnakePy()
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	defer headers.Cleanup()
-	defer scope.Cleanup()
+	defer os.Remove(path)
 
-	scopeMap := make(map[string]string)
-	for i := 0; i < scope.Len(); i++ {
-		k, v := scope.Get(i)
-		scopeMap[k] = v
-	}
-	if scopeMap["type"] != "websocket" {
-		t.Errorf("expected type 'websocket', got %q", scopeMap["type"])
-	}
-	if scopeMap["scheme"] != "ws" {
-		t.Errorf("expected scheme 'ws', got %q", scopeMap["scheme"])
-	}
-}
-
-func TestBuildAsgiHeaders_TLSScheme(t *testing.T) {
-	r := &http.Request{
-		Method:     "GET",
-		Proto:      "HTTP/1.1",
-		ProtoMajor: 1,
-		ProtoMinor: 1,
-		Header:     http.Header{},
-		URL:        &url.URL{Path: "/", RawQuery: ""},
-		Host:       "localhost:443",
-		TLS:        &tls.ConnectionState{},
-	}
-	ctx := context.WithValue(context.Background(), http.LocalAddrContextKey, &mockNetAddr{"localhost:443"})
-	r = r.WithContext(ctx)
-
-	_, scope, err := buildAsgiHeaders(r, false)
+	info, err := os.Stat(path)
 	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+		t.Fatalf("file not found: %v", err)
 	}
-	defer scope.Cleanup()
-
-	scopeMap := make(map[string]string)
-	for i := 0; i < scope.Len(); i++ {
-		k, v := scope.Get(i)
-		scopeMap[k] = v
-	}
-	if scopeMap["scheme"] != "https" {
-		t.Errorf("expected scheme 'https', got %q", scopeMap["scheme"])
-	}
-}
-
-func TestBuildAsgiHeaders_TLSWebsocketScheme(t *testing.T) {
-	r := &http.Request{
-		Method:     "GET",
-		Proto:      "HTTP/1.1",
-		ProtoMajor: 1,
-		ProtoMinor: 1,
-		Header:     http.Header{},
-		URL:        &url.URL{Path: "/ws", RawQuery: ""},
-		Host:       "localhost:443",
-		TLS:        &tls.ConnectionState{},
-	}
-	ctx := context.WithValue(context.Background(), http.LocalAddrContextKey, &mockNetAddr{"localhost:443"})
-	r = r.WithContext(ctx)
-
-	_, scope, err := buildAsgiHeaders(r, true)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	defer scope.Cleanup()
-
-	scopeMap := make(map[string]string)
-	for i := 0; i < scope.Len(); i++ {
-		k, v := scope.Get(i)
-		scopeMap[k] = v
-	}
-	if scopeMap["scheme"] != "wss" {
-		t.Errorf("expected scheme 'wss', got %q", scopeMap["scheme"])
-	}
-}
-
-func TestBuildAsgiHeaders_ProxyHeaderExcluded(t *testing.T) {
-	r := &http.Request{
-		Method:     "GET",
-		Proto:      "HTTP/1.1",
-		ProtoMajor: 1,
-		ProtoMinor: 1,
-		Header: http.Header{
-			"Proxy":  []string{"malicious"},
-			"Accept": []string{"text/html"},
-		},
-		URL:  &url.URL{Path: "/", RawQuery: ""},
-		Host: "localhost:8080",
-	}
-	ctx := context.WithValue(context.Background(), http.LocalAddrContextKey, &mockNetAddr{"localhost:8080"})
-	r = r.WithContext(ctx)
-
-	headers, _, err := buildAsgiHeaders(r, false)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	defer headers.Cleanup()
-
-	for i := 0; i < headers.Len(); i++ {
-		key, _ := headers.Get(i)
-		if key == "proxy" {
-			t.Error("proxy header should be excluded from ASGI headers")
-		}
-	}
-}
-
-func TestBuildAsgiHeaders_CookieJoinedWithSemicolon(t *testing.T) {
-	r := &http.Request{
-		Method:     "GET",
-		Proto:      "HTTP/1.1",
-		ProtoMajor: 1,
-		ProtoMinor: 1,
-		Header: http.Header{
-			"Cookie": []string{"session=abc", "token=xyz"},
-		},
-		URL:  &url.URL{Path: "/", RawQuery: ""},
-		Host: "localhost:8080",
-	}
-	ctx := context.WithValue(context.Background(), http.LocalAddrContextKey, &mockNetAddr{"localhost:8080"})
-	r = r.WithContext(ctx)
-
-	headers, _, err := buildAsgiHeaders(r, false)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	defer headers.Cleanup()
-
-	found := false
-	for i := 0; i < headers.Len(); i++ {
-		key, value := headers.Get(i)
-		if key == "cookie" {
-			found = true
-			if value != "session=abc; token=xyz" {
-				t.Errorf("expected cookie joined with '; ', got %q", value)
-			}
-		}
-	}
-	if !found {
-		t.Error("cookie header not found")
-	}
-}
-
-func TestBuildAsgiHeaders_EncodedPath(t *testing.T) {
-	r := &http.Request{
-		Method:     "GET",
-		Proto:      "HTTP/1.1",
-		ProtoMajor: 1,
-		ProtoMinor: 1,
-		Header:     http.Header{},
-		URL:        &url.URL{Path: "/hello world", RawPath: "/hello%20world", RawQuery: ""},
-		Host:       "localhost:8080",
-	}
-	ctx := context.WithValue(context.Background(), http.LocalAddrContextKey, &mockNetAddr{"localhost:8080"})
-	r = r.WithContext(ctx)
-
-	_, scope, err := buildAsgiHeaders(r, false)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	defer scope.Cleanup()
-
-	scopeMap := make(map[string]string)
-	for i := 0; i < scope.Len(); i++ {
-		k, v := scope.Get(i)
-		scopeMap[k] = v
-	}
-	if scopeMap["path"] != "/hello world" {
-		t.Errorf("expected decoded path '/hello world', got %q", scopeMap["path"])
-	}
-	if scopeMap["raw_path"] != "/hello%20world" {
-		t.Errorf("expected raw path '/hello%%20world', got %q", scopeMap["raw_path"])
-	}
-}
-
-func TestBuildAsgiHeaders_HTTP2(t *testing.T) {
-	r := &http.Request{
-		Method:     "POST",
-		Proto:      "HTTP/2.0",
-		ProtoMajor: 2,
-		ProtoMinor: 0,
-		Header:     http.Header{},
-		URL:        &url.URL{Path: "/api", RawQuery: "q=1"},
-		Host:       "localhost:8080",
-	}
-	ctx := context.WithValue(context.Background(), http.LocalAddrContextKey, &mockNetAddr{"localhost:8080"})
-	r = r.WithContext(ctx)
-
-	_, scope, err := buildAsgiHeaders(r, false)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	defer scope.Cleanup()
-
-	scopeMap := make(map[string]string)
-	for i := 0; i < scope.Len(); i++ {
-		k, v := scope.Get(i)
-		scopeMap[k] = v
-	}
-	if scopeMap["http_version"] != "2.0" {
-		t.Errorf("expected http_version '2.0', got %q", scopeMap["http_version"])
-	}
-	if scopeMap["method"] != "POST" {
-		t.Errorf("expected method 'POST', got %q", scopeMap["method"])
-	}
-	if scopeMap["query_string"] != "q=1" {
-		t.Errorf("expected query_string 'q=1', got %q", scopeMap["query_string"])
-	}
-}
-
-// ====================== WsgiResponse.Write Extended Tests ======================
-
-func TestWsgiResponseWrite_500NilBody(t *testing.T) {
-	w := &mockResponseWriter{headers: make(http.Header)}
-	response := &WsgiResponse{
-		statusCode: 500,
-		headers:    nil,
-		body:       nil,
-		bodySize:   0,
-	}
-	response.Write(w)
-
-	if w.statusCode != 500 {
-		t.Errorf("expected status 500, got %d", w.statusCode)
-	}
-	if w.body != "Internal Server Error" {
-		t.Errorf("expected 'Internal Server Error' body, got %q", w.body)
-	}
-}
-
-func TestWsgiResponseWrite_NilHeadersNonError(t *testing.T) {
-	w := &mockResponseWriter{headers: make(http.Header)}
-	response := &WsgiResponse{
-		statusCode: 200,
-		headers:    nil,
-		body:       nil,
-		bodySize:   0,
-	}
-	response.Write(w)
-
-	if w.statusCode != 200 {
-		t.Errorf("expected status 200, got %d", w.statusCode)
-	}
-	if w.body != "" {
-		t.Errorf("expected empty body for 200 with nil body, got %q", w.body)
-	}
-}
-
-func TestWsgiResponseWrite_404NilBody(t *testing.T) {
-	w := &mockResponseWriter{headers: make(http.Header)}
-	response := &WsgiResponse{
-		statusCode: 404,
-		headers:    nil,
-		body:       nil,
-		bodySize:   0,
-	}
-	response.Write(w)
-
-	if w.statusCode != 404 {
-		t.Errorf("expected status 404, got %d", w.statusCode)
-	}
-	// Only 500 should produce "Internal Server Error" body
-	if w.body != "" {
-		t.Errorf("expected empty body for 404, got %q", w.body)
-	}
-}
-
-// ====================== AsgiGlobalState Tests ======================
-
-func TestAsgiGlobalState_Lifecycle(t *testing.T) {
-	state := newAsgiGlobalState()
-
-	// All shards should be initialized.
-	for i := 0; i < asgiShardCount; i++ {
-		if state.shards[i] == nil {
-			t.Fatalf("shard %d is nil", i)
-		}
-	}
-
-	// Register a handler.
-	w := &mockResponseWriter{headers: make(http.Header)}
-	r := &http.Request{}
-	h := &AsgiRequestHandler{
-		w:          w,
-		r:          r,
-		done:       make(chan error, 2),
-		operations: make(chan AsgiOperations, 16),
-	}
-	id := state.Request(h)
-	if id == 0 {
-		t.Error("expected non-zero request ID")
-	}
-
-	// GetHandler should return the handler.
-	got := state.GetHandler(id)
-	if got != h {
-		t.Error("expected to get back the same handler")
-	}
-
-	// GetHandler for non-existent ID should return nil.
-	got = state.GetHandler(999999)
-	if got != nil {
-		t.Error("expected nil for non-existent handler")
-	}
-
-	// Cleanup should remove the handler.
-	state.Cleanup(id)
-	got = state.GetHandler(id)
-	if got != nil {
-		t.Error("expected nil after cleanup")
-	}
-}
-
-func TestAsgiGlobalState_ShardDistribution(t *testing.T) {
-	state := newAsgiGlobalState()
-
-	// IDs that differ by asgiShardCount should map to the same shard.
-	shard0 := state.shardFor(0)
-	shardN := state.shardFor(uint64(asgiShardCount))
-	if shard0 != shardN {
-		t.Errorf("IDs 0 and %d should map to the same shard", asgiShardCount)
-	}
-
-	// Consecutive IDs should map to different shards.
-	shard1 := state.shardFor(1)
-	if shard0 == shard1 {
-		t.Error("IDs 0 and 1 should map to different shards")
-	}
-}
-
-func TestAsgiGlobalState_MultipleHandlers(t *testing.T) {
-	state := newAsgiGlobalState()
-
-	handlers := make([]*AsgiRequestHandler, 10)
-	ids := make([]uint64, 10)
-	for i := 0; i < 10; i++ {
-		handlers[i] = &AsgiRequestHandler{
-			w:          &mockResponseWriter{headers: make(http.Header)},
-			r:          &http.Request{},
-			done:       make(chan error, 2),
-			operations: make(chan AsgiOperations, 16),
-		}
-		ids[i] = state.Request(handlers[i])
-	}
-
-	// All IDs should be unique and all handlers retrievable.
-	seen := make(map[uint64]bool)
-	for i, id := range ids {
-		if seen[id] {
-			t.Errorf("duplicate ID: %d", id)
-		}
-		seen[id] = true
-		got := state.GetHandler(id)
-		if got != handlers[i] {
-			t.Errorf("handler mismatch for ID %d", id)
-		}
-	}
-
-	// Cleanup one and verify others still exist.
-	state.Cleanup(ids[0])
-	if state.GetHandler(ids[0]) != nil {
-		t.Error("expected nil after cleanup")
-	}
-	if state.GetHandler(ids[1]) == nil {
-		t.Error("expected other handler to still exist")
-	}
-}
-
-// ====================== WsgiGlobalState Extended Tests ======================
-
-func TestWsgiState_MultipleRequests(t *testing.T) {
-	state := &WsgiGlobalState{
-		handlers: make(map[int64]chan WsgiResponse),
-	}
-
-	id1 := state.Request()
-	id2 := state.Request()
-	id3 := state.Request()
-
-	if id1 == id2 || id2 == id3 || id1 == id3 {
-		t.Error("expected unique request IDs")
-	}
-	if id1 != 1 || id2 != 2 || id3 != 3 {
-		t.Errorf("expected sequential IDs 1,2,3 got %d,%d,%d", id1, id2, id3)
-	}
-
-	// Respond in reverse order to test independence.
-	go state.Response(id3, WsgiResponse{statusCode: 203})
-	go state.Response(id1, WsgiResponse{statusCode: 201})
-	go state.Response(id2, WsgiResponse{statusCode: 202})
-
-	r3 := state.WaitResponse(id3)
-	r1 := state.WaitResponse(id1)
-	r2 := state.WaitResponse(id2)
-
-	if r1.statusCode != 201 {
-		t.Errorf("expected 201 for id1, got %d", r1.statusCode)
-	}
-	if r2.statusCode != 202 {
-		t.Errorf("expected 202 for id2, got %d", r2.statusCode)
-	}
-	if r3.statusCode != 203 {
-		t.Errorf("expected 203 for id3, got %d", r3.statusCode)
-	}
-
-	// All handlers should be cleaned up after WaitResponse.
-	if len(state.handlers) != 0 {
-		t.Errorf("expected 0 handlers after all responses, got %d", len(state.handlers))
+	if info.Size() == 0 {
+		t.Error("expected non-empty file")
 	}
 }
 
@@ -1546,7 +786,6 @@ func TestDynamicAppGetOrCreate_FactoryError(t *testing.T) {
 		t.Error("expected nil app on error")
 	}
 
-	// Map should remain empty after factory error.
 	d.mu.RLock()
 	if len(d.apps) != 0 {
 		t.Errorf("expected 0 apps after factory error, got %d", len(d.apps))
@@ -1768,7 +1007,6 @@ func TestDynamicAppConcurrentDifferentKeys(t *testing.T) {
 	}
 	mu.Unlock()
 
-	// Verify all are in the map.
 	d.mu.RLock()
 	if len(d.apps) != goroutines {
 		t.Errorf("expected %d apps in map, got %d", goroutines, len(d.apps))
@@ -1800,7 +1038,6 @@ func TestFindPythonDirectory_MultipleVersions(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	// Should find one of them (first match during walk).
 	if dir != "python3.10" && dir != "python3.12" {
 		t.Errorf("expected 'python3.10' or 'python3.12', got %q", dir)
 	}
@@ -1836,7 +1073,6 @@ func TestFindPythonDirectory_NonExistentPath(t *testing.T) {
 
 func TestFindPythonDirectory_FileNotDir(t *testing.T) {
 	tempDir := t.TempDir()
-	// Create a file named python3.11 (not a directory).
 	os.WriteFile(filepath.Join(tempDir, "python3.11"), []byte("not a dir"), 0644)
 
 	_, err := findPythonDirectory(tempDir)
@@ -1845,111 +1081,7 @@ func TestFindPythonDirectory_FileNotDir(t *testing.T) {
 	}
 }
 
-// ====================== needsWebsocketUpgrade Extended Tests ======================
-
-func TestNeedsWebsocketUpgrade_CaseInsensitive(t *testing.T) {
-	r := &http.Request{
-		Method: "GET",
-		Header: http.Header{
-			"Connection": []string{"Upgrade"},
-			"Upgrade":    []string{"WebSocket"},
-		},
-	}
-	if !needsWebsocketUpgrade(r) {
-		t.Error("expected case-insensitive websocket upgrade detection")
-	}
-}
-
-func TestNeedsWebsocketUpgrade_MixedCaseMultiValue(t *testing.T) {
-	r := &http.Request{
-		Method: "GET",
-		Header: http.Header{
-			"Connection": []string{"keep-alive, Upgrade"},
-			"Upgrade":    []string{"WEBSOCKET"},
-		},
-	}
-	if !needsWebsocketUpgrade(r) {
-		t.Error("expected mixed-case multi-value websocket upgrade detection")
-	}
-}
-
-func TestNeedsWebsocketUpgrade_MissingUpgradeHeader(t *testing.T) {
-	r := &http.Request{
-		Method: "GET",
-		Header: http.Header{
-			"Connection": []string{"upgrade"},
-			// No Upgrade header
-		},
-	}
-	if needsWebsocketUpgrade(r) {
-		t.Error("expected false when Upgrade header is missing")
-	}
-}
-
-func TestNeedsWebsocketUpgrade_WrongUpgradeValue(t *testing.T) {
-	r := &http.Request{
-		Method: "GET",
-		Header: http.Header{
-			"Connection": []string{"upgrade"},
-			"Upgrade":    []string{"h2c"},
-		},
-	}
-	if needsWebsocketUpgrade(r) {
-		t.Error("expected false when Upgrade value is not websocket")
-	}
-}
-
-// ====================== MapKeyVal.Cleanup nil Tests ======================
-
-func TestMapKeyValCleanup_Nil(t *testing.T) {
-	m := &MapKeyVal{}
-	// Should not panic on nil internal state.
-	m.Cleanup()
-}
-
-// ====================== WebsocketState Constants Tests ======================
-
-func TestWebsocketStateConstants(t *testing.T) {
-	if WS_STARTING != 2 {
-		t.Errorf("expected WS_STARTING=2, got %d", WS_STARTING)
-	}
-	if WS_CONNECTED != 3 {
-		t.Errorf("expected WS_CONNECTED=3, got %d", WS_CONNECTED)
-	}
-	if WS_DISCONNECTED != 4 {
-		t.Errorf("expected WS_DISCONNECTED=4, got %d", WS_DISCONNECTED)
-	}
-}
-
-// ====================== getRemoteHostPort Extended Tests ======================
-
-func TestGetRemoteHostPort_IPv6(t *testing.T) {
-	r := &http.Request{
-		RemoteAddr: "[::1]:54321",
-	}
-	host, port := getRemoteHostPort(r)
-	if host != "::1" {
-		t.Errorf("expected host '::1', got %q", host)
-	}
-	if port != 54321 {
-		t.Errorf("expected port 54321, got %d", port)
-	}
-}
-
-func TestGetRemoteHostPort_StandardIPv4(t *testing.T) {
-	r := &http.Request{
-		RemoteAddr: "192.168.1.100:80",
-	}
-	host, port := getRemoteHostPort(r)
-	if host != "192.168.1.100" {
-		t.Errorf("expected host '192.168.1.100', got %q", host)
-	}
-	if port != 80 {
-		t.Errorf("expected port 80, got %d", port)
-	}
-}
-
-// ====================== Additional Coverage Tests ======================
+// ====================== Additional Tests ======================
 
 func TestUnmarshalCaddyfile_ModuleAsgiMissingArg(t *testing.T) {
 	input := `python {
@@ -2027,19 +1159,6 @@ func TestUnmarshalCaddyfile_LifespanMissingArg(t *testing.T) {
 	}
 }
 
-func TestUnmarshalCaddyfile_WorkersRuntimeMissingArg(t *testing.T) {
-	input := `python {
-		module_wsgi main:app
-		workers_runtime
-	}`
-	d := caddyfile.NewTestDispenser(input)
-	var cs CaddySnake
-	err := cs.UnmarshalCaddyfile(d)
-	if err == nil {
-		t.Fatal("expected error for missing workers_runtime argument")
-	}
-}
-
 func TestFindSitePackagesInVenv_SitePackagesIsFile(t *testing.T) {
 	tempDir := t.TempDir()
 	pythonDir := filepath.Join(tempDir, "lib", "python3.12")
@@ -2047,7 +1166,6 @@ func TestFindSitePackagesInVenv_SitePackagesIsFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create test directory: %v", err)
 	}
-	// Create site-packages as a file, not a directory.
 	sitePackagesPath := filepath.Join(pythonDir, "site-packages")
 	os.WriteFile(sitePackagesPath, []byte("not a dir"), 0644)
 
@@ -2060,37 +1178,13 @@ func TestFindSitePackagesInVenv_SitePackagesIsFile(t *testing.T) {
 	}
 }
 
-func TestBuildAsgiHeaders_InvalidPercentEncoding(t *testing.T) {
-	r := &http.Request{
-		Method:     "GET",
-		Proto:      "HTTP/1.1",
-		ProtoMajor: 1,
-		ProtoMinor: 1,
-		Header:     http.Header{},
-		URL:        &url.URL{Path: "/bad%path", RawQuery: ""},
-		Host:       "localhost:8080",
-	}
-	ctx := context.WithValue(context.Background(), http.LocalAddrContextKey, &mockNetAddr{"localhost:8080"})
-	r = r.WithContext(ctx)
-
-	_, _, err := buildAsgiHeaders(r, false)
-	if err == nil {
-		t.Fatal("expected error for invalid percent-encoded path")
-	}
-}
-
 func TestDynamicAppGetOrCreate_DoubleCheckPath(t *testing.T) {
-	// Test the double-check locking path by using a barrier so many goroutines
-	// all pass the read-lock check (not finding the key) before any acquires
-	// the write lock. The first to get the write lock creates the app via factory;
-	// subsequent goroutines hit the double-check and find it without calling factory.
 	factoryCalls := int32(0)
 	mockApp := &mockAppServer{}
 
 	d, _ := NewDynamicApp("main:app", "/home/test", "",
 		func(module, dir, venv string) (AppServer, error) {
 			atomic.AddInt32(&factoryCalls, 1)
-			// Small delay so other goroutines queue on the write lock.
 			time.Sleep(10 * time.Millisecond)
 			return mockApp, nil
 		},
@@ -2105,14 +1199,12 @@ func TestDynamicAppGetOrCreate_DoubleCheckPath(t *testing.T) {
 
 	for i := 0; i < goroutines; i++ {
 		go func() {
-			barrier.Wait() // All start at the same instant.
+			barrier.Wait()
 			_, err := d.getOrCreateApp("key1", "main:app", "/home/test", "")
 			errs <- err
 		}()
 	}
 
-	// Release all goroutines simultaneously so they all pass the read-lock
-	// before any one acquires the write lock.
 	barrier.Done()
 
 	for i := 0; i < goroutines; i++ {
@@ -2121,94 +1213,8 @@ func TestDynamicAppGetOrCreate_DoubleCheckPath(t *testing.T) {
 		}
 	}
 
-	// Factory should be called exactly once — all other goroutines use the double-check path.
 	if calls := atomic.LoadInt32(&factoryCalls); calls != 1 {
 		t.Errorf("expected factory to be called once, got %d", calls)
-	}
-}
-
-func TestBuildAsgiHeaders_ProxyExactCanonicalKey(t *testing.T) {
-	// Ensure that the Proxy header is excluded using the canonical key check.
-	r := &http.Request{
-		Method:     "GET",
-		Proto:      "HTTP/1.1",
-		ProtoMajor: 1,
-		ProtoMinor: 1,
-		Header: http.Header{
-			"Proxy":       []string{"evil"},
-			"X-Forwarded": []string{"ok"},
-		},
-		URL:  &url.URL{Path: "/", RawQuery: ""},
-		Host: "localhost:8080",
-	}
-	ctx := context.WithValue(context.Background(), http.LocalAddrContextKey, &mockNetAddr{"localhost:8080"})
-	r = r.WithContext(ctx)
-
-	headers, _, err := buildAsgiHeaders(r, false)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	defer headers.Cleanup()
-
-	for i := 0; i < headers.Len(); i++ {
-		key, _ := headers.Get(i)
-		if key == "proxy" {
-			t.Error("proxy header should be excluded")
-		}
-	}
-	// X-Forwarded should be present.
-	found := false
-	for i := 0; i < headers.Len(); i++ {
-		key, _ := headers.Get(i)
-		if key == "x-forwarded" {
-			found = true
-		}
-	}
-	if !found {
-		t.Error("x-forwarded header should be present")
-	}
-}
-
-func TestBuildWsgiHeaders_ContentTypeLengthExcluded(t *testing.T) {
-	// Ensure Content-Type and Content-Length are not duplicated as HTTP_ headers.
-	r := &http.Request{
-		Method: "POST",
-		Proto:  "HTTP/1.1",
-		Header: http.Header{
-			"Content-Type":   []string{"application/json"},
-			"Content-Length": []string{"42"},
-			"Accept":         []string{"*/*"},
-		},
-		URL:  &url.URL{Path: "/api", RawQuery: ""},
-		Host: "localhost:8080",
-	}
-	ctx := context.WithValue(context.Background(), http.LocalAddrContextKey, &mockNetAddr{"localhost:8080"})
-	r = r.WithContext(ctx)
-
-	headers := buildWsgiHeaders(r)
-	defer headers.Cleanup()
-
-	for i := 0; i < headers.Len(); i++ {
-		key, _ := headers.Get(i)
-		if key == "HTTP_CONTENT_TYPE" {
-			t.Error("Content-Type should not appear as HTTP_CONTENT_TYPE")
-		}
-		if key == "HTTP_CONTENT_LENGTH" {
-			t.Error("Content-Length should not appear as HTTP_CONTENT_LENGTH")
-		}
-	}
-
-	// CONTENT_TYPE and CONTENT_LENGTH should still appear in extra headers.
-	headerMap := make(map[string]string)
-	for i := 0; i < headers.Len(); i++ {
-		k, v := headers.Get(i)
-		headerMap[k] = v
-	}
-	if headerMap["CONTENT_TYPE"] != "application/json" {
-		t.Errorf("expected CONTENT_TYPE 'application/json', got %q", headerMap["CONTENT_TYPE"])
-	}
-	if headerMap["CONTENT_LENGTH"] != "42" {
-		t.Errorf("expected CONTENT_LENGTH '42', got %q", headerMap["CONTENT_LENGTH"])
 	}
 }
 
@@ -2221,10 +1227,289 @@ func TestDynamicAppCleanup_EmptyApps(t *testing.T) {
 		false,
 	)
 
-	// Cleanup with no apps should succeed with nil error.
 	err := d.Cleanup()
 	if err != nil {
 		t.Errorf("expected nil error for empty cleanup, got: %v", err)
+	}
+}
+
+// ====================== waitForPortFile Tests ======================
+
+func TestWaitForPortFile_Success(t *testing.T) {
+	f, err := os.CreateTemp("", "portfile-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := f.Name()
+	defer os.Remove(path)
+	if _, err := f.WriteString("9090"); err != nil {
+		f.Close()
+		t.Fatal(err)
+	}
+	f.Close()
+
+	port, err := waitForPortFile(path, 2*time.Second)
+	if err != nil {
+		t.Errorf("waitForPortFile: %v", err)
+	}
+	if port != 9090 {
+		t.Errorf("expected port 9090, got %d", port)
+	}
+}
+
+func TestWaitForPortFile_Timeout(t *testing.T) {
+	f, err := os.CreateTemp("", "portfile-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.Remove(f.Name())
+	f.Close()
+	// Empty file - will never have valid port
+
+	_, err = waitForPortFile(f.Name(), 100*time.Millisecond)
+	if err == nil {
+		t.Error("expected timeout error")
+	}
+	if !strings.Contains(err.Error(), "not ready within") {
+		t.Errorf("expected 'not ready within' in error, got: %v", err)
+	}
+}
+
+func TestWaitForPortFile_InvalidContent(t *testing.T) {
+	f, err := os.CreateTemp("", "portfile-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.Remove(f.Name())
+	f.WriteString("not-a-port")
+	f.Close()
+
+	_, err = waitForPortFile(f.Name(), 100*time.Millisecond)
+	if err == nil {
+		t.Error("expected error for invalid port content")
+	}
+}
+
+// ====================== dialWithRetry Tests ======================
+// These tests exercise PythonWorker.dialWithRetry via HandleRequest using
+// a minimally constructed worker (no Python process).
+
+func newMinimalWorkerForDialTest(dialNet, dialAddr string) *PythonWorker {
+	w := &PythonWorker{
+		DialNet:  dialNet,
+		DialAddr: dialAddr,
+	}
+	w.Transport = &http.Transport{
+		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			return w.dialWithRetry(ctx)
+		},
+	}
+	w.Proxy = &httputil.ReverseProxy{
+		Rewrite: func(req *httputil.ProxyRequest) {
+			req.Out.URL.Scheme = "http"
+			req.Out.URL.Host = w.DialAddr
+		},
+		Transport: w.Transport,
+	}
+	return w
+}
+
+func TestDialWithRetry_ContextCanceled(t *testing.T) {
+	w := newMinimalWorkerForDialTest("tcp", "127.0.0.1:37982") // nothing listening
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // cancel immediately
+
+	r, _ := http.NewRequestWithContext(ctx, "GET", "http://example.com/", nil)
+	w2 := &mockResponseWriter{headers: make(http.Header)}
+
+	_ = w.HandleRequest(w2, r)
+	// ReverseProxy writes 502 on dial error (incl. context canceled); HandleRequest returns nil
+	if w2.statusCode != 502 {
+		t.Errorf("expected 502 on context cancel, got status %d", w2.statusCode)
+	}
+}
+
+func TestDialWithRetry_FailsAfterRetries(t *testing.T) {
+	w := newMinimalWorkerForDialTest("tcp", "127.0.0.1:37983") // nothing listening
+
+	r, _ := http.NewRequestWithContext(context.Background(), "GET", "http://example.com/", nil)
+	w2 := &mockResponseWriter{headers: make(http.Header)}
+
+	_ = w.HandleRequest(w2, r)
+	// ReverseProxy writes 502 on connection failure; HandleRequest returns nil
+	if w2.statusCode != 502 {
+		t.Errorf("expected 502 after retries exhausted, got status %d, body: %s", w2.statusCode, w2.body)
+	}
+}
+
+func TestDialWithRetry_EventualSuccess(t *testing.T) {
+	// Start listener after a short delay to exercise retries
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	addr := listener.Addr().String()
+	listener.Close()
+
+	// Rebind - listener is closed, so dial will fail initially
+	started := make(chan struct{})
+	var server *http.Server
+	go func() {
+		time.Sleep(150 * time.Millisecond) // allow a few failed dial attempts
+		l, err := net.Listen("tcp", addr)
+		if err != nil {
+			return
+		}
+		server = &http.Server{
+			Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(200)
+				w.Write([]byte("ok"))
+			}),
+		}
+		close(started)
+		server.Serve(l)
+	}()
+	<-started
+
+	w := newMinimalWorkerForDialTest("tcp", addr)
+	r, _ := http.NewRequestWithContext(context.Background(), "GET", "http://example.com/", nil)
+	w2 := &mockResponseWriter{headers: make(http.Header)}
+
+	err = w.HandleRequest(w2, r)
+	if err != nil {
+		t.Errorf("expected success after retries, got: %v", err)
+	}
+	if server != nil {
+		server.Close()
+	}
+}
+
+// ====================== PythonWorkerGroup Tests ======================
+
+func TestNewPythonWorkerGroup_InvalidPythonPath(t *testing.T) {
+	tempDir := t.TempDir()
+	os.WriteFile(filepath.Join(tempDir, "app.py"), []byte(minimalWSGIApp), 0644)
+
+	_, err := NewPythonWorkerGroup("wsgi", "app:app", tempDir, "", "", 1, "/nonexistent/python-not-found")
+	if err == nil {
+		t.Fatal("expected error when python path is invalid")
+	}
+}
+
+// app that ignores SIGTERM so Cleanup's 5s timeout path is exercised
+const minimalWSGIAppIgnoringSIGTERM = `import signal
+signal.signal(signal.SIGTERM, signal.SIG_IGN)
+def app(environ, start_response):
+    start_response('200 OK', [('Content-Type', 'text/plain')])
+    return [b'ok']
+`
+
+func TestPythonWorkerCleanup_Timeout(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping 5s timeout test in short mode")
+	}
+	skipIfNoPython(t)
+
+	tempDir := t.TempDir()
+	os.WriteFile(filepath.Join(tempDir, "app.py"), []byte(minimalWSGIAppIgnoringSIGTERM), 0644)
+
+	wg, err := NewPythonWorkerGroup("wsgi", "app:app", tempDir, "", "", 1, "python3")
+	if err != nil {
+		t.Fatalf("NewPythonWorkerGroup: %v", err)
+	}
+	// Cleanup sends SIGTERM; app ignores it; after 5s we Kill
+	err = wg.Cleanup()
+	if err != nil {
+		t.Errorf("Cleanup: %v", err)
+	}
+}
+
+func TestPythonWorkerGroup_Cleanup_NilReceiver(t *testing.T) {
+	var wg *PythonWorkerGroup
+	err := wg.Cleanup()
+	if err != nil {
+		t.Errorf("expected nil error for nil receiver, got: %v", err)
+	}
+}
+
+func TestPythonWorkerGroup_Cleanup_EmptyWorkers(t *testing.T) {
+	wg := &PythonWorkerGroup{
+		Workers:    []*PythonWorker{},
+		ScriptPath: "",
+	}
+	err := wg.Cleanup()
+	if err != nil {
+		t.Errorf("expected nil error, got: %v", err)
+	}
+}
+
+// ====================== parsePythonDirective Tests ======================
+
+func TestParsePythonDirective(t *testing.T) {
+	d := caddyfile.NewTestDispenser("python main:app")
+	h := httpcaddyfile.Helper{Dispenser: d}
+	handler, err := parsePythonDirective(h)
+	if err != nil {
+		t.Fatalf("parsePythonDirective: %v", err)
+	}
+	if handler == nil {
+		t.Fatal("expected non-nil handler")
+	}
+	cs, ok := handler.(CaddySnake)
+	if !ok {
+		t.Fatalf("expected CaddySnake, got %T", handler)
+	}
+	if cs.ModuleWsgi != "main:app" {
+		t.Errorf("expected ModuleWsgi 'main:app', got %q", cs.ModuleWsgi)
+	}
+}
+
+func TestParsePythonDirective_Block(t *testing.T) {
+	d := caddyfile.NewTestDispenser(`python {
+		module_wsgi main:app
+		working_dir /tmp
+		workers 2
+	}`)
+	h := httpcaddyfile.Helper{Dispenser: d}
+	handler, err := parsePythonDirective(h)
+	if err != nil {
+		t.Fatalf("parsePythonDirective: %v", err)
+	}
+	cs, ok := handler.(CaddySnake)
+	if !ok {
+		t.Fatalf("expected CaddySnake, got %T", handler)
+	}
+	if cs.ModuleWsgi != "main:app" {
+		t.Errorf("expected ModuleWsgi 'main:app', got %q", cs.ModuleWsgi)
+	}
+	if cs.WorkingDir != "/tmp" {
+		t.Errorf("expected WorkingDir '/tmp', got %q", cs.WorkingDir)
+	}
+	if cs.Workers != "2" {
+		t.Errorf("expected Workers '2', got %q", cs.Workers)
+	}
+}
+
+func TestParsePythonDirective_ReturnsMiddlewareHandler(t *testing.T) {
+	d := caddyfile.NewTestDispenser("python main:app")
+	h := httpcaddyfile.Helper{Dispenser: d}
+	handler, err := parsePythonDirective(h)
+	if err != nil {
+		t.Fatalf("parsePythonDirective: %v", err)
+	}
+	if _, ok := handler.(caddyhttp.MiddlewareHandler); !ok {
+		t.Errorf("handler does not implement caddyhttp.MiddlewareHandler")
+	}
+}
+
+func TestParsePythonDirective_InvalidCaddyfile(t *testing.T) {
+	d := caddyfile.NewTestDispenser(`python {
+		module_wsgi
+	}`)
+	h := httpcaddyfile.Helper{Dispenser: d}
+	_, err := parsePythonDirective(h)
+	if err == nil {
+		t.Fatal("expected error for invalid caddyfile (missing module_wsgi arg)")
 	}
 }
 
@@ -2237,7 +1522,6 @@ func TestDynamicAppResolveWithNilReplacer(t *testing.T) {
 		false,
 	)
 
-	// Context with a nil replacer value should fall through gracefully.
 	ctx := context.WithValue(context.Background(), caddy.ReplacerCtxKey, (*caddy.Replacer)(nil))
 	r := &http.Request{}
 	r = r.WithContext(ctx)
@@ -2251,141 +1535,125 @@ func TestDynamicAppResolveWithNilReplacer(t *testing.T) {
 	}
 }
 
-func TestWsgiResponseWrite_WithHeaders(t *testing.T) {
-	w := &mockResponseWriter{headers: make(http.Header)}
-	responseHeaders := NewMapKeyVal(2)
-	responseHeaders.Append("X-Test", "value1")
-	responseHeaders.Append("X-Other", "value2")
+// ====================== Integration Tests: Real Python Workers ======================
 
-	response := &WsgiResponse{
-		statusCode: 201,
-		headers:    responseHeaders.m,
-		body:       nil,
-		bodySize:   0,
-	}
-	response.Write(w)
-
-	if w.statusCode != 201 {
-		t.Errorf("expected status 201, got %d", w.statusCode)
-	}
-	if w.headers.Get("X-Test") != "value1" {
-		t.Errorf("expected X-Test 'value1', got %q", w.headers.Get("X-Test"))
-	}
-	if w.headers.Get("X-Other") != "value2" {
-		t.Errorf("expected X-Other 'value2', got %q", w.headers.Get("X-Other"))
+func skipIfNoPython(t *testing.T) {
+	t.Helper()
+	if _, err := exec.LookPath("python3"); err != nil {
+		t.Skipf("python3 not found in PATH, skipping integration test: %v", err)
 	}
 }
 
-func TestGetHostPort_IPv6(t *testing.T) {
-	r := &http.Request{
-		Host: "[::1]:9080",
-	}
-	ctx := context.WithValue(context.Background(), http.LocalAddrContextKey, &mockNetAddr{"[::1]:9080"})
-	r = r.WithContext(ctx)
+const minimalWSGIApp = `def app(environ, start_response):
+    start_response('200 OK', [('Content-Type', 'text/plain')])
+    return [b'Hello from Python']
+`
 
-	host, port := getHostPort(r)
-	if host != "::1" {
-		t.Errorf("expected host '::1', got %q", host)
-	}
-	if port != 9080 {
-		t.Errorf("expected port 9080, got %d", port)
-	}
-}
+const minimalASGIApp = `async def app(scope, receive, send):
+    await send({"type": "http.response.start", "status": 200, "headers": [[b"content-type", b"text/plain"]]})
+    await send({"type": "http.response.body", "body": b"Hello from ASGI"})
+`
 
-func TestBuildWsgiHeaders_EmptyHeaders(t *testing.T) {
-	r := &http.Request{
-		Method: "GET",
-		Proto:  "HTTP/1.1",
-		Header: http.Header{},
-		URL:    &url.URL{Path: "/", RawQuery: ""},
-		Host:   "localhost:8080",
+func TestPythonWorkerGroup_LoadsAndServesWSGI(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
 	}
-	ctx := context.WithValue(context.Background(), http.LocalAddrContextKey, &mockNetAddr{"localhost:8080"})
-	r = r.WithContext(ctx)
+	skipIfNoPython(t)
 
-	headers := buildWsgiHeaders(r)
-	defer headers.Cleanup()
+	tempDir := t.TempDir()
+	appPath := filepath.Join(tempDir, "app.py")
+	if err := os.WriteFile(appPath, []byte(minimalWSGIApp), 0644); err != nil {
+		t.Fatalf("failed to write app.py: %v", err)
+	}
 
-	// Should have the extra headers but no HTTP_ headers.
-	headerMap := make(map[string]string)
-	for i := 0; i < headers.Len(); i++ {
-		k, v := headers.Get(i)
-		headerMap[k] = v
-	}
-	if headerMap["SERVER_NAME"] != "localhost" {
-		t.Errorf("expected SERVER_NAME 'localhost', got %q", headerMap["SERVER_NAME"])
-	}
-	if headerMap["REQUEST_METHOD"] != "GET" {
-		t.Errorf("expected REQUEST_METHOD 'GET', got %q", headerMap["REQUEST_METHOD"])
-	}
-}
-
-func TestBuildAsgiHeaders_EmptyHeaders(t *testing.T) {
-	r := &http.Request{
-		Method:     "GET",
-		Proto:      "HTTP/1.1",
-		ProtoMajor: 1,
-		ProtoMinor: 1,
-		Header:     http.Header{},
-		URL:        &url.URL{Path: "/", RawQuery: ""},
-		Host:       "localhost:8080",
-	}
-	ctx := context.WithValue(context.Background(), http.LocalAddrContextKey, &mockNetAddr{"localhost:8080"})
-	r = r.WithContext(ctx)
-
-	headers, scope, err := buildAsgiHeaders(r, false)
+	wg, err := NewPythonWorkerGroup("wsgi", "app:app", tempDir, "", "", 1, "python3")
 	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+		t.Fatalf("NewPythonWorkerGroup failed: %v", err)
 	}
-	defer headers.Cleanup()
-	defer scope.Cleanup()
+	defer wg.Cleanup()
 
-	if headers.Len() != 0 {
-		t.Errorf("expected 0 headers with empty request headers, got %d", headers.Len())
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("failed to listen: %v", err)
 	}
+	defer listener.Close()
 
-	scopeMap := make(map[string]string)
-	for i := 0; i < scope.Len(); i++ {
-		k, v := scope.Get(i)
-		scopeMap[k] = v
+	server := &http.Server{
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			_ = wg.HandleRequest(w, r)
+		}),
+		ReadHeaderTimeout: 5 * time.Second,
 	}
-	if scopeMap["type"] != "http" {
-		t.Errorf("expected type 'http', got %q", scopeMap["type"])
+	go server.Serve(listener)
+	defer server.Close()
+
+	baseURL := "http://" + listener.Addr().String()
+	resp, err := http.Get(baseURL + "/")
+	if err != nil {
+		t.Fatalf("GET request failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("failed to read response: %v", err)
+	}
+	if resp.StatusCode != 200 {
+		t.Errorf("expected status 200, got %d; body: %s", resp.StatusCode, body)
+	}
+	if !bytes.Contains(body, []byte("Hello from Python")) {
+		t.Errorf("expected body to contain 'Hello from Python', got: %s", body)
 	}
 }
 
-func TestBuildAsgiHeaders_MultipleHeaderValues(t *testing.T) {
-	r := &http.Request{
-		Method:     "GET",
-		Proto:      "HTTP/1.1",
-		ProtoMajor: 1,
-		ProtoMinor: 1,
-		Header: http.Header{
-			"Accept-Encoding": []string{"gzip", "deflate"},
-		},
-		URL:  &url.URL{Path: "/", RawQuery: ""},
-		Host: "localhost:8080",
+func TestPythonWorkerGroup_LoadsAndServesASGI(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
 	}
-	ctx := context.WithValue(context.Background(), http.LocalAddrContextKey, &mockNetAddr{"localhost:8080"})
-	r = r.WithContext(ctx)
+	skipIfNoPython(t)
 
-	headers, _, err := buildAsgiHeaders(r, false)
+	tempDir := t.TempDir()
+	appPath := filepath.Join(tempDir, "app.py")
+	if err := os.WriteFile(appPath, []byte(minimalASGIApp), 0644); err != nil {
+		t.Fatalf("failed to write app.py: %v", err)
+	}
+
+	wg, err := NewPythonWorkerGroup("asgi", "app:app", tempDir, "", "", 1, "python3")
 	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+		t.Fatalf("NewPythonWorkerGroup failed: %v", err)
 	}
-	defer headers.Cleanup()
+	defer wg.Cleanup()
 
-	found := false
-	for i := 0; i < headers.Len(); i++ {
-		key, value := headers.Get(i)
-		if key == "accept-encoding" {
-			found = true
-			if value != "gzip, deflate" {
-				t.Errorf("expected 'gzip, deflate', got %q", value)
-			}
-		}
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("failed to listen: %v", err)
 	}
-	if !found {
-		t.Error("accept-encoding header not found")
+	defer listener.Close()
+
+	server := &http.Server{
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			_ = wg.HandleRequest(w, r)
+		}),
+		ReadHeaderTimeout: 5 * time.Second,
+	}
+	go server.Serve(listener)
+	defer server.Close()
+
+	baseURL := "http://" + listener.Addr().String()
+	resp, err := http.Get(baseURL + "/")
+	if err != nil {
+		t.Fatalf("GET request failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("failed to read response: %v", err)
+	}
+	if resp.StatusCode != 200 {
+		t.Errorf("expected status 200, got %d; body: %s", resp.StatusCode, body)
+	}
+	if !bytes.Contains(body, []byte("Hello from ASGI")) {
+		t.Errorf("expected body to contain 'Hello from ASGI', got: %s", body)
 	}
 }

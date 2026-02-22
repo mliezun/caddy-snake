@@ -6,7 +6,9 @@ BENCH_DIR="${WORKSPACE}/benchmarks"
 RESULTS_FILE="${BENCH_DIR}/results.json"
 NUM_RUNS=10
 
-export PATH="/usr/local/go/bin:$HOME/go/bin:$PATH"
+export GOROOT="/tmp/go"
+export GOPATH="/tmp/gopath"
+export PATH="${GOROOT}/bin:${GOPATH}/bin:$HOME/go/bin:$PATH"
 export DEBIAN_FRONTEND=noninteractive
 
 echo "============================================"
@@ -39,7 +41,8 @@ else
     GO_ARCH="amd64"
 fi
 curl -fsSL "https://go.dev/dl/go1.26.0.linux-${GO_ARCH}.tar.gz" -o /tmp/go.tar.gz
-tar -C /usr/local -xzf /tmp/go.tar.gz
+tar -C /tmp -xzf /tmp/go.tar.gz
+rm /tmp/go.tar.gz
 go version
 
 # Install xcaddy and hey
@@ -56,13 +59,13 @@ pip install -r requirements.txt
 
 # Build caddy with caddy-snake
 echo ">>> Building caddy with caddy-snake..."
-CADDY="/usr/local/bin/caddy-snake-bench"
+CADDY="/tmp/caddy-snake-bench"
 cd /tmp
-CGO_ENABLED=1 xcaddy build --with github.com/mliezun/caddy-snake="$WORKSPACE" --output "$CADDY"
+CGO_ENABLED=0 xcaddy build --with github.com/mliezun/caddy-snake="$WORKSPACE" --output "$CADDY"
 cd "$BENCH_DIR"
 echo "    Caddy built at $CADDY"
 
-HEY="$HOME/go/bin/hey"
+HEY="${GOPATH}/bin/hey"
 
 # Initialize results
 echo '{}' > "$RESULTS_FILE"

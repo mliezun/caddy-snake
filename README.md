@@ -57,7 +57,6 @@ This starts a server on port `9080` serving your app. See `./caddy python-server
 --domain <example.com>    Enable HTTPS with automatic certificates
 --listen <addr>           Custom listen address (default: :9080)
 --workers <count>         Number of worker processes (default: CPU count)
---workers-runtime <type>  Worker type: process or thread
 --static-path <path>      Serve a static files directory
 --static-route <route>    Route prefix for static files (default: /static)
 --debug                   Enable debug logging
@@ -192,7 +191,6 @@ python {
     venv "/path/to/venv"                # Virtual environment path
     working_dir "/path/to/app"          # Working directory for module resolution
     workers 4                           # Number of worker processes (default: CPU count)
-    workers_runtime process|thread      # Worker type (default: process on Linux/macOS, thread on Windows)
     lifespan on|off                     # ASGI lifespan events (default: off)
     autoreload                          # Watch .py files and reload on changes
 }
@@ -228,14 +226,7 @@ python {
 
 ### `workers`
 
-Number of worker processes to spawn. Defaults to the number of CPUs (`GOMAXPROCS`). When using `workers_runtime thread`, only 1 worker is used regardless of this setting.
-
-### `workers_runtime`
-
-Controls how requests are handled:
-
-- **`process`** (default on Linux/macOS) — spawns separate worker processes, each with its own Python interpreter. Best for CPU-bound workloads and production use.
-- **`thread`** — runs Python in the main Caddy process using a single interpreter. Required on Windows. Needed for `autoreload`.
+Number of worker processes to spawn. Defaults to the number of CPUs (`GOMAXPROCS`).
 
 ### `lifespan`
 
@@ -243,14 +234,13 @@ Enables ASGI [lifespan events](https://asgi.readthedocs.io/en/latest/specs/lifes
 
 ### `autoreload`
 
-Watches the working directory for `.py` file changes and automatically reloads the Python app. Useful during development. Requires `workers_runtime thread`.
+Watches the working directory for `.py` file changes and automatically reloads the Python app. Useful during development.
 
 Changes are debounced (500ms) to handle rapid edits.
 
 ```Caddyfile
 python {
     module_wsgi "main:app"
-    workers_runtime thread
     autoreload
 }
 ```
@@ -269,7 +259,6 @@ This is useful for multi-tenant setups where each subdomain or route serves a di
         python {
             module_asgi "{http.request.host.labels.2}:app"
             working_dir "{http.request.host.labels.2}/"
-            workers_runtime thread
         }
     }
 }
@@ -290,12 +279,9 @@ Add the `autoreload` directive to your Caddyfile. This watches for `.py` file ch
 ```Caddyfile
 python {
     module_wsgi "main:app"
-    workers_runtime thread
     autoreload
 }
 ```
-
-> **Note:** `autoreload` requires `workers_runtime thread` since it reloads the Python module within the same interpreter.
 
 ### Using watchmedo (alternative)
 
@@ -337,12 +323,12 @@ Here's how it compares to traditional setups using a simple JSON "Hello, World!"
 
 | Configuration | Requests/sec | Avg Latency (ms) | P99 Latency (ms) |
 |---|---|---|---|
-| Flask + Gunicorn + Caddy | 1,815 | 54.92 | 66.85 |
-| Flask + Caddy Snake | 2,008 | 49.67 | 54.90 |
-| FastAPI + Uvicorn + Caddy | 3,601 | 27.70 | 261.59 |
-| FastAPI + Caddy Snake | 3,361 | 29.72 | 45.63 |
+| Flask + Gunicorn + Caddy | 1,917 | 52.00 | 62.82 |
+| Flask + Caddy Snake | 1,448 | 68.81 | 76.58 |
+| FastAPI + Uvicorn + Caddy | 3,701 | 26.96 | 261.02 |
+| FastAPI + Caddy Snake | 3,076 | 32.45 | 59.76 |
 
-> Benchmarked on a Scaleway POP2-2C-8G instance (2 vCPUs, 8GB RAM) with [hey](https://github.com/rakyll/hey) — 100 concurrent connections, 10s duration, Python 3.13, Go 1.26, thread workers. See [benchmarks/](benchmarks/) for methodology and how to reproduce.
+> Benchmarked on Scaleway POP2-2C-8G (linux/amd64) with [hey](https://github.com/rakyll/hey) — 100 concurrent connections, 10s duration, Python 3.13, Go 1.26, process workers. See [benchmarks/](benchmarks/) for methodology and how to reproduce.
 
 ---
 
