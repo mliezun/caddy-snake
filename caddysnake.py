@@ -129,6 +129,10 @@ _wsgi_executor = concurrent.futures.ThreadPoolExecutor(
     max_workers=min(128, (os.cpu_count() or 1) * 8 + 16)
 )
 
+_ASGI_VERSION = {"version": "3.0", "spec_version": "2.3"}
+
+_DRAIN_HIGH_WATER = 64 * 1024
+
 
 # ==================== WSGI Server ====================
 
@@ -264,8 +268,12 @@ async def _handle_wsgi_connection(reader, writer, app):
             buf.extend(b"\r\n")
             if resp_body:
                 buf.extend(resp_body)
-            writer.write(bytes(buf))
-            await writer.drain()
+            writer.write(buf)
+            try:
+                if writer.transport.get_write_buffer_size() > _DRAIN_HIGH_WATER:
+                    await writer.drain()
+            except (AttributeError, TypeError):
+                await writer.drain()
 
             connection = raw_headers.get("connection", "")
             if "close" in connection.lower():
@@ -493,9 +501,13 @@ async def _handle_asgi_http(writer, app, scope, body):
     response_started = False
     response_complete = False
     use_chunked = False
+    pending_headers = None
+    has_cl = False
+    has_te = False
 
     async def send(message):
         nonlocal response_started, response_complete, use_chunked
+        nonlocal pending_headers, has_cl, has_te
         msg_type = message["type"]
 
         if msg_type == "http.response.start":
@@ -503,47 +515,65 @@ async def _handle_asgi_http(writer, app, scope, body):
             status = message["status"]
             resp_headers = message.get("headers", [])
 
-            has_content_length = False
-            has_transfer_encoding = False
             buf = bytearray()
             buf.extend(_get_status_line(status))
             for h_name, h_value in resp_headers:
                 h_name, h_value = _encode_header(h_name, h_value)
-                if h_name.lower() == b"content-length":
-                    has_content_length = True
-                if h_name.lower() == b"transfer-encoding":
-                    has_transfer_encoding = True
+                h_lower = h_name.lower()
+                if h_lower == b"content-length":
+                    has_cl = True
+                elif h_lower == b"transfer-encoding":
+                    has_te = True
                 buf.extend(h_name)
                 buf.extend(b": ")
                 buf.extend(h_value)
                 buf.extend(b"\r\n")
 
-            if not has_content_length and not has_transfer_encoding:
-                use_chunked = True
-                buf.extend(b"transfer-encoding: chunked\r\n")
-
-            buf.extend(b"\r\n")
-            writer.write(bytes(buf))
-            await writer.drain()
+            pending_headers = buf
 
         elif msg_type == "http.response.body":
             body_data = message.get("body", b"")
             more_body = message.get("more_body", False)
 
-            if use_chunked:
-                if body_data:
-                    writer.write(
-                        f"{len(body_data):x}\r\n".encode() + body_data + b"\r\n"
-                    )
-                if not more_body:
-                    writer.write(b"0\r\n\r\n")
+            if pending_headers is not None:
+                buf = pending_headers
+                pending_headers = None
+                if not has_cl and not has_te:
+                    if not more_body:
+                        buf.extend(b"Content-Length: ")
+                        buf.extend(str(len(body_data)).encode("latin-1"))
+                        buf.extend(b"\r\n")
+                    else:
+                        use_chunked = True
+                        buf.extend(b"transfer-encoding: chunked\r\n")
+                buf.extend(b"\r\n")
+                if use_chunked:
+                    if body_data:
+                        buf.extend(f"{len(body_data):x}\r\n".encode("ascii"))
+                        buf.extend(body_data)
+                        buf.extend(b"\r\n")
+                    if not more_body:
+                        buf.extend(b"0\r\n\r\n")
+                else:
+                    if body_data:
+                        buf.extend(body_data)
+                writer.write(buf)
             else:
-                if body_data:
-                    writer.write(body_data)
-
-            await writer.drain()
+                if use_chunked:
+                    if body_data:
+                        writer.write(
+                            f"{len(body_data):x}\r\n".encode("ascii")
+                            + body_data
+                            + b"\r\n"
+                        )
+                    if not more_body:
+                        writer.write(b"0\r\n\r\n")
+                else:
+                    if body_data:
+                        writer.write(body_data)
 
             if not more_body:
+                await writer.drain()
                 response_complete = True
                 disconnect_event.set()
 
@@ -558,8 +588,13 @@ async def _handle_asgi_http(writer, app, scope, body):
                 b"Internal Server Error"
             )
             await writer.drain()
-        elif use_chunked and not response_complete:
-            writer.write(b"0\r\n\r\n")
+        else:
+            if pending_headers is not None:
+                pending_headers.extend(b"\r\n")
+                writer.write(pending_headers)
+                pending_headers = None
+            if use_chunked and not response_complete:
+                writer.write(b"0\r\n\r\n")
             await writer.drain()
 
 
@@ -716,7 +751,7 @@ async def _handle_asgi_connection(reader, writer, app, state):
 
             scope = {
                 "type": conn_type,
-                "asgi": {"version": "3.0", "spec_version": "2.3"},
+                "asgi": _ASGI_VERSION,
                 "http_version": version.split("/")[-1] if "/" in version else "1.1",
                 "method": method,
                 "path": unquote(path_part) if "%" in path_part else path_part,
@@ -764,7 +799,7 @@ async def _handle_asgi_lifespan(app, state):
     """Run ASGI lifespan protocol. Returns (success, shutdown_coroutine)."""
     scope = {
         "type": "lifespan",
-        "asgi": {"version": "3.0", "spec_version": "2.3"},
+        "asgi": _ASGI_VERSION,
         "state": state,
     }
 

@@ -2,3 +2,4 @@ flask==3.0.3
 gunicorn==23.0.0
 fastapi==0.115.0
 uvicorn[standard]==0.30.6
+uvloop>=0.19.0

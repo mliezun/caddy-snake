@@ -434,8 +434,12 @@ class TestHandleAsgiHttp:
                     "headers": [],  # no Content-Length
                 }
             )
-            await send({"type": "http.response.body", "body": b"chunk1"})
-            await send({"type": "http.response.body", "body": b"chunk2"})
+            await send(
+                {"type": "http.response.body", "body": b"chunk1", "more_body": True}
+            )
+            await send(
+                {"type": "http.response.body", "body": b"chunk2", "more_body": True}
+            )
             await send({"type": "http.response.body", "body": b"", "more_body": False})
 
         async def _drain():
