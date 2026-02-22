@@ -13,7 +13,7 @@ Usage:
 import argparse
 import asyncio
 import base64
-import copy
+import concurrent.futures
 import hashlib
 import importlib
 import io
@@ -23,7 +23,7 @@ import struct
 import sys
 import traceback
 from http import HTTPStatus
-from urllib.parse import unquote, urlparse
+from urllib.parse import unquote
 
 
 def setup_paths(working_dir, venv):
@@ -102,6 +102,34 @@ def _parse_host_header(host_str, default_port=80):
     return host_str, default_port
 
 
+# ==================== Performance helpers ====================
+
+_STATUS_LINE_CACHE = {}
+
+
+def _get_status_line(code):
+    """Get pre-encoded HTTP/1.1 status line bytes, with caching."""
+    line = _STATUS_LINE_CACHE.get(code)
+    if line is None:
+        phrase = _status_phrase(code)
+        line = f"HTTP/1.1 {code} {phrase}\r\n".encode("latin-1")
+        _STATUS_LINE_CACHE[code] = line
+    return line
+
+
+def _split_path(path):
+    """Fast path/query split — replaces urlparse for request paths."""
+    qmark = path.find("?")
+    if qmark >= 0:
+        return path[:qmark], path[qmark + 1 :]
+    return path, ""
+
+
+_wsgi_executor = concurrent.futures.ThreadPoolExecutor(
+    max_workers=min(128, (os.cpu_count() or 1) * 8 + 16)
+)
+
+
 # ==================== WSGI Server ====================
 
 # Windows does not support Unix domain sockets (AF_UNIX). Use TCP there.
@@ -145,15 +173,15 @@ def _call_wsgi_app(app, environ):
 
 def _build_wsgi_environ(method, path, version, headers_list, raw_headers, body):
     """Build a WSGI environ dict from parsed HTTP request components."""
-    parsed = urlparse(path)
+    path_part, query_string = _split_path(path)
     host_str = raw_headers.get("host", "localhost")
     server_name, server_port = _parse_host_header(host_str)
 
     environ = {
         "REQUEST_METHOD": method,
         "SCRIPT_NAME": "",
-        "PATH_INFO": unquote(parsed.path),
-        "QUERY_STRING": parsed.query or "",
+        "PATH_INFO": unquote(path_part) if "%" in path_part else path_part,
+        "QUERY_STRING": query_string,
         "SERVER_NAME": server_name,
         "SERVER_PORT": str(server_port),
         "SERVER_PROTOCOL": version,
@@ -199,6 +227,7 @@ def _build_wsgi_environ(method, path, version, headers_list, raw_headers, body):
 
 async def _handle_wsgi_connection(reader, writer, app):
     """Handle a single connection for WSGI (supports HTTP/1.1 keep-alive)."""
+    loop = asyncio.get_running_loop()
     try:
         while True:
             result = await _read_http_request(reader)
@@ -210,13 +239,12 @@ async def _handle_wsgi_connection(reader, writer, app):
                 method, path, version, headers_list, raw_headers, body
             )
 
-            loop = asyncio.get_running_loop()
             status_code, resp_headers, resp_body = await loop.run_in_executor(
-                None, _call_wsgi_app, app, environ
+                _wsgi_executor, _call_wsgi_app, app, environ
             )
 
-            phrase = _status_phrase(status_code)
-            writer.write(f"HTTP/1.1 {status_code} {phrase}\r\n".encode("latin-1"))
+            buf = bytearray()
+            buf.extend(_get_status_line(status_code))
 
             has_content_length = False
             for name, value in resp_headers:
@@ -224,16 +252,19 @@ async def _handle_wsgi_connection(reader, writer, app):
                     name = name.decode("latin-1")
                 if isinstance(value, bytes):
                     value = value.decode("latin-1")
-                writer.write(f"{name}: {value}\r\n".encode("latin-1"))
+                buf.extend(f"{name}: {value}\r\n".encode("latin-1"))
                 if name.lower() == "content-length":
                     has_content_length = True
 
             if not has_content_length:
-                writer.write(f"Content-Length: {len(resp_body)}\r\n".encode("latin-1"))
+                buf.extend(b"Content-Length: ")
+                buf.extend(str(len(resp_body)).encode("latin-1"))
+                buf.extend(b"\r\n")
 
-            writer.write(b"\r\n")
+            buf.extend(b"\r\n")
             if resp_body:
-                writer.write(resp_body)
+                buf.extend(resp_body)
+            writer.write(bytes(buf))
             await writer.drain()
 
             connection = raw_headers.get("connection", "")
@@ -389,15 +420,17 @@ async def _read_http_request(reader):
     headers is a list of (name_bytes, value_bytes) for ASGI scope.
     raw_headers is a dict of lowercase-name -> value for internal use.
     """
-    request_line = await reader.readline()
-    if not request_line or request_line == b"\r\n":
+    try:
+        header_data = await reader.readuntil(b"\r\n\r\n")
+    except (asyncio.IncompleteReadError, asyncio.LimitOverrunError):
         return None
 
-    request_str = request_line.decode("latin-1").strip()
-    if not request_str:
+    lines = header_data[:-4].split(b"\r\n")
+    if not lines:
         return None
 
-    parts = request_str.split(" ", 2)
+    request_line = lines[0].decode("latin-1")
+    parts = request_line.split(" ", 2)
     if len(parts) != 3:
         return None
 
@@ -405,19 +438,14 @@ async def _read_http_request(reader):
 
     headers = []
     raw_headers = {}
-    while True:
-        line = await reader.readline()
-        if line in (b"\r\n", b"\n", b""):
-            break
-        decoded = line.decode("latin-1").strip()
-        if ":" not in decoded:
+    for line in lines[1:]:
+        colon = line.find(b":")
+        if colon < 0:
             continue
-        name, value = decoded.split(":", 1)
-        name = name.strip()
-        value = value.strip()
-        name_lower = name.lower()
-        headers.append((name_lower.encode("latin-1"), value.encode("latin-1")))
-        raw_headers[name_lower] = value
+        name = line[:colon].strip().lower()
+        value = line[colon + 1 :].strip()
+        headers.append((name, value))
+        raw_headers[name.decode("latin-1")] = value.decode("latin-1")
 
     body = b""
     content_length = raw_headers.get("content-length")
@@ -477,24 +505,25 @@ async def _handle_asgi_http(writer, app, scope, body):
 
             has_content_length = False
             has_transfer_encoding = False
-            normalized = []
+            buf = bytearray()
+            buf.extend(_get_status_line(status))
             for h_name, h_value in resp_headers:
                 h_name, h_value = _encode_header(h_name, h_value)
-                normalized.append((h_name, h_value))
                 if h_name.lower() == b"content-length":
                     has_content_length = True
                 if h_name.lower() == b"transfer-encoding":
                     has_transfer_encoding = True
+                buf.extend(h_name)
+                buf.extend(b": ")
+                buf.extend(h_value)
+                buf.extend(b"\r\n")
 
             if not has_content_length and not has_transfer_encoding:
                 use_chunked = True
-                normalized.append((b"transfer-encoding", b"chunked"))
+                buf.extend(b"transfer-encoding: chunked\r\n")
 
-            phrase = _status_phrase(status)
-            writer.write(f"HTTP/1.1 {status} {phrase}\r\n".encode("latin-1"))
-            for h_name, h_value in normalized:
-                writer.write(h_name + b": " + h_value + b"\r\n")
-            writer.write(b"\r\n")
+            buf.extend(b"\r\n")
+            writer.write(bytes(buf))
             await writer.drain()
 
         elif msg_type == "http.response.body":
@@ -667,7 +696,7 @@ async def _handle_asgi_connection(reader, writer, app, state):
                 break
 
             method, path, version, headers, raw_headers, body = result
-            parsed = urlparse(path)
+            path_part, query_string = _split_path(path)
 
             is_websocket = (
                 method == "GET"
@@ -690,9 +719,9 @@ async def _handle_asgi_connection(reader, writer, app, state):
                 "asgi": {"version": "3.0", "spec_version": "2.3"},
                 "http_version": version.split("/")[-1] if "/" in version else "1.1",
                 "method": method,
-                "path": unquote(parsed.path),
-                "raw_path": parsed.path.encode("latin-1"),
-                "query_string": (parsed.query or "").encode("latin-1"),
+                "path": unquote(path_part) if "%" in path_part else path_part,
+                "raw_path": path_part.encode("latin-1"),
+                "query_string": query_string.encode("latin-1"),
                 "root_path": "",
                 "scheme": scheme,
                 "headers": headers,
@@ -701,7 +730,7 @@ async def _handle_asgi_connection(reader, writer, app, state):
             }
 
             if state is not None:
-                scope["state"] = copy.deepcopy(state)
+                scope["state"] = dict(state)
 
             if is_websocket:
                 subprotocols_str = raw_headers.get("sec-websocket-protocol", "")
@@ -876,6 +905,13 @@ async def run_asgi_server(app, socket_path, lifespan):
 
 
 def main():
+    try:
+        import uvloop
+
+        asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
+    except ImportError:
+        pass
+
     parser = argparse.ArgumentParser(description="caddy-snake Python server")
     parser.add_argument("--socket", required=True, help="Unix socket path")
     parser.add_argument("--app", required=True, help="Application module:variable")

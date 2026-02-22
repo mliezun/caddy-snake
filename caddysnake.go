@@ -18,6 +18,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -318,6 +319,25 @@ func writeCaddysnakePy() (string, error) {
 	return f.Name(), nil
 }
 
+// proxyBufferPool implements httputil.BufferPool using sync.Pool to reduce GC pressure.
+type proxyBufferPool struct {
+	pool sync.Pool
+}
+
+func (p *proxyBufferPool) Get() []byte {
+	b := p.pool.Get()
+	if b == nil {
+		return make([]byte, 32*1024)
+	}
+	return b.([]byte)
+}
+
+func (p *proxyBufferPool) Put(b []byte) {
+	p.pool.Put(b)
+}
+
+var sharedProxyBufferPool = &proxyBufferPool{}
+
 type PythonWorker struct {
 	Interface  string
 	App        string
@@ -387,7 +407,8 @@ func (w *PythonWorker) Start() error {
 			req.Out.URL.Scheme = "http"
 			req.Out.URL.Host = w.DialAddr
 		},
-		Transport: w.Transport,
+		Transport:  w.Transport,
+		BufferPool: sharedProxyBufferPool,
 	}
 
 	workingDir := w.WorkingDir
