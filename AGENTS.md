@@ -13,6 +13,7 @@ Before committing, always run:
 3. **Integration tests** — at minimum **Flask** and **FastAPI**:
    - `./tests/integration.sh flask 3.13`
    - `./tests/integration.sh fastapi 3.13`
+4. **Embed-app** (optional, requires network): `cd cmd/embed-app && ./build.sh app.zip 3.13 && ./test_embed.sh embed-test`
 
 See [Running tests](#running-tests) for details.
 

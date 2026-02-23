@@ -286,12 +286,16 @@ Make sure the `PY_VERSION` matches the Python version on your target system.
 |--------|----------------------|----------------------|-------------------|---------------|----------|
 | **PyPI** (`pip install caddysnake`) | Yes | At install time | No (CLI only) | `caddysnake` | Quick start, development |
 | **Standalone binary** | No (embedded) | No (self-contained) | Yes | `./caddy python-server` | Production, air-gapped environments |
+| **Standalone app binary** | No (embedded) | No (self-contained) | No (CLI) | `./myapp` | Single-file distribution, edge deployments |
 | **Docker** | No (in container) | At build time | Yes | `caddy python-server` | Containerized deployments |
 | **Build from source** | Yes | At build time | Yes | `./caddy python-server` | Custom builds, macOS, Windows |
+
+See [Apps as Standalone Binaries](embed-app.md) for packaging your app into a single executable.
 
 :::tip
 - Use **PyPI** for the fastest way to get started or for development
 - Use **standalone binaries** for production Linux deployments where you want zero dependencies
+- Use **standalone app binaries** to distribute your app as a single executable (like FrankenPHP)
 - Use **Docker** for containerized environments
 - **Build from source** when you need macOS/Windows support or want to pin specific versions
 :::

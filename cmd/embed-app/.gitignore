@@ -1,0 +1,6 @@
+# Build artifacts (produced by build.sh)
+caddy
+embed-test
+python-standalone.tar.gz
+cpython-*
+*.tar.zst

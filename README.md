@@ -30,6 +30,7 @@ To make it easier to get started you can also grab one of the precompiled binari
 - **ASGI lifespan events** — optional startup/shutdown lifecycle hooks
 - **Static file serving** — built-in static file support via the CLI
 - **Pre-built binaries** — download and run with Python embedded, no compilation required
+- **Standalone app binaries** — package your app + Caddy + Python into a single executable (like FrankenPHP)
 - **Docker images** — ready-to-use images for Python 3.10 through 3.14
 - **Cross-platform** — Linux, macOS, and Windows
 
@@ -100,6 +101,24 @@ Images are published to both registries:
 
 - [Docker Hub](https://hub.docker.com/r/mliezun/caddy-snake)
 - [GitHub Container Registry](https://github.com/mliezun/caddy-snake/pkgs/container/caddy-snake)
+
+### Option 4: Package your app as a standalone binary
+
+Package your Python app, Caddy, and Python into a single executable:
+
+```bash
+# Create app zip (Lambda-style: app + deps at root)
+cd myapp && pip install -r requirements.txt -t package && cd package && zip -r ../app.zip . && cd ..
+zip -g app.zip main.py
+
+# Build standalone binary
+cd caddy-snake/cmd/embed-app
+./build.sh /path/to/myapp/app.zip 3.13 --output myapp
+
+./myapp  # Serves on :9080
+```
+
+See [Apps as Standalone Binaries](https://caddy-snake.readthedocs.io/en/latest/docs/embed-app/) for the full guide.
 
 ---
 
