@@ -317,18 +317,18 @@ Make sure to match the Python version with your target environment.
 
 ## Benchmarks
 
-Here's how it compares to traditional setups using a simple JSON "Hello, World!" endpoint:
+Caddy Snake outperforms traditional reverse proxy setups — **2.4x faster** than Flask+Gunicorn and **1.6x faster** than FastAPI+Uvicorn:
 
 ![Benchmark Chart](benchmarks/benchmark_chart.svg)
 
 | Configuration | Requests/sec | Avg Latency (ms) | P99 Latency (ms) |
 |---|---|---|---|
-| Flask + Gunicorn + Caddy | 1,917 | 52.00 | 62.82 |
-| Flask + Caddy Snake | 1,448 | 68.81 | 76.58 |
-| FastAPI + Uvicorn + Caddy | 3,701 | 26.96 | 261.02 |
-| FastAPI + Caddy Snake | 3,076 | 32.45 | 59.76 |
+| Flask + Gunicorn + Caddy | 1,592 | 63.81 | 89.18 |
+| **Flask + Caddy Snake** | **3,782** | **26.42** | **41.46** |
+| FastAPI + Uvicorn + Caddy | 3,537 | 28.20 | 282.19 |
+| **FastAPI + Caddy Snake** | **5,730** | **17.44** | **31.11** |
 
-> Benchmarked on Scaleway POP2-2C-8G (linux/amd64) with [hey](https://github.com/rakyll/hey) — 100 concurrent connections, 10s duration, Python 3.13, Go 1.26, process workers. See [benchmarks/](benchmarks/) for methodology and how to reproduce.
+> Benchmarked on Scaleway POP2-2C-8G (linux/amd64) with [hey](https://github.com/rakyll/hey) — 100 concurrent connections, 10s duration, 10 runs averaged, Python 3.13, Go 1.26, process workers. See [benchmarks/](benchmarks/) for methodology and how to reproduce.
 
 ---
 

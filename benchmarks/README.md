@@ -35,7 +35,7 @@ Results are saved to `benchmarks/results.json` and a chart is generated at `benc
 
 | Configuration | Requests/sec | Avg Latency (ms) | P99 Latency (ms) |
 |---|---|---|---|
-| Flask + Gunicorn + Caddy | 1,917 | 52.00 | 62.82 |
-| Flask + Caddy Snake | 1,448 | 68.81 | 76.58 |
-| FastAPI + Uvicorn + Caddy | 3,701 | 26.96 | 261.02 |
-| FastAPI + Caddy Snake | 3,076 | 32.45 | 59.76 |
+| Flask + Gunicorn + Caddy | 1,592 | 63.81 | 89.18 |
+| **Flask + Caddy Snake** | **3,782** | **26.42** | **41.46** |
+| FastAPI + Uvicorn + Caddy | 3,537 | 28.20 | 282.19 |
+| **FastAPI + Caddy Snake** | **5,730** | **17.44** | **31.11** |
