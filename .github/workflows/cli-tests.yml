@@ -23,6 +23,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
       - name: Install Xcaddy
         run: go install github.com/caddyserver/xcaddy/cmd/xcaddy@latest
       - name: Build the CLI binary
@@ -30,9 +32,14 @@ jobs:
         run: |
           CGO_ENABLED=0 xcaddy build --with github.com/mliezun/caddy-snake=../..
           mv caddy caddysnake-cli
-      - name: Test python-server --help
+      - name: Build and install the Python package
         working-directory: cmd/cli
-        run: ./caddysnake-cli python-server --help
+        run: |
+          pip install maturin
+          maturin build --release
+          pip install target/wheels/*.whl
+      - name: Test caddysnake --help
+        run: caddysnake --help
       - name: Test WSGI server
         run: |
           TMPDIR=$(mktemp -d)
@@ -42,7 +49,7 @@ jobs:
               return [b'Hello from WSGI CLI']
           EOF
           cd "$TMPDIR"
-          $GITHUB_WORKSPACE/cmd/cli/caddysnake-cli python-server -t wsgi -a app:app -l :19080 --workers 1 > caddy.log 2>&1 &
+          caddysnake -t wsgi -a app:app -l :19080 -w 1 > caddy.log 2>&1 &
           CLI_PID=$!
           timeout 60 bash -c 'while ! grep -q "finished cleaning storage units" caddy.log; do sleep 1; done'
           RESPONSE=$(curl -sf http://localhost:19080/)
@@ -63,7 +70,7 @@ jobs:
               await send({"type": "http.response.body", "body": b"Hello from ASGI CLI"})
           EOF
           cd "$TMPDIR"
-          $GITHUB_WORKSPACE/cmd/cli/caddysnake-cli python-server -t asgi -a app:app -l :19081 --workers 1 > caddy.log 2>&1 &
+          caddysnake -t asgi -a app:app -l :19081 -w 1 > caddy.log 2>&1 &
           CLI_PID=$!
           timeout 60 bash -c 'while ! grep -q "finished cleaning storage units" caddy.log; do sleep 1; done'
           RESPONSE=$(curl -sf http://localhost:19081/)
@@ -75,8 +82,3 @@ jobs:
             exit 1
           fi
           echo "ASGI test passed"
-      - name: Test Python CLI wrapper
-        working-directory: cmd/cli
-        run: |
-          pip install click
-          python caddysnake_cli.py --help
