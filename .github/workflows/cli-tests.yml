@@ -1,0 +1,82 @@
+---
+name: CLI Tests
+on:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+jobs:
+  tests:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+          cache: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Install Xcaddy
+        run: go install github.com/caddyserver/xcaddy/cmd/xcaddy@latest
+      - name: Build the CLI binary
+        working-directory: cmd/cli
+        run: |
+          CGO_ENABLED=0 xcaddy build --with github.com/mliezun/caddy-snake=../..
+          mv caddy caddysnake-cli
+      - name: Test python-server --help
+        working-directory: cmd/cli
+        run: ./caddysnake-cli python-server --help
+      - name: Test WSGI server
+        run: |
+          TMPDIR=$(mktemp -d)
+          cat > "$TMPDIR/app.py" << 'EOF'
+          def app(environ, start_response):
+              start_response('200 OK', [('Content-Type', 'text/plain')])
+              return [b'Hello from WSGI CLI']
+          EOF
+          cd "$TMPDIR"
+          $GITHUB_WORKSPACE/cmd/cli/caddysnake-cli python-server -t wsgi -a app:app -l :19080 --workers 1 > caddy.log 2>&1 &
+          CLI_PID=$!
+          timeout 60 bash -c 'while ! grep -q "finished cleaning storage units" caddy.log; do sleep 1; done'
+          RESPONSE=$(curl -sf http://localhost:19080/)
+          kill $CLI_PID 2>/dev/null || true
+          wait $CLI_PID 2>/dev/null || true
+          if [ "$RESPONSE" != "Hello from WSGI CLI" ]; then
+            echo "WSGI test failed: expected 'Hello from WSGI CLI', got '$RESPONSE'"
+            cat caddy.log
+            exit 1
+          fi
+          echo "WSGI test passed"
+      - name: Test ASGI server
+        run: |
+          TMPDIR=$(mktemp -d)
+          cat > "$TMPDIR/app.py" << 'EOF'
+          async def app(scope, receive, send):
+              await send({"type": "http.response.start", "status": 200, "headers": [[b"content-type", b"text/plain"]]})
+              await send({"type": "http.response.body", "body": b"Hello from ASGI CLI"})
+          EOF
+          cd "$TMPDIR"
+          $GITHUB_WORKSPACE/cmd/cli/caddysnake-cli python-server -t asgi -a app:app -l :19081 --workers 1 > caddy.log 2>&1 &
+          CLI_PID=$!
+          timeout 60 bash -c 'while ! grep -q "finished cleaning storage units" caddy.log; do sleep 1; done'
+          RESPONSE=$(curl -sf http://localhost:19081/)
+          kill $CLI_PID 2>/dev/null || true
+          wait $CLI_PID 2>/dev/null || true
+          if [ "$RESPONSE" != "Hello from ASGI CLI" ]; then
+            echo "ASGI test failed: expected 'Hello from ASGI CLI', got '$RESPONSE'"
+            cat caddy.log
+            exit 1
+          fi
+          echo "ASGI test passed"
+      - name: Test Python CLI wrapper
+        working-directory: cmd/cli
+        run: |
+          pip install click
+          python caddysnake_cli.py --help
