@@ -170,13 +170,11 @@ func (a *AutoreloadableApp) reload() {
 
 	a.logger.Info("python app reloaded successfully")
 
-	// Cleanup old app OUTSIDE lock with grace period for in-flight requests
-	go func() {
-		time.Sleep(5 * time.Second)
-		if err := oldApp.Cleanup(); err != nil {
-			a.logger.Error("failed to cleanup old python app during reload", zap.Error(err))
-		}
-	}()
+	// Cleanup old app OUTSIDE lock. The write lock above guarantees all
+	// in-flight requests using oldApp have completed before the swap.
+	if err := oldApp.Cleanup(); err != nil {
+		a.logger.Error("failed to cleanup old python app during reload", zap.Error(err))
+	}
 }
 
 // HandleRequest forwards the request to the underlying app while holding a read

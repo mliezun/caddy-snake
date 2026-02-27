@@ -138,7 +138,9 @@ _DRAIN_HIGH_WATER = 64 * 1024
 
 MAX_REQUEST_LINE = 8192
 MAX_HEADERS_SIZE = 64 * 1024  # 64 KB total header block
-MAX_BODY_SIZE = 10 * 1024 * 1024  # 10 MB
+MAX_BODY_SIZE = (
+    128 * 1024 * 1024
+)  # 128 MB (internal IPC; external limits enforced by Caddy)
 MAX_HEADER_COUNT = 100
 MAX_WS_FRAME_SIZE = 16 * 1024 * 1024  # 16 MB
 
