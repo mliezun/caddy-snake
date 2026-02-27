@@ -37,24 +37,28 @@ type DynamicApp struct {
 	logger        *zap.Logger
 
 	// Autoreload fields
-	autoreload bool
-	watcher    *fsnotify.Watcher
-	dirToKeys  map[string][]string // abs working dir -> cache keys that use it
-	stopCh     chan struct{}
+	autoreload          bool
+	watcher             *fsnotify.Watcher
+	dirToKeys           map[string][]string // abs working dir -> cache keys that use it
+	stopCh              chan struct{}
+	exitOnReloadFailure func(code int) // if set and autoreload, process exits when app creation fails
 }
 
 // NewDynamicApp creates a DynamicApp that resolves placeholders from
 // modulePattern, workingDir, and venvPath at request time and lazily creates
 // Python app instances via the supplied factory function.
-func NewDynamicApp(modulePattern, workingDir, venvPath string, factory appFactory, logger *zap.Logger, autoreload bool) (*DynamicApp, error) {
+// When autoreload is true, if exitOnReloadFailure is non-nil it is called with
+// code 1 when app creation fails (e.g. app deleted), so the process can terminate.
+func NewDynamicApp(modulePattern, workingDir, venvPath string, factory appFactory, logger *zap.Logger, autoreload bool, exitOnReloadFailure func(code int)) (*DynamicApp, error) {
 	d := &DynamicApp{
-		apps:          make(map[string]AppServer),
-		modulePattern: modulePattern,
-		workingDir:    workingDir,
-		venvPath:      venvPath,
-		factory:       factory,
-		logger:        logger,
-		autoreload:    autoreload,
+		apps:                 make(map[string]AppServer),
+		modulePattern:        modulePattern,
+		workingDir:           workingDir,
+		venvPath:             venvPath,
+		factory:              factory,
+		logger:               logger,
+		autoreload:           autoreload,
+		exitOnReloadFailure:  exitOnReloadFailure,
 	}
 
 	if autoreload {
@@ -267,6 +271,14 @@ func (d *DynamicApp) HandleRequest(w http.ResponseWriter, r *http.Request) error
 	key, module, dir, venv := d.resolve(r)
 	app, err := d.getOrCreateApp(key, module, dir, venv)
 	if err != nil {
+		if d.autoreload && d.exitOnReloadFailure != nil {
+			d.logger.Error("failed to load python app (autoreload); terminating",
+				zap.String("module", module),
+				zap.String("working_dir", dir),
+				zap.Error(err),
+			)
+			d.exitOnReloadFailure(1)
+		}
 		return err
 	}
 	return app.HandleRequest(w, r)

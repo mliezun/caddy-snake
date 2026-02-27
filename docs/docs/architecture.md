@@ -65,6 +65,7 @@ The autoreload feature provides hot-reloading during development without restart
    - The new app replaces the old one atomically
 5. A read/write lock ensures in-flight requests complete before the swap
 6. If the reload fails (e.g. syntax error in Python code), all subsequent requests return HTTP 500 until the next successful reload
+7. If the app cannot be recreated at all (e.g. the working directory was deleted), the process terminates with exit code 1 to avoid silently serving errors indefinitely
 
 ### Thread safety
 
@@ -113,6 +114,7 @@ When `autoreload` is enabled on a dynamic app, each resolved working directory g
 - When a `.py` file changes, only the apps for that directory are evicted
 - Old app instances are cleaned up after a 10-second grace period for in-flight requests
 - The app is lazily reimported on the next request
+- If the reimport fails on the next request, the process terminates (when `exitOnReloadFailure` is configured)
 
 ---
 

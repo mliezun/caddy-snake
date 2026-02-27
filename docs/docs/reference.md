@@ -150,7 +150,8 @@ python {
 - The Python module cache (`sys.modules`) is invalidated for all modules in the working directory before reimporting
 - The old app is cleaned up and a new one is created seamlessly
 - In-flight requests complete before the swap happens (thread-safe with read/write locks)
-- If the reload fails (e.g. syntax error), all requests return HTTP 500 until the next successful reload
+- If the reload fails (e.g. syntax error in Python code), the app degrades to returning HTTP 500 for all requests until the next file change triggers a successful reload
+- If the app cannot be loaded at all (e.g. app directory deleted), the Caddy process terminates to avoid silently serving errors
 
 ---
 

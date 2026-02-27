@@ -179,7 +179,7 @@ func (f *CaddySnake) Provision(ctx caddy.Context) error {
 			}
 		}
 
-		f.app, err = NewAutoreloadableApp(f.app, absDir, factory, f.logger)
+		f.app, err = NewAutoreloadableApp(f.app, absDir, factory, f.logger, func(code int) { os.Exit(code) })
 		if err != nil {
 			return fmt.Errorf("autoreload: %w", err)
 		}
@@ -201,7 +201,11 @@ func (f *CaddySnake) provisionDynamic(workers int) error {
 			return NewPythonWorkerGroup("wsgi", module, dir, venv, lifespan, workers, pythonBin)
 		}
 		var err error
-		f.app, err = NewDynamicApp(f.ModuleWsgi, f.WorkingDir, f.VenvPath, factory, f.logger, autoreload)
+		var exitOnFailure func(int)
+		if autoreload {
+			exitOnFailure = func(code int) { os.Exit(code) }
+		}
+		f.app, err = NewDynamicApp(f.ModuleWsgi, f.WorkingDir, f.VenvPath, factory, f.logger, autoreload, exitOnFailure)
 		if err != nil {
 			return err
 		}
@@ -220,7 +224,11 @@ func (f *CaddySnake) provisionDynamic(workers int) error {
 			return NewPythonWorkerGroup("asgi", module, dir, venv, lifespan, workers, pythonBin)
 		}
 		var err error
-		f.app, err = NewDynamicApp(f.ModuleAsgi, f.WorkingDir, f.VenvPath, factory, f.logger, autoreload)
+		var exitOnFailure func(int)
+		if autoreload {
+			exitOnFailure = func(code int) { os.Exit(code) }
+		}
+		f.app, err = NewDynamicApp(f.ModuleAsgi, f.WorkingDir, f.VenvPath, factory, f.logger, autoreload, exitOnFailure)
 		if err != nil {
 			return err
 		}

@@ -110,6 +110,7 @@ func TestDynamicAppResolveWithoutReplacer(t *testing.T) {
 		},
 		zap.NewNop(),
 		false,
+		nil,
 	)
 
 	r := &http.Request{}
@@ -143,6 +144,7 @@ func TestDynamicAppGetOrCreate(t *testing.T) {
 		},
 		zap.NewNop(),
 		false,
+		nil,
 	)
 
 	app1, err := d.getOrCreateApp("key1", "main:app", "/home/test", "")
@@ -184,6 +186,7 @@ func TestDynamicAppCleanup(t *testing.T) {
 		},
 		zap.NewNop(),
 		false,
+		nil,
 	)
 
 	_, _ = d.getOrCreateApp("key1", "main:app", "/home/a", "")
@@ -776,6 +779,7 @@ func TestDynamicAppGetOrCreate_FactoryError(t *testing.T) {
 		},
 		zap.NewNop(),
 		false,
+		nil,
 	)
 
 	app, err := d.getOrCreateApp("key1", "main:app", "/home/test", "")
@@ -801,6 +805,7 @@ func TestDynamicAppCleanup_WithErrors(t *testing.T) {
 		},
 		zap.NewNop(),
 		false,
+		nil,
 	)
 
 	_, _ = d.getOrCreateApp("key1", "main:app", "/home/a", "")
@@ -831,6 +836,7 @@ func TestDynamicAppHandleRequest(t *testing.T) {
 		},
 		zap.NewNop(),
 		false,
+		nil,
 	)
 
 	w := &mockResponseWriter{headers: make(http.Header)}
@@ -857,6 +863,7 @@ func TestDynamicAppHandleRequest_FactoryError(t *testing.T) {
 		},
 		zap.NewNop(),
 		false,
+		nil,
 	)
 
 	w := &mockResponseWriter{headers: make(http.Header)}
@@ -869,6 +876,41 @@ func TestDynamicAppHandleRequest_FactoryError(t *testing.T) {
 	}
 }
 
+func TestDynamicAppHandleRequest_AutoreloadFactoryError_TerminatesWhenExitFuncSet(t *testing.T) {
+	factoryErr := errors.New("app deleted")
+	var exitCode int
+	exitCalled := make(chan struct{})
+	exitFunc := func(code int) {
+		exitCode = code
+		close(exitCalled)
+	}
+
+	d, _ := NewDynamicApp("main:app", "/home/test", "",
+		func(module, dir, venv string) (AppServer, error) {
+			return nil, factoryErr
+		},
+		zap.NewNop(),
+		true,  // autoreload
+		exitFunc,
+	)
+	defer d.Cleanup()
+
+	w := &mockResponseWriter{headers: make(http.Header)}
+	r := &http.Request{}
+	r = r.WithContext(context.Background())
+
+	_ = d.HandleRequest(w, r)
+
+	select {
+	case <-exitCalled:
+		if exitCode != 1 {
+			t.Errorf("expected exit code 1, got %d", exitCode)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("exitOnReloadFailure was not called when autoreload enabled and factory failed")
+	}
+}
+
 func TestDynamicAppResolveWithReplacer(t *testing.T) {
 	d, _ := NewDynamicApp("main:app", "/home/{custom.host}", "",
 		func(module, dir, venv string) (AppServer, error) {
@@ -876,6 +918,7 @@ func TestDynamicAppResolveWithReplacer(t *testing.T) {
 		},
 		zap.NewNop(),
 		false,
+		nil,
 	)
 
 	repl := caddy.NewReplacer()
@@ -907,6 +950,7 @@ func TestDynamicAppResolveMultiplePlaceholders(t *testing.T) {
 		},
 		zap.NewNop(),
 		false,
+		nil,
 	)
 
 	repl := caddy.NewReplacer()
@@ -944,6 +988,7 @@ func TestDynamicAppConcurrentAccess(t *testing.T) {
 		},
 		zap.NewNop(),
 		false,
+		nil,
 	)
 
 	const goroutines = 50
@@ -982,6 +1027,7 @@ func TestDynamicAppConcurrentDifferentKeys(t *testing.T) {
 		},
 		zap.NewNop(),
 		false,
+		nil,
 	)
 
 	const goroutines = 10
@@ -1190,6 +1236,7 @@ func TestDynamicAppGetOrCreate_DoubleCheckPath(t *testing.T) {
 		},
 		zap.NewNop(),
 		false,
+		nil,
 	)
 
 	const goroutines = 50
@@ -1225,6 +1272,7 @@ func TestDynamicAppCleanup_EmptyApps(t *testing.T) {
 		},
 		zap.NewNop(),
 		false,
+		nil,
 	)
 
 	err := d.Cleanup()
@@ -1520,6 +1568,7 @@ func TestDynamicAppResolveWithNilReplacer(t *testing.T) {
 		},
 		zap.NewNop(),
 		false,
+		nil,
 	)
 
 	ctx := context.WithValue(context.Background(), caddy.ReplacerCtxKey, (*caddy.Replacer)(nil))

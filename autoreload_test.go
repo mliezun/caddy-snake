@@ -1,10 +1,14 @@
 package caddysnake
 
 import (
+	"errors"
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/fsnotify/fsnotify"
 	"go.uber.org/zap"
@@ -21,7 +25,7 @@ func TestAutoreloadableApp_HandleRequest(t *testing.T) {
 	}
 
 	tempDir := t.TempDir()
-	a, err := NewAutoreloadableApp(mockApp, tempDir, func() (AppServer, error) { return mockApp, nil }, zap.NewNop())
+	a, err := NewAutoreloadableApp(mockApp, tempDir, func() (AppServer, error) { return mockApp, nil }, zap.NewNop(), nil)
 	if err != nil {
 		t.Fatalf("NewAutoreloadableApp: %v", err)
 	}
@@ -43,7 +47,7 @@ func TestAutoreloadableApp_Cleanup(t *testing.T) {
 	mockApp := &mockAppServer{onCleanup: func() { cleaned = true }}
 
 	tempDir := t.TempDir()
-	a, err := NewAutoreloadableApp(mockApp, tempDir, func() (AppServer, error) { return mockApp, nil }, zap.NewNop())
+	a, err := NewAutoreloadableApp(mockApp, tempDir, func() (AppServer, error) { return mockApp, nil }, zap.NewNop(), nil)
 	if err != nil {
 		t.Fatalf("NewAutoreloadableApp: %v", err)
 	}
@@ -108,4 +112,157 @@ func TestHandleNewDirEvent_CreateFile(t *testing.T) {
 	ev := fsnotify.Event{Name: f, Op: fsnotify.Create}
 	handleNewDirEvent(ev, watcher)
 	// No panic - file is not a dir so it returns early
+}
+
+func TestAutoreloadableApp_ReloadFailure_TerminatesWhenExitFuncSet(t *testing.T) {
+	var exitCode int
+	exitCalled := make(chan struct{})
+	exitFunc := func(code int) {
+		exitCode = code
+		close(exitCalled)
+	}
+
+	mockApp := &mockAppServer{}
+	reloadErr := errors.New("app deleted")
+	a, err := NewAutoreloadableApp(mockApp, t.TempDir(), func() (AppServer, error) {
+		return nil, reloadErr
+	}, zap.NewNop(), exitFunc)
+	if err != nil {
+		t.Fatalf("NewAutoreloadableApp: %v", err)
+	}
+	defer a.Cleanup()
+
+	// Trigger reload by calling reload() directly (simulating file change after debounce)
+	a.reload()
+
+	select {
+	case <-exitCalled:
+		if exitCode != 1 {
+			t.Errorf("expected exit code 1, got %d", exitCode)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("exitOnReloadFailure was not called after reload failure")
+	}
+}
+
+func TestErrorApp_Returns500(t *testing.T) {
+	appErr := errors.New("syntax error in app.py")
+	ea := &errorApp{err: appErr}
+
+	w := &mockResponseWriter{headers: make(http.Header)}
+	r := &http.Request{}
+	err := ea.HandleRequest(w, r)
+	if err != nil {
+		t.Errorf("expected nil error, got: %v", err)
+	}
+	if w.statusCode != http.StatusInternalServerError {
+		t.Errorf("expected status 500, got %d", w.statusCode)
+	}
+	if !strings.Contains(w.body, "syntax error in app.py") {
+		t.Errorf("expected error message in body, got: %s", w.body)
+	}
+}
+
+func TestErrorApp_Cleanup(t *testing.T) {
+	ea := &errorApp{err: errors.New("test")}
+	if err := ea.Cleanup(); err != nil {
+		t.Errorf("expected nil error from Cleanup, got: %v", err)
+	}
+}
+
+func TestAutoreloadableApp_ReloadFailure_FallsBackToErrorApp(t *testing.T) {
+	mockApp := &mockAppServer{}
+	reloadErr := errors.New("syntax error")
+	a, err := NewAutoreloadableApp(mockApp, t.TempDir(), func() (AppServer, error) {
+		return nil, reloadErr
+	}, zap.NewNop(), nil) // nil exitOnReloadFailure
+	if err != nil {
+		t.Fatalf("NewAutoreloadableApp: %v", err)
+	}
+	defer a.Cleanup()
+
+	a.reload()
+
+	// After failed reload, requests should get 500
+	w := &mockResponseWriter{headers: make(http.Header)}
+	r := &http.Request{}
+	err = a.HandleRequest(w, r)
+	if err != nil {
+		t.Errorf("HandleRequest: %v", err)
+	}
+	if w.statusCode != http.StatusInternalServerError {
+		t.Errorf("expected status 500, got %d", w.statusCode)
+	}
+}
+
+func TestAutoreloadableApp_ReloadRecovery(t *testing.T) {
+	mockApp := &mockAppServer{
+		onHandleRequest: func(w http.ResponseWriter, r *http.Request) error {
+			w.WriteHeader(200)
+			w.Write([]byte("recovered"))
+			return nil
+		},
+	}
+	failFirst := true
+	a, err := NewAutoreloadableApp(&mockAppServer{}, t.TempDir(), func() (AppServer, error) {
+		if failFirst {
+			failFirst = false
+			return nil, errors.New("temporary failure")
+		}
+		return mockApp, nil
+	}, zap.NewNop(), nil)
+	if err != nil {
+		t.Fatalf("NewAutoreloadableApp: %v", err)
+	}
+	defer a.Cleanup()
+
+	// First reload fails
+	a.reload()
+	w := &mockResponseWriter{headers: make(http.Header)}
+	a.HandleRequest(w, &http.Request{})
+	if w.statusCode != http.StatusInternalServerError {
+		t.Errorf("expected 500 after failed reload, got %d", w.statusCode)
+	}
+
+	// Second reload succeeds (developer fixed the error)
+	a.reload()
+	w2 := &mockResponseWriter{headers: make(http.Header)}
+	a.HandleRequest(w2, &http.Request{})
+	if w2.statusCode != 200 {
+		t.Errorf("expected 200 after recovery, got %d", w2.statusCode)
+	}
+}
+
+func TestAutoreloadableApp_FileChangeTriggersReload(t *testing.T) {
+	reloadCalled := make(chan struct{}, 1)
+	var reloadCount int32
+
+	mockApp := &mockAppServer{}
+	tempDir := t.TempDir()
+
+	a, err := NewAutoreloadableApp(mockApp, tempDir, func() (AppServer, error) {
+		atomic.AddInt32(&reloadCount, 1)
+		select {
+		case reloadCalled <- struct{}{}:
+		default:
+		}
+		return mockApp, nil
+	}, zap.NewNop(), nil)
+	if err != nil {
+		t.Fatalf("NewAutoreloadableApp: %v", err)
+	}
+	defer a.Cleanup()
+
+	// Write a .py file to trigger the watcher
+	pyFile := filepath.Join(tempDir, "test_trigger.py")
+	if err := os.WriteFile(pyFile, []byte("x = 1"), 0644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	select {
+	case <-reloadCalled:
+		// reload was triggered by file change
+	case <-time.After(5 * time.Second):
+		t.Fatal("expected reload to be triggered by .py file change")
+	}
 }

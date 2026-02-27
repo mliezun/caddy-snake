@@ -58,23 +58,27 @@ func handleNewDirEvent(event fsnotify.Event, watcher *fsnotify.Watcher) {
 // files in the working directory change. It watches for .py file modifications
 // and reloads the app after a debounce period to group rapid changes.
 type AutoreloadableApp struct {
-	mu         sync.RWMutex
-	app        AppServer
-	factory    func() (AppServer, error)
-	watcher    *fsnotify.Watcher
-	stopCh     chan struct{}
-	logger     *zap.Logger
-	workingDir string
+	mu                   sync.RWMutex
+	app                  AppServer
+	factory              func() (AppServer, error)
+	watcher              *fsnotify.Watcher
+	stopCh               chan struct{}
+	logger               *zap.Logger
+	workingDir           string
+	exitOnReloadFailure   func(code int) // if set, process exits on reload failure instead of serving 500
 }
 
 // NewAutoreloadableApp creates an AutoreloadableApp that wraps the given app and
 // starts a filesystem watcher on the working directory. When any .py file changes,
 // the app is reloaded after a 500ms debounce window.
+// If exitOnReloadFailure is non-nil, it is called with code 1 when a reload fails
+// (e.g. app deleted), so the process can terminate and stop serving requests.
 func NewAutoreloadableApp(
 	app AppServer,
 	workingDir string,
 	factory func() (AppServer, error),
 	logger *zap.Logger,
+	exitOnReloadFailure func(code int),
 ) (*AutoreloadableApp, error) {
 	watcher, err := fsnotify.NewWatcher()
 	if err != nil {
@@ -82,12 +86,13 @@ func NewAutoreloadableApp(
 	}
 
 	a := &AutoreloadableApp{
-		app:        app,
-		factory:    factory,
-		watcher:    watcher,
-		stopCh:     make(chan struct{}),
-		logger:     logger,
-		workingDir: workingDir,
+		app:                 app,
+		factory:             factory,
+		watcher:             watcher,
+		stopCh:              make(chan struct{}),
+		logger:              logger,
+		workingDir:          workingDir,
+		exitOnReloadFailure: exitOnReloadFailure,
 	}
 
 	watchDirRecursive(watcher, workingDir, logger)
@@ -153,9 +158,12 @@ func (a *AutoreloadableApp) reload() {
 
 	newApp, err := a.factory()
 	if err != nil {
-		a.logger.Error("failed to reload python app, requests will return 500",
+		a.logger.Error("failed to reload python app",
 			zap.Error(err),
 		)
+		if a.exitOnReloadFailure != nil {
+			a.exitOnReloadFailure(1)
+		}
 		a.app = &errorApp{err: err}
 		return
 	}
@@ -176,7 +184,10 @@ func (a *AutoreloadableApp) HandleRequest(w http.ResponseWriter, r *http.Request
 func (a *AutoreloadableApp) Cleanup() error {
 	close(a.stopCh)
 	a.watcher.Close()
-	return a.app.Cleanup()
+	a.mu.RLock()
+	app := a.app
+	a.mu.RUnlock()
+	return app.Cleanup()
 }
 
 // errorApp is a stub AppServer returned when a reload fails.
