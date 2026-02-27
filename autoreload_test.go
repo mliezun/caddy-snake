@@ -5,7 +5,6 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -145,7 +144,7 @@ func TestAutoreloadableApp_ReloadFailure_TerminatesWhenExitFuncSet(t *testing.T)
 	}
 }
 
-func TestErrorApp_Returns500(t *testing.T) {
+func TestErrorApp_Returns503(t *testing.T) {
 	appErr := errors.New("syntax error in app.py")
 	ea := &errorApp{err: appErr}
 
@@ -155,11 +154,11 @@ func TestErrorApp_Returns500(t *testing.T) {
 	if err != nil {
 		t.Errorf("expected nil error, got: %v", err)
 	}
-	if w.statusCode != http.StatusInternalServerError {
-		t.Errorf("expected status 500, got %d", w.statusCode)
+	if w.statusCode != http.StatusServiceUnavailable {
+		t.Errorf("expected status 503, got %d", w.statusCode)
 	}
-	if !strings.Contains(w.body, "syntax error in app.py") {
-		t.Errorf("expected error message in body, got: %s", w.body)
+	if w.body != "Service temporarily unavailable" {
+		t.Errorf("expected generic unavailable message, got: %s", w.body)
 	}
 }
 
@@ -183,15 +182,15 @@ func TestAutoreloadableApp_ReloadFailure_FallsBackToErrorApp(t *testing.T) {
 
 	a.reload()
 
-	// After failed reload, requests should get 500
+	// After failed reload, requests should get 503
 	w := &mockResponseWriter{headers: make(http.Header)}
 	r := &http.Request{}
 	err = a.HandleRequest(w, r)
 	if err != nil {
 		t.Errorf("HandleRequest: %v", err)
 	}
-	if w.statusCode != http.StatusInternalServerError {
-		t.Errorf("expected status 500, got %d", w.statusCode)
+	if w.statusCode != http.StatusServiceUnavailable {
+		t.Errorf("expected status 503, got %d", w.statusCode)
 	}
 }
 
@@ -220,8 +219,8 @@ func TestAutoreloadableApp_ReloadRecovery(t *testing.T) {
 	a.reload()
 	w := &mockResponseWriter{headers: make(http.Header)}
 	a.HandleRequest(w, &http.Request{})
-	if w.statusCode != http.StatusInternalServerError {
-		t.Errorf("expected 500 after failed reload, got %d", w.statusCode)
+	if w.statusCode != http.StatusServiceUnavailable {
+		t.Errorf("expected 503 after failed reload, got %d", w.statusCode)
 	}
 
 	// Second reload succeeds (developer fixed the error)

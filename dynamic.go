@@ -2,9 +2,11 @@ package caddysnake
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -13,6 +15,33 @@ import (
 	"github.com/fsnotify/fsnotify"
 	"go.uber.org/zap"
 )
+
+var validModulePattern = regexp.MustCompile(`^[a-zA-Z_][\w.]*:[a-zA-Z_]\w*$`)
+
+func validateResolvedValues(module, dir, venv string) error {
+	if !validModulePattern.MatchString(module) {
+		return fmt.Errorf("invalid module name: %q", module)
+	}
+	if dir != "" {
+		absDir, err := filepath.Abs(dir)
+		if err != nil {
+			return fmt.Errorf("invalid working directory: %w", err)
+		}
+		if strings.Contains(absDir, "..") {
+			return fmt.Errorf("working directory contains path traversal: %q", dir)
+		}
+	}
+	if venv != "" {
+		absVenv, err := filepath.Abs(venv)
+		if err != nil {
+			return fmt.Errorf("invalid venv path: %w", err)
+		}
+		if strings.Contains(absVenv, "..") {
+			return fmt.Errorf("venv path contains path traversal: %q", venv)
+		}
+	}
+	return nil
+}
 
 // containsPlaceholder checks if a string contains Caddy placeholders (e.g. {host.labels.0}).
 func containsPlaceholder(s string) bool {
@@ -96,6 +125,10 @@ func (d *DynamicApp) resolve(r *http.Request) (key, module, dir, venv string) {
 // getOrCreateApp returns an existing app for the given key, or creates one
 // using the factory if it doesn't exist yet.
 func (d *DynamicApp) getOrCreateApp(key, module, dir, venv string) (AppServer, error) {
+	if err := validateResolvedValues(module, dir, venv); err != nil {
+		return nil, err
+	}
+
 	d.mu.RLock()
 	app, ok := d.apps[key]
 	d.mu.RUnlock()

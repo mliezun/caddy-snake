@@ -91,7 +91,10 @@ def _parse_host_header(host_str, default_port=80):
             host = host_str[1:bracket_end]
             rest = host_str[bracket_end + 1 :]
             if rest.startswith(":"):
-                return host, int(rest[1:])
+                try:
+                    return host, int(rest[1:])
+                except ValueError:
+                    return host, default_port
             return host, default_port
     if ":" in host_str:
         parts = host_str.rsplit(":", 1)
@@ -132,6 +135,12 @@ _wsgi_executor = concurrent.futures.ThreadPoolExecutor(
 _ASGI_VERSION = {"version": "3.0", "spec_version": "2.3"}
 
 _DRAIN_HIGH_WATER = 64 * 1024
+
+MAX_REQUEST_LINE = 8192
+MAX_HEADERS_SIZE = 64 * 1024  # 64 KB total header block
+MAX_BODY_SIZE = 10 * 1024 * 1024  # 10 MB
+MAX_HEADER_COUNT = 100
+MAX_WS_FRAME_SIZE = 16 * 1024 * 1024  # 16 MB
 
 
 # ==================== WSGI Server ====================
@@ -385,6 +394,9 @@ async def ws_read_frame(reader):
         data = await reader.readexactly(8)
         payload_len = struct.unpack("!Q", data)[0]
 
+    if payload_len > MAX_WS_FRAME_SIZE:
+        raise ValueError(f"WebSocket frame too large: {payload_len}")
+
     mask_key = None
     if masked:
         mask_key = await reader.readexactly(4)
@@ -433,8 +445,14 @@ async def _read_http_request(reader):
     except (asyncio.IncompleteReadError, asyncio.LimitOverrunError):
         return None
 
+    if len(header_data) > MAX_HEADERS_SIZE:
+        return None
+
     lines = header_data[:-4].split(b"\r\n")
     if not lines:
+        return None
+
+    if len(lines[0]) > MAX_REQUEST_LINE:
         return None
 
     request_line = lines[0].decode("latin-1")
@@ -443,6 +461,9 @@ async def _read_http_request(reader):
         return None
 
     method, path, version = parts
+
+    if len(lines) - 1 > MAX_HEADER_COUNT:
+        return None
 
     headers = []
     raw_headers = {}
@@ -459,8 +480,18 @@ async def _read_http_request(reader):
     content_length = raw_headers.get("content-length")
     transfer_encoding = raw_headers.get("transfer-encoding", "")
 
+    # Reject ambiguous CL+TE requests (RFC 7230 §3.3.3)
+    if content_length and transfer_encoding:
+        return None
+
     if content_length:
-        body = await reader.readexactly(int(content_length))
+        try:
+            cl = int(content_length)
+        except ValueError:
+            return None
+        if cl < 0 or cl > MAX_BODY_SIZE:
+            return None
+        body = await reader.readexactly(cl)
     elif "chunked" in transfer_encoding.lower():
         chunks = bytearray()
         while True:
@@ -469,6 +500,8 @@ async def _read_http_request(reader):
             if chunk_size == 0:
                 await reader.readline()
                 break
+            if len(chunks) + chunk_size > MAX_BODY_SIZE:
+                return None
             chunks.extend(await reader.readexactly(chunk_size))
             await reader.readline()
         body = bytes(chunks)

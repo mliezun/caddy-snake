@@ -14,7 +14,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	"runtime"
 	"strconv"
 	"strings"
@@ -245,6 +244,21 @@ func (f *CaddySnake) provisionDynamic(workers int) error {
 
 // Validate implements caddy.Validator.
 func (m *CaddySnake) Validate() error {
+	if m.ModuleWsgi != "" && m.ModuleAsgi != "" {
+		return errors.New("cannot specify both module_wsgi and module_asgi")
+	}
+	if m.ModuleWsgi == "" && m.ModuleAsgi == "" {
+		return errors.New("one of module_wsgi or module_asgi is required")
+	}
+	if m.Workers != "" {
+		w, err := strconv.Atoi(m.Workers)
+		if err != nil || w < 0 {
+			return fmt.Errorf("invalid workers value: %s", m.Workers)
+		}
+	}
+	if m.Lifespan != "" && m.Lifespan != "on" && m.Lifespan != "off" {
+		return fmt.Errorf("lifespan must be 'on' or 'off', got: %s", m.Lifespan)
+	}
 	return nil
 }
 
@@ -262,7 +276,7 @@ func (f CaddySnake) ServeHTTP(w http.ResponseWriter, r *http.Request, next caddy
 	if err := f.app.HandleRequest(w, r); err != nil {
 		return err
 	}
-	return next.ServeHTTP(w, r)
+	return nil
 }
 
 // Interface guards
@@ -354,6 +368,7 @@ type PythonWorker struct {
 	Lifespan   string
 	PythonBin  string
 	Socket     *os.File
+	SockDir    string // private directory containing the socket (Unix only)
 	ScriptPath string
 	DialNet    string // "unix" or "tcp"
 	DialAddr   string // socket path or host:port
@@ -365,17 +380,29 @@ type PythonWorker struct {
 
 func NewPythonWorker(iface, app, workingDir, venv, lifespan, pythonBin, scriptPath string) (*PythonWorker, error) {
 	var socket *os.File
+	var sockDir string
 	var err error
 	if runtime.GOOS == "windows" {
 		socket, err = os.CreateTemp("", "caddysnake-worker.port*")
 	} else {
-		socket, err = os.CreateTemp("", "caddysnake-worker.sock")
+		sockDir, err = os.MkdirTemp("", "caddysnake-*")
+		if err != nil {
+			return nil, err
+		}
+		if chErr := os.Chmod(sockDir, 0700); chErr != nil {
+			os.RemoveAll(sockDir)
+			return nil, chErr
+		}
+		socket, err = os.Create(filepath.Join(sockDir, "worker.sock"))
 	}
 	if err != nil {
+		if sockDir != "" {
+			os.RemoveAll(sockDir)
+		}
 		return nil, err
 	}
 	path := socket.Name()
-	socket.Close() // close so Python can write (Windows) or replace with socket (Unix)
+	socket.Close()
 
 	dialNet := "unix"
 	dialAddr := path
@@ -392,6 +419,7 @@ func NewPythonWorker(iface, app, workingDir, venv, lifespan, pythonBin, scriptPa
 		Lifespan:   lifespan,
 		PythonBin:  pythonBin,
 		Socket:     socket,
+		SockDir:    sockDir,
 		ScriptPath: scriptPath,
 		DialNet:    dialNet,
 		DialAddr:   dialAddr,
@@ -534,6 +562,9 @@ func (w *PythonWorker) Cleanup() error {
 	if w.Socket != nil {
 		w.Socket.Close()
 		os.Remove(w.Socket.Name())
+		if w.SockDir != "" {
+			os.RemoveAll(w.SockDir)
+		}
 	}
 	return nil
 }
@@ -842,25 +873,14 @@ func findWorkingDirectory(workingDir string) (string, error) {
 
 // findPythonDirectory searches for a directory that matches "python3.*" inside the given libPath.
 func findPythonDirectory(libPath string) (string, error) {
-	var pythonDir string
-	found := false
-	filepath.Walk(libPath, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			return err
-		}
-		if !info.IsDir() || found {
-			return nil
-		}
-		matched, _ := regexp.MatchString(`python3\..*`, info.Name())
-		if matched {
-			pythonDir = info.Name()
-			found = true
-			return errors.New("python directory found")
-		}
-		return nil
-	})
-	if !found || pythonDir == "" {
-		return "", errors.New("unable to find a python3.* directory in the venv")
+	entries, err := os.ReadDir(libPath)
+	if err != nil {
+		return "", fmt.Errorf("unable to read venv lib directory: %w", err)
 	}
-	return pythonDir, nil
+	for _, e := range entries {
+		if e.IsDir() && strings.HasPrefix(e.Name(), "python3") {
+			return e.Name(), nil
+		}
+	}
+	return "", errors.New("unable to find a python3.* directory in the venv")
 }

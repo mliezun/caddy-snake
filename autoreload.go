@@ -148,28 +148,35 @@ func (a *AutoreloadableApp) watch() {
 // and starting new ones via the factory function.
 func (a *AutoreloadableApp) reload() {
 	a.logger.Info("reloading python app due to file changes")
-	a.mu.Lock()
-	defer a.mu.Unlock()
 
-	oldApp := a.app
-	if err := oldApp.Cleanup(); err != nil {
-		a.logger.Error("failed to cleanup old python app during reload", zap.Error(err))
-	}
-
+	// Create new app OUTSIDE lock to avoid blocking requests
 	newApp, err := a.factory()
 	if err != nil {
-		a.logger.Error("failed to reload python app",
-			zap.Error(err),
-		)
+		a.logger.Error("failed to reload python app", zap.Error(err))
 		if a.exitOnReloadFailure != nil {
 			a.exitOnReloadFailure(1)
 		}
+		a.mu.Lock()
 		a.app = &errorApp{err: err}
+		a.mu.Unlock()
 		return
 	}
 
+	// Swap under lock (fast operation)
+	a.mu.Lock()
+	oldApp := a.app
 	a.app = newApp
+	a.mu.Unlock()
+
 	a.logger.Info("python app reloaded successfully")
+
+	// Cleanup old app OUTSIDE lock with grace period for in-flight requests
+	go func() {
+		time.Sleep(5 * time.Second)
+		if err := oldApp.Cleanup(); err != nil {
+			a.logger.Error("failed to cleanup old python app during reload", zap.Error(err))
+		}
+	}()
 }
 
 // HandleRequest forwards the request to the underlying app while holding a read
@@ -191,14 +198,14 @@ func (a *AutoreloadableApp) Cleanup() error {
 }
 
 // errorApp is a stub AppServer returned when a reload fails.
-// It returns HTTP 500 for all requests until the next successful reload.
+// It returns HTTP 503 for all requests until the next successful reload.
 type errorApp struct {
 	err error
 }
 
 func (e *errorApp) HandleRequest(w http.ResponseWriter, r *http.Request) error {
-	w.WriteHeader(http.StatusInternalServerError)
-	w.Write([]byte("Python app reload failed: " + e.err.Error()))
+	w.WriteHeader(http.StatusServiceUnavailable)
+	w.Write([]byte("Service temporarily unavailable"))
 	return nil
 }
 

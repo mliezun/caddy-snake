@@ -53,9 +53,9 @@ func TestFindSitePackagesInVenv_NoPythonDirectory(t *testing.T) {
 		t.Fatalf("expected an error, but got none")
 	}
 
-	expectedError := "unable to find a python3.* directory in the venv"
-	if err.Error() != expectedError {
-		t.Errorf("expected error %q, got %q", expectedError, err.Error())
+	errStr := err.Error()
+	if !strings.Contains(errStr, "unable to find a python3") && !strings.Contains(errStr, "unable to read venv lib directory") {
+		t.Errorf("expected python directory error, got %q", errStr)
 	}
 }
 
@@ -417,8 +417,58 @@ func TestCaddyModule(t *testing.T) {
 
 func TestValidate(t *testing.T) {
 	cs := &CaddySnake{}
+	err := cs.Validate()
+	if err == nil {
+		t.Fatal("expected error when neither wsgi nor asgi specified")
+	}
+	if !strings.Contains(err.Error(), "one of module_wsgi or module_asgi is required") {
+		t.Errorf("expected module required error, got: %v", err)
+	}
+}
+
+func TestValidate_WsgiOnly(t *testing.T) {
+	cs := &CaddySnake{ModuleWsgi: "main:app"}
 	if err := cs.Validate(); err != nil {
-		t.Errorf("expected nil error from Validate, got: %v", err)
+		t.Errorf("expected nil error, got: %v", err)
+	}
+}
+
+func TestValidate_AsgiOnly(t *testing.T) {
+	cs := &CaddySnake{ModuleAsgi: "main:app"}
+	if err := cs.Validate(); err != nil {
+		t.Errorf("expected nil error, got: %v", err)
+	}
+}
+
+func TestValidate_BothModules(t *testing.T) {
+	cs := &CaddySnake{ModuleWsgi: "main:app", ModuleAsgi: "main:app"}
+	err := cs.Validate()
+	if err == nil {
+		t.Fatal("expected error when both modules specified")
+	}
+}
+
+func TestValidate_InvalidWorkers(t *testing.T) {
+	cs := &CaddySnake{ModuleWsgi: "main:app", Workers: "abc"}
+	err := cs.Validate()
+	if err == nil {
+		t.Fatal("expected error for invalid workers")
+	}
+}
+
+func TestValidate_NegativeWorkers(t *testing.T) {
+	cs := &CaddySnake{ModuleWsgi: "main:app", Workers: "-1"}
+	err := cs.Validate()
+	if err == nil {
+		t.Fatal("expected error for negative workers")
+	}
+}
+
+func TestValidate_InvalidLifespan(t *testing.T) {
+	cs := &CaddySnake{ModuleWsgi: "main:app", Lifespan: "maybe"}
+	err := cs.Validate()
+	if err == nil {
+		t.Fatal("expected error for invalid lifespan")
 	}
 }
 
@@ -627,8 +677,8 @@ func TestServeHTTP_Success(t *testing.T) {
 	if !handled {
 		t.Error("expected app.HandleRequest to be called")
 	}
-	if !next.called {
-		t.Error("expected next handler to be called")
+	if next.called {
+		t.Error("expected next handler NOT to be called")
 	}
 }
 
@@ -653,17 +703,19 @@ func TestServeHTTP_AppError(t *testing.T) {
 	}
 }
 
-func TestServeHTTP_NextError(t *testing.T) {
+func TestServeHTTP_NextNotCalled(t *testing.T) {
 	app := &mockAppServer{}
-	nextErr := errors.New("next handler error")
 	cs := CaddySnake{app: app, logger: zap.NewNop()}
-	next := &mockNextHandler{err: nextErr}
+	next := &mockNextHandler{err: errors.New("should not be called")}
 	w := &mockResponseWriter{headers: make(http.Header)}
 	r := &http.Request{}
 
 	err := cs.ServeHTTP(w, r, next)
-	if err != nextErr {
-		t.Errorf("expected next error, got: %v", err)
+	if err != nil {
+		t.Errorf("expected nil error, got: %v", err)
+	}
+	if next.called {
+		t.Error("next handler should not be called")
 	}
 }
 
