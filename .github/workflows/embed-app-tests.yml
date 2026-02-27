@@ -47,9 +47,10 @@ jobs:
       - name: Run embed-app and verify
         working-directory: cmd/embed-app
         run: |
-          ./embed-test --listen 127.0.0.1:9080 2>&1 &
+          ./embed-test --listen 127.0.0.1:9080 > embed.log 2>&1 &
+          timeout 60 bash -c 'while ! grep -q "finished cleaning storage units" embed.log 2>/dev/null; do sleep 1; done'
           for i in $(seq 1 60); do
-            RESPONSE=$(curl -s http://127.0.0.1:9080/)
+            RESPONSE=$(curl -s http://127.0.0.1:9080/ || true)
             if echo "$RESPONSE" | grep -q "Replace this placeholder"; then
               echo "Response: $RESPONSE"
               exit 0
@@ -57,4 +58,6 @@ jobs:
             sleep 1
           done
           echo "Timeout. Last response: $RESPONSE"
+          echo "=== embed.log ==="
+          cat embed.log
           exit 1
