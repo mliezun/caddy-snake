@@ -22,7 +22,7 @@ pip install caddysnake
 
 This installs the `caddysnake` command, which is a thin wrapper around a pre-compiled Caddy binary with the caddy-snake plugin and Python embedded. No system Python or C compiler required.
 
-Available on [PyPI](https://pypi.org/project/caddysnake/) for Python 3.10 through 3.14 on Linux (x86_64 and ARM64).
+Available on [PyPI](https://pypi.org/project/caddysnake/) for Python 3.12 through 3.14 on Linux (x86_64 and ARM64).
 
 ### Usage
 
@@ -79,7 +79,7 @@ tar -xzf caddy-standalone-3.13-x86_64_v2-unknown-linux-gnu.tar.gz
 ./caddy python-server --server-type wsgi --app main:app
 ```
 
-Pre-built binaries are available for Python 3.10 through 3.14 (including 3.13-nogil) on Linux x86_64 and ARM64. See the [Pre-built Binaries](installation.md#pre-built-standalone-binaries) page for details on how they work.
+Pre-built binaries are available for Python 3.12 through 3.14 (including 3.13-nogil) on Linux x86_64 and ARM64. See the [Pre-built Binaries](installation.md#pre-built-standalone-binaries) page for details on how they work.
 
 ---
 
@@ -91,7 +91,7 @@ CGO_ENABLED=1 xcaddy build --with github.com/mliezun/caddy-snake
 
 ### Requirements
 
-- Python >= 3.10 + dev files
+- Python >= 3.12 + dev files
 - C compiler and build tools
 - Go >= 1.25 and [xcaddy](https://github.com/caddyserver/xcaddy)
 
@@ -187,7 +187,7 @@ curl http://localhost:9080/hello-world
 
 ## Option 4: Use a Docker image
 
-Docker images are available with Python 3.10, 3.11, 3.12, 3.13, and 3.14:
+Docker images are available with Python 3.12, 3.13, and 3.14:
 
 ```Dockerfile
 FROM mliezun/caddy-snake:latest-py3.13
@@ -246,7 +246,7 @@ The venv packages are added to the global `sys.path`, which means all Python app
 | Linux (arm64)  | Full support             |
 | macOS          | Full support             |
 
-**Python versions:** 3.10, 3.11, 3.12, 3.13, 3.13-nogil (free-threaded), 3.14
+**Python versions:** 3.12, 3.13, 3.13-nogil (free-threaded), 3.14
 
 ---
 

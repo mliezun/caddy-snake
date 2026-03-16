@@ -10,7 +10,7 @@ Now you can retrieve a precompiled binary of caddy with caddy-snake and your pre
 
 Check out the [latest release of caddy-snake](https://github.com/mliezun/caddy-snake/releases).
 
-The following python versions are available: 3.10, 3.11, 3.12, 3.13 and 3.13+freethreading (nogil).
+The following python versions are available: 3.12, 3.13 and 3.13+freethreading (nogil).
 
 After downloading the precompiled binary you can do:
 

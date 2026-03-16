@@ -31,7 +31,7 @@ To make it easier to get started you can also grab one of the precompiled binari
 - **Static file serving** — built-in static file support via the CLI
 - **Pre-built binaries** — download and run with Python embedded, no compilation required
 - **Standalone app binaries** — package your app + Caddy + Python into a single executable (like FrankenPHP)
-- **Docker images** — ready-to-use images for Python 3.10 through 3.14
+- **Docker images** — ready-to-use images for Python 3.12 through 3.14
 - **Cross-platform** — Linux, macOS, and Windows
 
 ---
@@ -73,7 +73,7 @@ CGO_ENABLED=1 xcaddy build --with github.com/mliezun/caddy-snake
 
 #### Requirements
 
-- Python >= 3.10 + dev files
+- Python >= 3.12 + dev files
 - C compiler and build tools
 - Go >= 1.25 and [xcaddy](https://github.com/caddyserver/xcaddy)
 
@@ -86,7 +86,7 @@ go install github.com/caddyserver/xcaddy/cmd/xcaddy@latest
 
 ### Option 3: Use a Docker image
 
-Docker images are available with Python 3.10, 3.11, 3.12, 3.13, and 3.14:
+Docker images are available with Python 3.12, 3.13, and 3.14:
 
 ```Dockerfile
 FROM mliezun/caddy-snake:latest-py3.13
@@ -360,7 +360,7 @@ Caddy Snake outperforms traditional reverse proxy setups — **2.4x faster** tha
 | macOS          | process, thread   | Full support                             |
 | Windows        | thread only       | Process workers not supported on Windows |
 
-**Python versions:** 3.10, 3.11, 3.12, 3.13, 3.13-nogil (free-threaded), 3.14
+**Python versions:** 3.12, 3.13, 3.13-nogil (free-threaded), 3.14
 
 ---
 

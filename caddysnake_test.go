@@ -1116,28 +1116,28 @@ func TestDynamicAppConcurrentDifferentKeys(t *testing.T) {
 
 func TestFindPythonDirectory_Found(t *testing.T) {
 	tempDir := t.TempDir()
-	os.MkdirAll(filepath.Join(tempDir, "python3.11"), 0755)
+	os.MkdirAll(filepath.Join(tempDir, "python3.13"), 0755)
 
 	dir, err := findPythonDirectory(tempDir)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if dir != "python3.11" {
-		t.Errorf("expected 'python3.11', got %q", dir)
+	if dir != "python3.13" {
+		t.Errorf("expected 'python3.13', got %q", dir)
 	}
 }
 
 func TestFindPythonDirectory_MultipleVersions(t *testing.T) {
 	tempDir := t.TempDir()
-	os.MkdirAll(filepath.Join(tempDir, "python3.10"), 0755)
 	os.MkdirAll(filepath.Join(tempDir, "python3.12"), 0755)
+	os.MkdirAll(filepath.Join(tempDir, "python3.14"), 0755)
 
 	dir, err := findPythonDirectory(tempDir)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if dir != "python3.10" && dir != "python3.12" {
-		t.Errorf("expected 'python3.10' or 'python3.12', got %q", dir)
+	if dir != "python3.12" && dir != "python3.14" {
+		t.Errorf("expected 'python3.12' or 'python3.14', got %q", dir)
 	}
 }
 
@@ -1171,7 +1171,7 @@ func TestFindPythonDirectory_NonExistentPath(t *testing.T) {
 
 func TestFindPythonDirectory_FileNotDir(t *testing.T) {
 	tempDir := t.TempDir()
-	os.WriteFile(filepath.Join(tempDir, "python3.11"), []byte("not a dir"), 0644)
+	os.WriteFile(filepath.Join(tempDir, "python3.13"), []byte("not a dir"), 0644)
 
 	_, err := findPythonDirectory(tempDir)
 	if err == nil {

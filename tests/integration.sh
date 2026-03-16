@@ -16,11 +16,11 @@ set -euo pipefail
 #   django, django_channels, flask, fastapi, simple_autoreload, simple_async, socketio, dynamic
 #
 # Valid python versions:
-#   3.10, 3.11, 3.12, 3.13, 3.13-nogil, 3.14
+#   3.12, 3.13, 3.13-nogil, 3.14
 # ---------------------------------------------------------------------------
 
 VALID_TOOLS=("django" "django_channels" "flask" "fastapi" "simple_autoreload" "simple_async" "socketio" "dynamic")
-VALID_PYVERSIONS=("3.10" "3.11" "3.12" "3.13" "3.13-nogil" "3.14")
+VALID_PYVERSIONS=("3.12" "3.13" "3.13-nogil" "3.14")
 
 usage() {
   echo "Usage: $0 <tool-name> <python-version>"

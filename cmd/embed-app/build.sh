@@ -25,7 +25,7 @@ usage() {
     echo "Usage: $0 APP_ZIP PYTHON_VERSION [OPTIONS]"
     echo ""
     echo "  APP_ZIP        Path to your app .zip (Lambda-style, see docs)"
-    echo "  PYTHON_VERSION Python version: 3.10, 3.11, 3.12, 3.13, 3.13-nogil, 3.14"
+    echo "  PYTHON_VERSION Python version: 3.12, 3.13, 3.13-nogil, 3.14"
     echo ""
     echo "Options:"
     echo "  --app MODULE:VAR      App entry point (default: main:app)"

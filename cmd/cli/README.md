@@ -10,7 +10,7 @@ The `caddysnake` package is available on [PyPI](https://pypi.org/project/caddysn
 pip install caddysnake
 ```
 
-Available for Python 3.10 through 3.14 on Linux (x86_64 and ARM64).
+Available for Python 3.12 through 3.14 on Linux (x86_64 and ARM64).
 
 ## Usage
 

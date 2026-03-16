@@ -20,9 +20,9 @@ The [`caddysnake`](https://pypi.org/project/caddysnake/) package on PyPI is the 
 pip install caddysnake
 ```
 
-**Requirements:** Python >= 3.10, Linux (x86_64 or ARM64)
+**Requirements:** Python >= 3.12, Linux (x86_64 or ARM64)
 
-Available Python versions: 3.10, 3.11, 3.12, 3.13, 3.14
+Available Python versions: 3.12, 3.13, 3.14
 
 ### Usage
 
@@ -80,7 +80,7 @@ The package is built and published automatically on tagged releases (`v*.*.*`) b
 3. `maturin build --release` packages it into a Python wheel
 4. The wheel is published to PyPI with `twine`
 
-This runs for each combination of Python version (3.10–3.14) and architecture (x86_64, ARM64), producing platform-specific wheels.
+This runs for each combination of Python version (3.12–3.14) and architecture (x86_64, ARM64), producing platform-specific wheels.
 
 ---
 
@@ -105,8 +105,6 @@ For example:
 
 | Python | Architectures | Notes |
 |--------|--------------|-------|
-| 3.10 | x86_64, ARM64 | |
-| 3.11 | x86_64, ARM64 | |
 | 3.12 | x86_64, ARM64 | |
 | 3.13 | x86_64, ARM64 | |
 | 3.13-nogil | x86_64, ARM64 | Free-threaded (PEP 703) |
@@ -218,7 +216,7 @@ docker pull mliezun/caddy-snake:latest-py3.13
 docker pull ghcr.io/mliezun/caddy-snake:latest-py3.13
 ```
 
-Available Python versions: `3.10`, `3.11`, `3.12`, `3.13`, `3.14`
+Available Python versions: `3.12`, `3.13`, `3.14`
 
 ### Usage
 
@@ -246,7 +244,7 @@ For maximum control, you can build Caddy with the caddy-snake plugin from source
 
 ### Requirements
 
-- Python >= 3.10 + dev files (`python3-dev`)
+- Python >= 3.12 + dev files (`python3-dev`)
 - C compiler and build tools (`build-essential`, `pkg-config`)
 - Go >= 1.25
 - [xcaddy](https://github.com/caddyserver/xcaddy)

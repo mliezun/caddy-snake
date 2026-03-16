@@ -13,7 +13,7 @@ The result is a self-contained executable you can distribute and run without ins
 ## Requirements
 
 - **App zip**: A `.zip` file of your application (Lambda-style, see below)
-- **Python version**: 3.10, 3.11, 3.12, 3.13, 3.13-nogil, or 3.14
+- **Python version**: 3.12, 3.13, 3.13-nogil, or 3.14
 - **Build environment**: Go 1.26+, xcaddy, Python 3.x (for the build script)
 
 For apps with binary dependencies (NumPy, Pillow, etc.), build the zip on the **target platform** (e.g. Linux if you will run on Linux). We assume you use the correct platform when installing dependencies.
