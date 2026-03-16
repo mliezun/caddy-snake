@@ -21,7 +21,6 @@ This is perfect for multi-tenant setups where each subdomain (or route) serves a
         python {
             module_asgi "{http.request.host.labels.2}:app"
             working_dir "{http.request.host.labels.2}/"
-            workers_runtime thread
         }
     }
 }
@@ -43,7 +42,6 @@ Previously, hot-reloading required an external tool like `watchmedo` to restart 
 ```caddyfile
 python {
     module_wsgi "main:app"
-    workers_runtime thread
     autoreload
 }
 ```
@@ -68,7 +66,6 @@ The two features work together. When `autoreload` is enabled on a dynamic app, e
         python {
             module_asgi "{http.request.host.labels.2}:app"
             working_dir "{http.request.host.labels.2}/"
-            workers_runtime thread
             autoreload
         }
     }
@@ -85,7 +82,7 @@ Install from PyPI for the quickest setup:
 pip install caddysnake
 ```
 
-Or update to the [latest release](https://github.com/mliezun/caddy-snake/releases) to download pre-built standalone binaries. Both features require `workers_runtime thread`.
+Or update to the [latest release](https://github.com/mliezun/caddy-snake/releases) to download pre-built standalone binaries.
 
 Check out the full documentation:
 

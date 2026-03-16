@@ -22,7 +22,7 @@ pip install caddysnake
 
 This installs the `caddysnake` command, which is a thin wrapper around a pre-compiled Caddy binary with the caddy-snake plugin and Python embedded. No system Python or C compiler required.
 
-Available on [PyPI](https://pypi.org/project/caddysnake/) for Python 3.10 through 3.14 on Linux (x86_64 and ARM64).
+Available on [PyPI](https://pypi.org/project/caddysnake/) for Python 3.12 through 3.14 on Linux (x86_64 and ARM64).
 
 ### Usage
 
@@ -43,7 +43,6 @@ This starts a server on port `9080` serving your app. See `caddysnake --help` fo
 | `--domain <example.com>` | Enable HTTPS with automatic certificates | — |
 | `--listen <addr>` | Custom listen address | `:9080` |
 | `--workers <count>` | Number of worker processes | CPU count |
-| `--workers-runtime <type>` | Worker type: `process` or `thread` | `process` |
 | `--static-path <path>` | Serve a static files directory | — |
 | `--static-route <route>` | Route prefix for static files | `/static` |
 | `--debug` | Enable debug logging | `false` |
@@ -58,7 +57,6 @@ caddysnake \
     --server-type asgi \
     --app main:app \
     --workers 4 \
-    --workers-runtime thread \
     --static-path ./static \
     --access-logs
 ```
@@ -81,7 +79,7 @@ tar -xzf caddy-standalone-3.13-x86_64_v2-unknown-linux-gnu.tar.gz
 ./caddy python-server --server-type wsgi --app main:app
 ```
 
-Pre-built binaries are available for Python 3.10 through 3.14 (including 3.13-nogil) on Linux x86_64 and ARM64. See the [Pre-built Binaries](installation.md#pre-built-standalone-binaries) page for details on how they work.
+Pre-built binaries are available for Python 3.12 through 3.14 (including 3.13-nogil) on Linux x86_64 and ARM64. See the [Pre-built Binaries](installation.md#pre-built-standalone-binaries) page for details on how they work.
 
 ---
 
@@ -93,7 +91,7 @@ CGO_ENABLED=1 xcaddy build --with github.com/mliezun/caddy-snake
 
 ### Requirements
 
-- Python >= 3.10 + dev files
+- Python >= 3.12 + dev files
 - C compiler and build tools
 - Go >= 1.25 and [xcaddy](https://github.com/caddyserver/xcaddy)
 
@@ -189,7 +187,7 @@ curl http://localhost:9080/hello-world
 
 ## Option 4: Use a Docker image
 
-Docker images are available with Python 3.10, 3.11, 3.12, 3.13, and 3.14:
+Docker images are available with Python 3.12, 3.13, and 3.14:
 
 ```Dockerfile
 FROM mliezun/caddy-snake:latest-py3.13
@@ -242,14 +240,13 @@ The venv packages are added to the global `sys.path`, which means all Python app
 
 ## Platform support
 
-| Platform       | Workers runtime   | Notes                                    |
-|----------------|-------------------|------------------------------------------|
-| Linux (x86_64) | process, thread   | Primary platform, full support           |
-| Linux (arm64)  | process, thread   | Full support                             |
-| macOS          | process, thread   | Full support                             |
-| Windows        | thread only       | Process workers not supported on Windows |
+| Platform       | Notes                    |
+|----------------|--------------------------|
+| Linux (x86_64) | Primary platform         |
+| Linux (arm64)  | Full support             |
+| macOS          | Full support             |
 
-**Python versions:** 3.10, 3.11, 3.12, 3.13, 3.13-nogil (free-threaded), 3.14
+**Python versions:** 3.12, 3.13, 3.13-nogil (free-threaded), 3.14
 
 ---
 

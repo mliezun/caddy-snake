@@ -4,6 +4,7 @@ import uuid
 import time
 from concurrent.futures import ThreadPoolExecutor
 import requests
+import psutil
 
 item_count = 0
 
@@ -151,6 +152,25 @@ def _touch_file(path: str) -> None:
     _write_and_sync(path, content)
 
 
+def count_python_workers() -> int:
+    """Count running Python worker processes (caddysnake workers).
+
+    Workers are identified by having 'caddysnake' in their command line args.
+    Zombie processes are excluded.
+    """
+    count = 0
+    for proc in psutil.process_iter(["pid", "cmdline", "status"]):
+        try:
+            if proc.info["status"] == psutil.STATUS_ZOMBIE:
+                continue
+            cmdline = proc.info.get("cmdline") or []
+            if any("caddysnake" in arg for arg in cmdline):
+                count += 1
+        except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+            pass
+    return count
+
+
 def rewrite_version(content: str, old_version: str, new_version: str) -> str:
     """Replace the APP_VERSION line in the file content."""
     marker_old = f'APP_VERSION = "{old_version}"'
@@ -176,6 +196,13 @@ def test_autoreload():
         assert version == "v0", f"Expected initial version 'v0', got '{version}'"
         print(f"  Initial version: {version}")
 
+        # Verify initial worker count (Caddyfile has workers 1)
+        initial_workers = count_python_workers()
+        print(f"  Initial Python workers: {initial_workers}")
+        assert initial_workers == 1, (
+            f"Expected 1 Python worker before reloads, found {initial_workers}"
+        )
+
         # 2. Cycle through versions v1 .. v{AUTORELOAD_CYCLES}
         for i in range(1, AUTORELOAD_CYCLES + 1):
             old_ver = f"v{i - 1}"
@@ -187,7 +214,26 @@ def test_autoreload():
 
             # Wait for the reload to take effect; re-touch file if stuck
             elapsed = wait_for_version(new_ver, retouch_path=MAIN_PY_PATH)
-            print(f"  Reload {i}: {old_ver} -> {new_ver}  ({elapsed:.2f}s)")
+
+            # Verify old Python process was terminated: only 1 worker should remain.
+            # reload() calls Cleanup() synchronously before starting the new worker,
+            # so by the time the new version is served the old process must be gone.
+            workers = count_python_workers()
+            print(
+                f"  Reload {i}: {old_ver} -> {new_ver}  ({elapsed:.2f}s)  "
+                f"[workers: {workers}]"
+            )
+            assert workers == 1, (
+                f"Expected 1 Python worker after reload {i}, found {workers} "
+                f"(old process not terminated?)"
+            )
+
+        # 3. Final sanity check: exactly 1 worker after all reload cycles
+        final_workers = count_python_workers()
+        print(f"  Final Python workers: {final_workers}")
+        assert final_workers == 1, (
+            f"Expected 1 Python worker at end of test, found {final_workers}"
+        )
 
         print("=== Autoreload test passed ===\n")
 

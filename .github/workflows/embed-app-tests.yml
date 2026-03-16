@@ -1,0 +1,63 @@
+---
+name: Embed App Tests
+on:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+jobs:
+  embed-app:
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.12', '3.13']
+        os: [ubuntu-22.04, ubuntu-22.04-arm]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+          cache: false
+      - name: Install xcaddy
+        run: go install github.com/caddyserver/xcaddy/cmd/xcaddy@latest
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Choose architecture
+        id: arch
+        run: |
+          if [ "${{ matrix.os }}" == "ubuntu-22.04-arm" ]; then
+            echo "arch=aarch64-unknown-linux-gnu" >> $GITHUB_OUTPUT
+          else
+            echo "arch=x86_64_v2-unknown-linux-gnu" >> $GITHUB_OUTPUT
+          fi
+      - name: Ensure app.zip exists
+        working-directory: cmd/embed-app
+        run: |
+          if [ ! -f app.zip ]; then
+            cp placeholder/main.py . && zip -q app.zip main.py && rm main.py
+          fi
+      - name: Build embed-app binary
+        working-directory: cmd/embed-app
+        run: |
+          ./build.sh app.zip ${{ matrix.python-version }} --output embed-test --arch ${{ steps.arch.outputs.arch }}
+      - name: Run embed-app and verify
+        working-directory: cmd/embed-app
+        run: |
+          ./embed-test --listen 127.0.0.1:9080 > embed.log 2>&1 &
+          timeout 60 bash -c 'while ! grep -q "finished cleaning storage units" embed.log 2>/dev/null; do sleep 1; done'
+          for i in $(seq 1 60); do
+            RESPONSE=$(curl -s http://127.0.0.1:9080/ || true)
+            if echo "$RESPONSE" | grep -q "Replace this placeholder"; then
+              echo "Response: $RESPONSE"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "Timeout. Last response: $RESPONSE"
+          echo "=== embed.log ==="
+          cat embed.log
+          exit 1

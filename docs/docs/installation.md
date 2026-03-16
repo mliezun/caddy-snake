@@ -20,9 +20,9 @@ The [`caddysnake`](https://pypi.org/project/caddysnake/) package on PyPI is the 
 pip install caddysnake
 ```
 
-**Requirements:** Python >= 3.10, Linux (x86_64 or ARM64)
+**Requirements:** Python >= 3.12, Linux (x86_64 or ARM64)
 
-Available Python versions: 3.10, 3.11, 3.12, 3.13, 3.14
+Available Python versions: 3.12, 3.13, 3.14
 
 ### Usage
 
@@ -39,7 +39,6 @@ caddysnake \
     --app main:app \
     --domain example.com \
     --workers 4 \
-    --workers-runtime process \
     --static-path ./static \
     --access-logs
 ```
@@ -53,7 +52,6 @@ caddysnake \
 | `--domain` | `-d` | Domain name for HTTPS with automatic certificates | — |
 | `--listen` | `-l` | Custom listen address | `:9080` |
 | `--workers` | `-w` | Number of worker processes (0 = CPU count) | `0` |
-| `--workers-runtime` | `-r` | Worker type: `process` or `thread` | `process` |
 | `--static-path` | | Path to a static files directory | — |
 | `--static-route` | | Route prefix for static files | `/static` |
 | `--debug` | | Enable debug logging | `false` |
@@ -82,7 +80,7 @@ The package is built and published automatically on tagged releases (`v*.*.*`) b
 3. `maturin build --release` packages it into a Python wheel
 4. The wheel is published to PyPI with `twine`
 
-This runs for each combination of Python version (3.10–3.14) and architecture (x86_64, ARM64), producing platform-specific wheels.
+This runs for each combination of Python version (3.12–3.14) and architecture (x86_64, ARM64), producing platform-specific wheels.
 
 ---
 
@@ -107,8 +105,6 @@ For example:
 
 | Python | Architectures | Notes |
 |--------|--------------|-------|
-| 3.10 | x86_64, ARM64 | |
-| 3.11 | x86_64, ARM64 | |
 | 3.12 | x86_64, ARM64 | |
 | 3.13 | x86_64, ARM64 | |
 | 3.13-nogil | x86_64, ARM64 | Free-threaded (PEP 703) |
@@ -220,7 +216,7 @@ docker pull mliezun/caddy-snake:latest-py3.13
 docker pull ghcr.io/mliezun/caddy-snake:latest-py3.13
 ```
 
-Available Python versions: `3.10`, `3.11`, `3.12`, `3.13`, `3.14`
+Available Python versions: `3.12`, `3.13`, `3.14`
 
 ### Usage
 
@@ -248,7 +244,7 @@ For maximum control, you can build Caddy with the caddy-snake plugin from source
 
 ### Requirements
 
-- Python >= 3.10 + dev files (`python3-dev`)
+- Python >= 3.12 + dev files (`python3-dev`)
 - C compiler and build tools (`build-essential`, `pkg-config`)
 - Go >= 1.25
 - [xcaddy](https://github.com/caddyserver/xcaddy)
@@ -288,12 +284,16 @@ Make sure the `PY_VERSION` matches the Python version on your target system.
 |--------|----------------------|----------------------|-------------------|---------------|----------|
 | **PyPI** (`pip install caddysnake`) | Yes | At install time | No (CLI only) | `caddysnake` | Quick start, development |
 | **Standalone binary** | No (embedded) | No (self-contained) | Yes | `./caddy python-server` | Production, air-gapped environments |
+| **Standalone app binary** | No (embedded) | No (self-contained) | No (CLI) | `./myapp` | Single-file distribution, edge deployments |
 | **Docker** | No (in container) | At build time | Yes | `caddy python-server` | Containerized deployments |
 | **Build from source** | Yes | At build time | Yes | `./caddy python-server` | Custom builds, macOS, Windows |
+
+See [Apps as Standalone Binaries](embed-app.md) for packaging your app into a single executable.
 
 :::tip
 - Use **PyPI** for the fastest way to get started or for development
 - Use **standalone binaries** for production Linux deployments where you want zero dependencies
+- Use **standalone app binaries** to distribute your app as a single executable (like FrankenPHP)
 - Use **Docker** for containerized environments
 - **Build from source** when you need macOS/Windows support or want to pin specific versions
 :::

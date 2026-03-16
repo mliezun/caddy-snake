@@ -4,16 +4,16 @@ sidebar_position: 5
 
 # Benchmarks
 
-Caddy Snake embeds Python directly inside Caddy, eliminating the overhead of a reverse proxy. This page compares Caddy Snake against traditional deployment setups.
+Caddy Snake embeds Python directly inside Caddy, eliminating the overhead of a separate reverse proxy. This page compares Caddy Snake against traditional deployment setups — Caddy Snake is **2.4x faster** than Flask+Gunicorn and **1.6x faster** than FastAPI+Uvicorn.
 
 ## Test configurations
 
 | Configuration | Description |
 |---|---|
 | Flask + Gunicorn + Caddy | Gunicorn (1 worker, 4 threads) behind Caddy reverse proxy |
-| Flask + Caddy Snake | Flask served directly by Caddy via caddy-snake (thread worker) |
+| Flask + Caddy Snake | Flask served directly by Caddy via caddy-snake (process worker) |
 | FastAPI + Uvicorn + Caddy | Uvicorn (1 worker) behind Caddy reverse proxy |
-| FastAPI + Caddy Snake | FastAPI served directly by Caddy via caddy-snake (thread worker) |
+| FastAPI + Caddy Snake | FastAPI served directly by Caddy via caddy-snake (process worker) |
 
 All configurations serve a minimal JSON "Hello, World!" endpoint.
 
@@ -23,12 +23,12 @@ All configurations serve a minimal JSON "Hello, World!" endpoint.
 
 | Configuration | Requests/sec | Avg Latency (ms) | P99 Latency (ms) |
 |---|---|---|---|
-| Flask + Gunicorn + Caddy | 4,231 | 23.60 | 37.70 |
-| Flask + Caddy Snake | 4,670 | 21.40 | 42.00 |
-| FastAPI + Uvicorn + Caddy | 13,347 | 7.50 | 83.70 |
-| FastAPI + Caddy Snake | 9,559 | 10.40 | 19.80 |
+| Flask + Gunicorn + Caddy | 1,592 | 63.81 | 89.18 |
+| **Flask + Caddy Snake** | **3,782** | **26.42** | **41.46** |
+| FastAPI + Uvicorn + Caddy | 3,537 | 28.20 | 282.19 |
+| **FastAPI + Caddy Snake** | **5,730** | **17.44** | **31.11** |
 
-For Flask (WSGI), Caddy Snake is roughly on par with Gunicorn behind a reverse proxy, with ~10% more throughput and slightly lower average latency. For FastAPI (ASGI), Uvicorn has higher throughput, but Caddy Snake delivers significantly lower P99 latency (19.8ms vs 83.7ms), meaning more consistent response times.
+Caddy Snake significantly outperforms traditional reverse proxy setups. For Flask (WSGI), Caddy Snake delivers **2.4x** the throughput of Gunicorn with less than half the latency. For FastAPI (ASGI), Caddy Snake achieves **1.6x** the throughput of Uvicorn with much lower P99 latency (31ms vs 282ms), meaning faster and more consistent response times.
 
 ## Methodology
 
@@ -36,10 +36,10 @@ For Flask (WSGI), Caddy Snake is roughly on par with Gunicorn behind a reverse p
 - **Concurrency:** 100 connections
 - **Duration:** 10 seconds per test
 - **Warmup:** 200 requests at 10 concurrency before each test
-- **Platform:** Ubuntu 22.04, linux/amd64
+- **Platform:** Scaleway, Docker Ubuntu 22.04 on linux/amd64
 - **Python:** 3.13
-- **Go:** 1.25
-- **Workers:** Caddy Snake uses thread workers; Gunicorn uses 1 worker with 4 threads; Uvicorn uses 1 worker
+- **Go:** 1.26
+- **Workers:** Caddy Snake uses process workers; Gunicorn uses 1 worker with 4 threads; Uvicorn uses 1 worker
 
 ## Reproduce
 

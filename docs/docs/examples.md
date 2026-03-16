@@ -48,7 +48,6 @@ http://localhost:9080 {
             module_asgi "main:app"
             lifespan on
             workers 1
-            workers_runtime thread
             venv "./venv"
         }
     }
@@ -107,7 +106,6 @@ http://localhost:9080 {
         python {
             module_wsgi "main:app"
             workers 4
-            workers_runtime process
             venv "./venv"
         }
     }
@@ -176,7 +174,6 @@ http://localhost:9080 {
         python {
             module_wsgi "mysite.wsgi:application"
             workers 1
-            workers_runtime thread
             venv "./venv"
         }
     }
@@ -327,7 +324,6 @@ http://localhost:9080 {
     route {
         python {
             module_wsgi "main:app"
-            workers_runtime thread
             venv "./venv"
             autoreload
         }
@@ -338,7 +334,7 @@ http://localhost:9080 {
 Now when you edit `main.py`, the app reloads automatically — no need to restart Caddy. If you introduce a syntax error, requests will return HTTP 500 until you fix the code.
 
 :::note
-`autoreload` requires `workers_runtime thread`. Changes are debounced (500ms) to handle rapid edits.
+Changes are debounced (500ms) to handle rapid edits.
 :::
 
 ### Alternative: watchmedo
@@ -402,7 +398,6 @@ def index():
             module_asgi "{http.request.host.labels.6}:app"
             working_dir "{http.request.host.labels.6}/"
             workers 1
-            workers_runtime thread
         }
     }
 }
@@ -438,7 +433,6 @@ Add `autoreload` to automatically reload individual apps when their Python files
             module_asgi "{http.request.host.labels.6}:app"
             working_dir "{http.request.host.labels.6}/"
             workers 1
-            workers_runtime thread
             autoreload
         }
     }

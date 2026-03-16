@@ -1,15 +1,11 @@
 package caddysnake
 
-// #include "caddysnake.h"
-import "C"
 import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"strings"
 	"sync"
 	"time"
-	"unsafe"
 
 	"github.com/fsnotify/fsnotify"
 	"go.uber.org/zap"
@@ -46,7 +42,7 @@ func isPythonFileEvent(event fsnotify.Event) bool {
 }
 
 // handleNewDirEvent checks if the event is a newly created directory and adds
-// it to the watcher if appropriate. Returns true if a directory was added.
+// it to the watcher if appropriate.
 func handleNewDirEvent(event fsnotify.Event, watcher *fsnotify.Watcher) {
 	if !event.Has(fsnotify.Create) {
 		return
@@ -62,23 +58,27 @@ func handleNewDirEvent(event fsnotify.Event, watcher *fsnotify.Watcher) {
 // files in the working directory change. It watches for .py file modifications
 // and reloads the app after a debounce period to group rapid changes.
 type AutoreloadableApp struct {
-	mu         sync.RWMutex
-	app        AppServer
-	factory    func() (AppServer, error)
-	watcher    *fsnotify.Watcher
-	stopCh     chan struct{}
-	logger     *zap.Logger
-	workingDir string
+	mu                   sync.RWMutex
+	app                  AppServer
+	factory              func() (AppServer, error)
+	watcher              *fsnotify.Watcher
+	stopCh               chan struct{}
+	logger               *zap.Logger
+	workingDir           string
+	exitOnReloadFailure   func(code int) // if set, process exits on reload failure instead of serving 500
 }
 
 // NewAutoreloadableApp creates an AutoreloadableApp that wraps the given app and
 // starts a filesystem watcher on the working directory. When any .py file changes,
 // the app is reloaded after a 500ms debounce window.
+// If exitOnReloadFailure is non-nil, it is called with code 1 when a reload fails
+// (e.g. app deleted), so the process can terminate and stop serving requests.
 func NewAutoreloadableApp(
 	app AppServer,
 	workingDir string,
 	factory func() (AppServer, error),
 	logger *zap.Logger,
+	exitOnReloadFailure func(code int),
 ) (*AutoreloadableApp, error) {
 	watcher, err := fsnotify.NewWatcher()
 	if err != nil {
@@ -86,12 +86,13 @@ func NewAutoreloadableApp(
 	}
 
 	a := &AutoreloadableApp{
-		app:        app,
-		factory:    factory,
-		watcher:    watcher,
-		stopCh:     make(chan struct{}),
-		logger:     logger,
-		workingDir: workingDir,
+		app:                 app,
+		factory:             factory,
+		watcher:             watcher,
+		stopCh:              make(chan struct{}),
+		logger:              logger,
+		workingDir:          workingDir,
+		exitOnReloadFailure: exitOnReloadFailure,
 	}
 
 	watchDirRecursive(watcher, workingDir, logger)
@@ -143,35 +144,37 @@ func (a *AutoreloadableApp) watch() {
 	}
 }
 
-// reload performs the actual app reload. It holds a write lock so all in-flight
-// requests complete before the swap happens.
+// reload performs the actual app reload by stopping the old worker processes
+// and starting new ones via the factory function.
 func (a *AutoreloadableApp) reload() {
 	a.logger.Info("reloading python app due to file changes")
-	a.mu.Lock()
-	defer a.mu.Unlock()
 
-	// Invalidate Python module cache for all modules in the working directory
-	// so PyImport_ImportModule picks up fresh code.
-	invalidatePythonModuleCache(a.workingDir)
-
-	// Cleanup old app (removes from wsgi/asgi app caches)
-	oldApp := a.app
-	if err := oldApp.Cleanup(); err != nil {
-		a.logger.Error("failed to cleanup old python app during reload", zap.Error(err))
-	}
-
-	// Create new app (will re-import the Python module)
+	// Create new app OUTSIDE lock to avoid blocking requests
 	newApp, err := a.factory()
 	if err != nil {
-		a.logger.Error("failed to reload python app, requests will return 500",
-			zap.Error(err),
-		)
+		a.logger.Error("failed to reload python app", zap.Error(err))
+		if a.exitOnReloadFailure != nil {
+			a.exitOnReloadFailure(1)
+		}
+		a.mu.Lock()
 		a.app = &errorApp{err: err}
+		a.mu.Unlock()
 		return
 	}
 
+	// Swap under lock (fast operation)
+	a.mu.Lock()
+	oldApp := a.app
 	a.app = newApp
+	a.mu.Unlock()
+
 	a.logger.Info("python app reloaded successfully")
+
+	// Cleanup old app OUTSIDE lock. The write lock above guarantees all
+	// in-flight requests using oldApp have completed before the swap.
+	if err := oldApp.Cleanup(); err != nil {
+		a.logger.Error("failed to cleanup old python app during reload", zap.Error(err))
+	}
 }
 
 // HandleRequest forwards the request to the underlying app while holding a read
@@ -186,38 +189,21 @@ func (a *AutoreloadableApp) HandleRequest(w http.ResponseWriter, r *http.Request
 func (a *AutoreloadableApp) Cleanup() error {
 	close(a.stopCh)
 	a.watcher.Close()
-	return a.app.Cleanup()
-}
-
-// invalidatePythonModuleCache removes all Python modules from sys.modules
-// whose __file__ starts with the given directory path.
-// It is a no-op when the Python main thread is not initialized (e.g. process
-// runtime where each worker has its own interpreter).
-func invalidatePythonModuleCache(workingDir string) {
-	if pythonMainThread == nil {
-		return
-	}
-	// Ensure the path ends with a separator so we don't match partial directory names
-	// e.g. "/app" should not match "/application/module.py"
-	if !strings.HasSuffix(workingDir, string(filepath.Separator)) {
-		workingDir += string(filepath.Separator)
-	}
-	cWorkingDir := C.CString(workingDir)
-	defer C.free(unsafe.Pointer(cWorkingDir))
-	pythonMainThread.do(func() {
-		C.Py_invalidate_module_cache(cWorkingDir)
-	})
+	a.mu.RLock()
+	app := a.app
+	a.mu.RUnlock()
+	return app.Cleanup()
 }
 
 // errorApp is a stub AppServer returned when a reload fails.
-// It returns HTTP 500 for all requests until the next successful reload.
+// It returns HTTP 503 for all requests until the next successful reload.
 type errorApp struct {
 	err error
 }
 
 func (e *errorApp) HandleRequest(w http.ResponseWriter, r *http.Request) error {
-	w.WriteHeader(http.StatusInternalServerError)
-	w.Write([]byte("Python app reload failed: " + e.err.Error()))
+	w.WriteHeader(http.StatusServiceUnavailable)
+	w.Write([]byte("Service temporarily unavailable"))
 	return nil
 }
 
