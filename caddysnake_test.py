@@ -1,6 +1,7 @@
 """Tests for caddysnake.py - WSGI/ASGI server for caddy-snake."""
 
 import asyncio
+import io
 import os
 import struct
 import sys
@@ -251,6 +252,23 @@ class TestSetupPaths:
 
 @pytest.mark.asyncio
 class TestWsReadFrame:
+    def _masked_frame(self, opcode, payload, fin=True):
+        mask_key = b"\x01\x02\x03\x04"
+        first = ((0x80 if fin else 0x00) | opcode) & 0xFF
+        length = len(payload)
+        frame = bytearray([first])
+        if length < 126:
+            frame.append(0x80 | length)
+        elif length < 65536:
+            frame.append(0x80 | 126)
+            frame.extend(struct.pack("!H", length))
+        else:
+            frame.append(0x80 | 127)
+            frame.extend(struct.pack("!Q", length))
+        frame.extend(mask_key)
+        frame.extend(bytes(b ^ mask_key[i % 4] for i, b in enumerate(payload)))
+        return bytes(frame)
+
     async def test_small_unmasked_frame(self):
         frame = cs.ws_build_frame(cs.WS_OPCODE_TEXT, b"hello")
         reader = asyncio.StreamReader()
@@ -303,12 +321,86 @@ class TestWsReadFrame:
         fin, opcode, payload = await cs.ws_read_frame(reader)
         assert payload == b""
 
+    async def test_ws_read_loop_reassembles_fragmented_text(self):
+        reader = asyncio.StreamReader()
+        reader.feed_data(self._masked_frame(cs.WS_OPCODE_TEXT, b"Hel", fin=False))
+        reader.feed_data(self._masked_frame(cs.WS_OPCODE_CONTINUATION, b"lo", fin=True))
+        reader.feed_eof()
+
+        receive_queue = asyncio.Queue()
+        closed_event = asyncio.Event()
+
+        async def _drain():
+            pass
+
+        writer = mock.Mock()
+        writer.write = lambda d: None
+        writer.drain = _drain
+
+        await cs._ws_read_loop(reader, receive_queue, closed_event, writer)
+        first = await receive_queue.get()
+        assert first == {"type": "websocket.receive", "text": "Hello"}
+
+    async def test_ws_read_loop_decodes_utf8_after_reassembly(self):
+        euro = "€".encode("utf-8")
+        reader = asyncio.StreamReader()
+        reader.feed_data(self._masked_frame(cs.WS_OPCODE_TEXT, euro[:2], fin=False))
+        reader.feed_data(
+            self._masked_frame(cs.WS_OPCODE_CONTINUATION, euro[2:], fin=True)
+        )
+        reader.feed_eof()
+
+        receive_queue = asyncio.Queue()
+        closed_event = asyncio.Event()
+
+        async def _drain():
+            pass
+
+        writer = mock.Mock()
+        writer.write = lambda d: None
+        writer.drain = _drain
+
+        await cs._ws_read_loop(reader, receive_queue, closed_event, writer)
+        first = await receive_queue.get()
+        assert first == {"type": "websocket.receive", "text": "€"}
+
+    async def test_ws_read_loop_rejects_unexpected_continuation(self):
+        reader = asyncio.StreamReader()
+        reader.feed_data(
+            self._masked_frame(cs.WS_OPCODE_CONTINUATION, b"oops", fin=True)
+        )
+        reader.feed_eof()
+
+        receive_queue = asyncio.Queue()
+        closed_event = asyncio.Event()
+        writes = []
+
+        async def _drain():
+            pass
+
+        writer = mock.Mock()
+        writer.write = lambda d: writes.append(d)
+        writer.drain = _drain
+
+        await cs._ws_read_loop(reader, receive_queue, closed_event, writer)
+        disconnect = await receive_queue.get()
+        assert disconnect == {"type": "websocket.disconnect", "code": 1002}
+        assert writes, "expected websocket close frame to be sent"
+
 
 # ==================== _read_http_request (async) ====================
 
 
 @pytest.mark.asyncio
 class TestReadHttpRequest:
+    async def _read_all(self, body_stream):
+        data = bytearray()
+        while True:
+            chunk = await body_stream.read(4)
+            if not chunk:
+                return bytes(data)
+            data.extend(chunk)
+
     async def _feed_and_read(self, data: bytes):
         reader = asyncio.StreamReader()
         reader.feed_data(data)
@@ -319,12 +411,12 @@ class TestReadHttpRequest:
         req = b"GET /path HTTP/1.1\r\nHost: example.com\r\n\r\n"
         result = await self._feed_and_read(req)
         assert result is not None
-        method, path, version, headers, raw_headers, body = result
+        method, path, version, headers, raw_headers, body_stream = result
         assert method == "GET"
         assert path == "/path"
         assert "1.1" in version
         assert raw_headers.get("host") == "example.com"
-        assert body == b""
+        assert await self._read_all(body_stream) == b""
 
     async def test_post_with_content_length(self):
         req = (
@@ -336,8 +428,8 @@ class TestReadHttpRequest:
         )
         result = await self._feed_and_read(req)
         assert result is not None
-        _, _, _, _, _, body = result
-        assert body == b"hello world"
+        _, _, _, _, _, body_stream = result
+        assert await self._read_all(body_stream) == b"hello world"
 
     async def test_chunked_body(self):
         req = (
@@ -351,8 +443,8 @@ class TestReadHttpRequest:
         )
         result = await self._feed_and_read(req)
         assert result is not None
-        _, _, _, _, _, body = result
-        assert body == b"hello world"
+        _, _, _, _, _, body_stream = result
+        assert await self._read_all(body_stream) == b"hello world"
 
     async def test_eof_returns_none(self):
         reader = asyncio.StreamReader()
@@ -410,7 +502,7 @@ class TestHandleAsgiHttp:
         # Read the request first (normally _handle_asgi_connection does this)
         result = await cs._read_http_request(reader)
         assert result is not None
-        method, path, version, headers, raw_headers, body = result
+        method, path, version, headers, raw_headers, body_stream = result
 
         scope = {
             "type": "http",
@@ -419,7 +511,7 @@ class TestHandleAsgiHttp:
             "headers": headers,
         }
 
-        await cs._handle_asgi_http(writer, app, scope, body)
+        await cs._handle_asgi_http(writer, app, scope, body_stream)
 
         out = b"".join(written)
         assert b"HTTP/1.1 200 OK" in out
@@ -451,7 +543,8 @@ class TestHandleAsgiHttp:
         writer.drain = _drain
 
         scope = {"type": "http"}
-        await cs._handle_asgi_http(writer, app, scope, b"")
+        body_stream = cs._HttpBodyStream(asyncio.StreamReader(), content_length=0)
+        await cs._handle_asgi_http(writer, app, scope, body_stream)
 
         out = b"".join(written)
         assert b"transfer-encoding: chunked" in out.lower()
@@ -472,10 +565,57 @@ class TestHandleAsgiHttp:
         writer.drain = _drain
 
         scope = {"type": "http"}
-        await cs._handle_asgi_http(writer, app, scope, b"")
+        body_stream = cs._HttpBodyStream(asyncio.StreamReader(), content_length=0)
+        await cs._handle_asgi_http(writer, app, scope, body_stream)
 
         out = b"".join(written)
         assert b"500 Internal Server Error" in out
+
+    async def test_receive_streams_http_request_body_events(self):
+        received = []
+
+        async def app(scope, receive, send):
+            while True:
+                event = await receive()
+                received.append(event)
+                if event["type"] == "http.request" and not event.get(
+                    "more_body", False
+                ):
+                    break
+            await send({"type": "http.response.start", "status": 204, "headers": []})
+            await send({"type": "http.response.body", "body": b""})
+
+        async def _drain():
+            pass
+
+        writer = mock.Mock()
+        writer.write = lambda d: None
+        writer.drain = _drain
+
+        req = (
+            b"POST /upload HTTP/1.1\r\n"
+            b"Host: localhost\r\n"
+            b"Content-Length: 10\r\n"
+            b"\r\n"
+            b"abcdefghij"
+        )
+        reader = asyncio.StreamReader()
+        reader.feed_data(req)
+        reader.feed_eof()
+        result = await cs._read_http_request(reader)
+        assert result is not None
+        _, _, _, headers, _, body_stream = result
+
+        scope = {"type": "http", "headers": headers}
+        await cs._handle_asgi_http(writer, app, scope, body_stream)
+
+        assert len(received) >= 2
+        assert received[0]["type"] == "http.request"
+        assert received[0]["more_body"] is True
+        assert received[-1]["type"] == "http.request"
+        assert received[-1]["more_body"] is False
+        combined = b"".join(evt.get("body", b"") for evt in received)
+        assert combined == b"abcdefghij"
 
 
 # ==================== ASGI _handle_asgi_websocket ====================
@@ -678,7 +818,12 @@ class TestBuildWsgiEnviron:
         headers_list = [(b"host", b"example.com:8080")]
         raw_headers = {"host": "example.com:8080"}
         env = cs._build_wsgi_environ(
-            "GET", "/foo?bar=baz", "HTTP/1.1", headers_list, raw_headers, b""
+            "GET",
+            "/foo?bar=baz",
+            "HTTP/1.1",
+            headers_list,
+            raw_headers,
+            io.BytesIO(b""),
         )
         assert env["REQUEST_METHOD"] == "GET"
         assert env["PATH_INFO"] == "/foo"
@@ -689,7 +834,9 @@ class TestBuildWsgiEnviron:
         assert env["X_FROM"] == "caddy-snake"
 
     def test_path_unquoting(self):
-        env = cs._build_wsgi_environ("GET", "/hello%20world", "HTTP/1.1", [], {}, b"")
+        env = cs._build_wsgi_environ(
+            "GET", "/hello%20world", "HTTP/1.1", [], {}, io.BytesIO(b"")
+        )
         assert env["PATH_INFO"] == "hello world" or env["PATH_INFO"] == "/hello world"
 
     def test_content_type_and_length(self):
@@ -699,7 +846,7 @@ class TestBuildWsgiEnviron:
         ]
         raw_headers = {"content-type": "application/json", "content-length": "42"}
         env = cs._build_wsgi_environ(
-            "POST", "/", "HTTP/1.1", headers_list, raw_headers, b"x" * 42
+            "POST", "/", "HTTP/1.1", headers_list, raw_headers, io.BytesIO(b"x" * 42)
         )
         assert env["CONTENT_TYPE"] == "application/json"
         assert env["CONTENT_LENGTH"] == "42"
@@ -714,7 +861,7 @@ class TestBuildWsgiEnviron:
         ]
         raw_headers = {"host": "x", "x-custom": "second"}
         env = cs._build_wsgi_environ(
-            "GET", "/", "HTTP/1.1", headers_list, raw_headers, b""
+            "GET", "/", "HTTP/1.1", headers_list, raw_headers, io.BytesIO(b"")
         )
         assert "first" in env["HTTP_X_CUSTOM"]
         assert "second" in env["HTTP_X_CUSTOM"]
@@ -727,7 +874,7 @@ class TestBuildWsgiEnviron:
         ]
         raw_headers = {"host": "x", "cookie": "b=2"}
         env = cs._build_wsgi_environ(
-            "GET", "/", "HTTP/1.1", headers_list, raw_headers, b""
+            "GET", "/", "HTTP/1.1", headers_list, raw_headers, io.BytesIO(b"")
         )
         assert env["HTTP_COOKIE"] == "a=1; b=2"
 
@@ -735,7 +882,7 @@ class TestBuildWsgiEnviron:
         headers_list = [(b"host", b"x"), (b"proxy", b"evil")]
         raw_headers = {"host": "x", "proxy": "evil"}
         env = cs._build_wsgi_environ(
-            "GET", "/", "HTTP/1.1", headers_list, raw_headers, b""
+            "GET", "/", "HTTP/1.1", headers_list, raw_headers, io.BytesIO(b"")
         )
         assert "HTTP_PROXY" not in env
 
@@ -831,6 +978,42 @@ class TestWsgiHandler:
             b"5\r\nhello\r\n0\r\n\r\n",
         )
         assert b"hello" in resp
+
+    async def test_wsgi_input_incremental_reads(self):
+        def app(environ, start_response):
+            stream = environ["wsgi.input"]
+            pieces = [stream.read(3), stream.read(3), stream.read(10)]
+            start_response("200 OK", [])
+            return [b"".join(pieces)]
+
+        resp = await _handle_wsgi_request(
+            app,
+            b"POST / HTTP/1.1\r\n"
+            b"Host: x\r\n"
+            b"Content-Length: 9\r\n"
+            b"Connection: close\r\n\r\n"
+            b"streaming",
+        )
+        assert b"streaming" in resp
+
+    async def test_wsgi_input_readline_over_chunked_body(self):
+        def app(environ, start_response):
+            stream = environ["wsgi.input"]
+            body = stream.readline() + stream.readline() + stream.readline()
+            start_response("200 OK", [])
+            return [body]
+
+        resp = await _handle_wsgi_request(
+            app,
+            b"POST / HTTP/1.1\r\n"
+            b"Host: x\r\n"
+            b"Transfer-Encoding: chunked\r\n"
+            b"Connection: close\r\n\r\n"
+            b"6\r\nline1\n\r\n"
+            b"6\r\nline2\n\r\n"
+            b"0\r\n\r\n",
+        )
+        assert b"line1\nline2\n" in resp
 
     async def test_app_must_call_start_response(self):
         def app(environ, start_response):

@@ -942,7 +942,7 @@ func TestDynamicAppHandleRequest_AutoreloadFactoryError_TerminatesWhenExitFuncSe
 			return nil, factoryErr
 		},
 		zap.NewNop(),
-		true,  // autoreload
+		true, // autoreload
 		exitFunc,
 	)
 	defer d.Cleanup()
@@ -1387,6 +1387,32 @@ func TestWaitForPortFile_InvalidContent(t *testing.T) {
 	_, err = waitForPortFile(f.Name(), 100*time.Millisecond)
 	if err == nil {
 		t.Error("expected error for invalid port content")
+	}
+}
+
+func TestWaitForPortFile_EventuallyValidAfterTransientData(t *testing.T) {
+	f, err := os.CreateTemp("", "portfile-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := f.Name()
+	f.Close()
+	defer os.Remove(path)
+
+	go func() {
+		_ = os.WriteFile(path, []byte(""), 0644)
+		time.Sleep(30 * time.Millisecond)
+		_ = os.WriteFile(path, []byte("partial"), 0644)
+		time.Sleep(30 * time.Millisecond)
+		_ = os.WriteFile(path, []byte("8123"), 0644)
+	}()
+
+	port, err := waitForPortFile(path, 2*time.Second)
+	if err != nil {
+		t.Fatalf("waitForPortFile: %v", err)
+	}
+	if port != 8123 {
+		t.Fatalf("expected port 8123, got %d", port)
 	}
 }
 

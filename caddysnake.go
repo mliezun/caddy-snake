@@ -50,16 +50,16 @@ type AppServer interface {
 
 // CaddySnake module that communicates with a Python app
 type CaddySnake struct {
-	ModuleWsgi     string `json:"module_wsgi,omitempty"`
-	ModuleAsgi     string `json:"module_asgi,omitempty"`
-	Lifespan       string `json:"lifespan,omitempty"`
-	WorkingDir     string `json:"working_dir,omitempty"`
-	VenvPath       string `json:"venv_path,omitempty"`
+	ModuleWsgi string `json:"module_wsgi,omitempty"`
+	ModuleAsgi string `json:"module_asgi,omitempty"`
+	Lifespan   string `json:"lifespan,omitempty"`
+	WorkingDir string `json:"working_dir,omitempty"`
+	VenvPath   string `json:"venv_path,omitempty"`
 	Workers    string `json:"workers,omitempty"`
 	Autoreload string `json:"autoreload,omitempty"`
-	PythonPath     string `json:"python_path,omitempty"`
-	logger         *zap.Logger
-	app            AppServer
+	PythonPath string `json:"python_path,omitempty"`
+	logger     *zap.Logger
+	app        AppServer
 }
 
 // UnmarshalCaddyfile implements caddyfile.Unmarshaler.
@@ -178,7 +178,8 @@ func (f *CaddySnake) Provision(ctx caddy.Context) error {
 			}
 		}
 
-		f.app, err = NewAutoreloadableApp(f.app, absDir, factory, f.logger, func(code int) { os.Exit(code) })
+		// Keep Caddy running on reload errors; failed app serves 503 until recovery.
+		f.app, err = NewAutoreloadableApp(f.app, absDir, factory, f.logger, nil)
 		if err != nil {
 			return fmt.Errorf("autoreload: %w", err)
 		}
@@ -200,11 +201,7 @@ func (f *CaddySnake) provisionDynamic(workers int) error {
 			return NewPythonWorkerGroup("wsgi", module, dir, venv, lifespan, workers, pythonBin)
 		}
 		var err error
-		var exitOnFailure func(int)
-		if autoreload {
-			exitOnFailure = func(code int) { os.Exit(code) }
-		}
-		f.app, err = NewDynamicApp(f.ModuleWsgi, f.WorkingDir, f.VenvPath, factory, f.logger, autoreload, exitOnFailure)
+		f.app, err = NewDynamicApp(f.ModuleWsgi, f.WorkingDir, f.VenvPath, factory, f.logger, autoreload, nil)
 		if err != nil {
 			return err
 		}
@@ -223,11 +220,7 @@ func (f *CaddySnake) provisionDynamic(workers int) error {
 			return NewPythonWorkerGroup("asgi", module, dir, venv, lifespan, workers, pythonBin)
 		}
 		var err error
-		var exitOnFailure func(int)
-		if autoreload {
-			exitOnFailure = func(code int) { os.Exit(code) }
-		}
-		f.app, err = NewDynamicApp(f.ModuleAsgi, f.WorkingDir, f.VenvPath, factory, f.logger, autoreload, exitOnFailure)
+		f.app, err = NewDynamicApp(f.ModuleAsgi, f.WorkingDir, f.VenvPath, factory, f.logger, autoreload, nil)
 		if err != nil {
 			return err
 		}

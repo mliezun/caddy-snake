@@ -16,11 +16,11 @@ import base64
 import concurrent.futures
 import hashlib
 import importlib
-import io
 import os
 import signal
 import struct
 import sys
+import tempfile
 import traceback
 from http import HTTPStatus
 from urllib.parse import unquote
@@ -143,6 +143,177 @@ MAX_BODY_SIZE = (
 )  # 128 MB (internal IPC; external limits enforced by Caddy)
 MAX_HEADER_COUNT = 100
 MAX_WS_FRAME_SIZE = 16 * 1024 * 1024  # 16 MB
+MAX_WS_MESSAGE_SIZE = 16 * 1024 * 1024  # 16 MB reassembled message
+
+
+class _HttpBodyStream:
+    """Incremental HTTP request body reader for fixed-length and chunked bodies."""
+
+    def __init__(self, reader, content_length=None, chunked=False):
+        self._reader = reader
+        self._remaining = content_length
+        self._chunked = chunked
+        self._chunk_remaining = 0
+        self._total_read = 0
+        self._done = (content_length == 0) and not chunked
+
+    def _bump_total(self, size):
+        if size <= 0:
+            return
+        self._total_read += size
+        if self._total_read > MAX_BODY_SIZE:
+            raise ValueError("HTTP request body too large")
+
+    async def read(self, max_bytes=64 * 1024):
+        """Read up to max_bytes from the request body. Returns b"" on EOF."""
+        if self._done:
+            return b""
+        if max_bytes is None or max_bytes <= 0:
+            max_bytes = 64 * 1024
+
+        if self._remaining is not None:
+            if self._remaining <= 0:
+                self._done = True
+                return b""
+            to_read = min(max_bytes, self._remaining)
+            data = await self._reader.readexactly(to_read)
+            self._bump_total(len(data))
+            self._remaining -= len(data)
+            if self._remaining == 0:
+                self._done = True
+            return data
+
+        if not self._chunked:
+            self._done = True
+            return b""
+
+        while True:
+            if self._chunk_remaining == 0:
+                size_line = await self._reader.readline()
+                if not size_line:
+                    raise asyncio.IncompleteReadError(size_line, 1)
+                if len(size_line) > MAX_REQUEST_LINE:
+                    raise ValueError("Chunk size line too long")
+                size_str = size_line.strip()
+                if b";" in size_str:
+                    size_str = size_str.split(b";", 1)[0]
+                try:
+                    chunk_size = int(size_str, 16)
+                except ValueError as exc:
+                    raise ValueError("Invalid chunk size") from exc
+
+                if chunk_size < 0:
+                    raise ValueError("Invalid negative chunk size")
+                if chunk_size == 0:
+                    while True:
+                        trailer_line = await self._reader.readline()
+                        if trailer_line in (b"\r\n", b"\n", b""):
+                            break
+                        if len(trailer_line) > MAX_REQUEST_LINE:
+                            raise ValueError("Chunk trailer line too long")
+                    self._done = True
+                    return b""
+                self._chunk_remaining = chunk_size
+
+            to_read = min(max_bytes, self._chunk_remaining)
+            data = await self._reader.readexactly(to_read)
+            self._bump_total(len(data))
+            self._chunk_remaining -= len(data)
+            if self._chunk_remaining == 0:
+                ending = await self._reader.readexactly(2)
+                if ending != b"\r\n":
+                    raise ValueError("Invalid chunk terminator")
+            if data:
+                return data
+
+    async def discard(self):
+        """Drain any unread request body bytes so keep-alive stays in sync."""
+        while True:
+            chunk = await self.read()
+            if not chunk:
+                return
+
+
+class _WsgiInputStream:
+    """Blocking file-like adapter over an async body stream for WSGI apps."""
+
+    def __init__(self, body_stream, loop):
+        self._body_stream = body_stream
+        self._loop = loop
+        self._buffer = bytearray()
+        self._eof = False
+
+    def _fetch(self, max_bytes=64 * 1024):
+        if self._eof:
+            return b""
+        fut = asyncio.run_coroutine_threadsafe(
+            self._body_stream.read(max_bytes), self._loop
+        )
+        data = fut.result()
+        if not data:
+            self._eof = True
+        return data
+
+    def read(self, size=-1):
+        if size is None or size < 0:
+            while not self._eof:
+                self._buffer.extend(self._fetch())
+            out = bytes(self._buffer)
+            self._buffer.clear()
+            return out
+        if size == 0:
+            return b""
+        while len(self._buffer) < size and not self._eof:
+            self._buffer.extend(self._fetch())
+        out = bytes(self._buffer[:size])
+        del self._buffer[:size]
+        return out
+
+    def readline(self, size=-1):
+        if size == 0:
+            return b""
+        limit = size if size is not None and size >= 0 else None
+        while True:
+            search_end = (
+                len(self._buffer) if limit is None else min(limit, len(self._buffer))
+            )
+            newline = self._buffer.find(b"\n", 0, search_end)
+            if newline != -1:
+                end = newline + 1
+                out = bytes(self._buffer[:end])
+                del self._buffer[:end]
+                return out
+            if limit is not None and len(self._buffer) >= limit:
+                out = bytes(self._buffer[:limit])
+                del self._buffer[:limit]
+                return out
+            if self._eof:
+                out = bytes(self._buffer)
+                self._buffer.clear()
+                return out
+            self._buffer.extend(self._fetch())
+
+    def readlines(self, hint=-1):
+        lines = []
+        total = 0
+        while True:
+            line = self.readline()
+            if not line:
+                break
+            lines.append(line)
+            total += len(line)
+            if hint and hint > 0 and total >= hint:
+                break
+        return lines
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        line = self.readline()
+        if not line:
+            raise StopIteration
+        return line
 
 
 # ==================== WSGI Server ====================
@@ -186,7 +357,7 @@ def _call_wsgi_app(app, environ):
             result.close()
 
 
-def _build_wsgi_environ(method, path, version, headers_list, raw_headers, body):
+def _build_wsgi_environ(method, path, version, headers_list, raw_headers, wsgi_input):
     """Build a WSGI environ dict from parsed HTTP request components."""
     path_part, query_string = _split_path(path)
     host_str = raw_headers.get("host", "localhost")
@@ -205,7 +376,7 @@ def _build_wsgi_environ(method, path, version, headers_list, raw_headers, body):
         "X_FROM": "caddy-snake",
         "wsgi.version": (1, 0),
         "wsgi.url_scheme": "http",
-        "wsgi.input": io.BytesIO(body),
+        "wsgi.input": wsgi_input,
         "wsgi.errors": sys.stderr,
         "wsgi.multithread": True,
         "wsgi.multiprocess": True,
@@ -249,14 +420,17 @@ async def _handle_wsgi_connection(reader, writer, app):
             if result is None:
                 break
 
-            method, path, version, headers_list, raw_headers, body = result
+            method, path, version, headers_list, raw_headers, body_stream = result
+            wsgi_input = _WsgiInputStream(body_stream, loop)
             environ = _build_wsgi_environ(
-                method, path, version, headers_list, raw_headers, body
+                method, path, version, headers_list, raw_headers, wsgi_input
             )
 
             status_code, resp_headers, resp_body = await loop.run_in_executor(
                 _wsgi_executor, _call_wsgi_app, app, environ
             )
+
+            await body_stream.discard()
 
             buf = bytearray()
             buf.extend(_get_status_line(status_code))
@@ -314,8 +488,7 @@ async def _run_wsgi_server_async(app, socket_path):
         )
         port = server.sockets[0].getsockname()[1]
         try:
-            with open(socket_path, "w") as f:
-                f.write(str(port))
+            _write_port_file_atomic(socket_path, port)
         except OSError as e:
             print(f"Failed to write port file: {e}", file=sys.stderr)
             sys.exit(1)
@@ -435,10 +608,28 @@ def ws_accept_key(key):
     return base64.b64encode(hashlib.sha1(key.encode() + WS_MAGIC).digest()).decode()
 
 
+def _write_port_file_atomic(path, value):
+    """Atomically write port discovery file to avoid partial reads."""
+    directory = os.path.dirname(path) or "."
+    prefix = f".{os.path.basename(path)}."
+    fd, tmp_path = tempfile.mkstemp(prefix=prefix, dir=directory)
+    try:
+        with os.fdopen(fd, "w") as f:
+            f.write(str(value))
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp_path, path)
+    finally:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+
+
 async def _read_http_request(reader):
     """Parse an HTTP/1.1 request from an asyncio reader.
 
-    Returns None on EOF, or (method, path, version, headers, raw_headers, body).
+    Returns None on EOF, or (method, path, version, headers, raw_headers, body_stream).
     headers is a list of (name_bytes, value_bytes) for ASGI scope.
     raw_headers is a dict of lowercase-name -> value for internal use.
     """
@@ -478,7 +669,7 @@ async def _read_http_request(reader):
         headers.append((name, value))
         raw_headers[name.decode("latin-1")] = value.decode("latin-1")
 
-    body = b""
+    body_stream = _HttpBodyStream(reader, content_length=0)
     content_length = raw_headers.get("content-length")
     transfer_encoding = raw_headers.get("transfer-encoding", "")
 
@@ -493,22 +684,11 @@ async def _read_http_request(reader):
             return None
         if cl < 0 or cl > MAX_BODY_SIZE:
             return None
-        body = await reader.readexactly(cl)
+        body_stream = _HttpBodyStream(reader, content_length=cl)
     elif "chunked" in transfer_encoding.lower():
-        chunks = bytearray()
-        while True:
-            line = await reader.readline()
-            chunk_size = int(line.strip(), 16)
-            if chunk_size == 0:
-                await reader.readline()
-                break
-            if len(chunks) + chunk_size > MAX_BODY_SIZE:
-                return None
-            chunks.extend(await reader.readexactly(chunk_size))
-            await reader.readline()
-        body = bytes(chunks)
+        body_stream = _HttpBodyStream(reader, chunked=True)
 
-    return method, path, version, headers, raw_headers, body
+    return method, path, version, headers, raw_headers, body_stream
 
 
 def _encode_header(name, value):
@@ -520,16 +700,19 @@ def _encode_header(name, value):
     return name, value
 
 
-async def _handle_asgi_http(writer, app, scope, body):
+async def _handle_asgi_http(writer, app, scope, body_stream):
     """Handle an ASGI HTTP connection."""
-    body_sent = False
+    body_done = False
     disconnect_event = asyncio.Event()
 
     async def receive():
-        nonlocal body_sent
-        if not body_sent:
-            body_sent = True
-            return {"type": "http.request", "body": body, "more_body": False}
+        nonlocal body_done
+        if not body_done:
+            chunk = await body_stream.read()
+            if chunk:
+                return {"type": "http.request", "body": chunk, "more_body": True}
+            body_done = True
+            return {"type": "http.request", "body": b"", "more_body": False}
         await disconnect_event.wait()
         return {"type": "http.disconnect"}
 
@@ -631,23 +814,45 @@ async def _handle_asgi_http(writer, app, scope, body):
             if use_chunked and not response_complete:
                 writer.write(b"0\r\n\r\n")
             await writer.drain()
+    finally:
+        disconnect_event.set()
+        await body_stream.discard()
+
+
+async def _ws_close_with_code(writer, code):
+    """Send a websocket close frame with the provided status code."""
+    payload = struct.pack("!H", code)
+    frame = ws_build_frame(WS_OPCODE_CLOSE, payload)
+    try:
+        writer.write(frame)
+        await writer.drain()
+    except (ConnectionError, OSError):
+        pass
 
 
 async def _ws_read_loop(reader, receive_queue, closed_event, writer):
     """Read WebSocket frames and enqueue ASGI receive events."""
+    fragment_opcode = None
+    fragment_buffer = bytearray()
+
+    async def protocol_error(code):
+        await _ws_close_with_code(writer, code)
+        await receive_queue.put({"type": "websocket.disconnect", "code": code})
+
     try:
         while not closed_event.is_set():
             fin, opcode, payload = await ws_read_frame(reader)
 
-            if opcode == WS_OPCODE_TEXT:
-                await receive_queue.put(
-                    {"type": "websocket.receive", "text": payload.decode("utf-8")}
-                )
-            elif opcode == WS_OPCODE_BINARY:
-                await receive_queue.put({"type": "websocket.receive", "bytes": payload})
-            elif opcode == WS_OPCODE_CLOSE:
+            is_control = opcode & 0x8
+            if is_control and (not fin or len(payload) > 125):
+                await protocol_error(1002)
+                break
+
+            if opcode == WS_OPCODE_CLOSE:
                 code = 1005
-                if len(payload) >= 2:
+                if len(payload) == 1:
+                    code = 1002
+                elif len(payload) >= 2:
                     code = struct.unpack("!H", payload[:2])[0]
                 await receive_queue.put({"type": "websocket.disconnect", "code": code})
                 break
@@ -655,6 +860,67 @@ async def _ws_read_loop(reader, receive_queue, closed_event, writer):
                 frame = ws_build_frame(WS_OPCODE_PONG, payload)
                 writer.write(frame)
                 await writer.drain()
+            elif opcode == WS_OPCODE_PONG:
+                continue
+            elif opcode == WS_OPCODE_CONTINUATION:
+                if fragment_opcode is None:
+                    await protocol_error(1002)
+                    break
+
+                fragment_buffer.extend(payload)
+                if len(fragment_buffer) > MAX_WS_MESSAGE_SIZE:
+                    await protocol_error(1009)
+                    break
+
+                if fin:
+                    if fragment_opcode == WS_OPCODE_TEXT:
+                        try:
+                            message = fragment_buffer.decode("utf-8")
+                        except UnicodeDecodeError:
+                            await protocol_error(1007)
+                            break
+                        await receive_queue.put(
+                            {"type": "websocket.receive", "text": message}
+                        )
+                    else:
+                        await receive_queue.put(
+                            {
+                                "type": "websocket.receive",
+                                "bytes": bytes(fragment_buffer),
+                            }
+                        )
+                    fragment_opcode = None
+                    fragment_buffer.clear()
+            elif opcode == WS_OPCODE_TEXT or opcode == WS_OPCODE_BINARY:
+                if fragment_opcode is not None:
+                    await protocol_error(1002)
+                    break
+
+                if fin:
+                    if opcode == WS_OPCODE_TEXT:
+                        try:
+                            message = payload.decode("utf-8")
+                        except UnicodeDecodeError:
+                            await protocol_error(1007)
+                            break
+                        await receive_queue.put(
+                            {"type": "websocket.receive", "text": message}
+                        )
+                    else:
+                        await receive_queue.put(
+                            {"type": "websocket.receive", "bytes": payload}
+                        )
+                else:
+                    fragment_opcode = opcode
+                    fragment_buffer = bytearray(payload)
+                    if len(fragment_buffer) > MAX_WS_MESSAGE_SIZE:
+                        await protocol_error(1009)
+                        break
+            else:
+                await protocol_error(1002)
+                break
+    except ValueError:
+        await receive_queue.put({"type": "websocket.disconnect", "code": 1002})
     except (asyncio.IncompleteReadError, ConnectionError, OSError):
         await receive_queue.put({"type": "websocket.disconnect", "code": 1006})
 
@@ -765,7 +1031,7 @@ async def _handle_asgi_connection(reader, writer, app, state):
             if result is None:
                 break
 
-            method, path, version, headers, raw_headers, body = result
+            method, path, version, headers, raw_headers, body_stream = result
             path_part, query_string = _split_path(path)
 
             is_websocket = (
@@ -807,10 +1073,11 @@ async def _handle_asgi_connection(reader, writer, app, state):
                 scope["subprotocols"] = [
                     s.strip() for s in subprotocols_str.split(",") if s.strip()
                 ]
+                await body_stream.discard()
                 await _handle_asgi_websocket(reader, writer, app, scope, raw_headers)
                 break
             else:
-                await _handle_asgi_http(writer, app, scope, body)
+                await _handle_asgi_http(writer, app, scope, body_stream)
 
             connection = raw_headers.get("connection", "")
             if "close" in connection.lower():
@@ -917,8 +1184,7 @@ async def run_asgi_server(app, socket_path, lifespan):
         )
         port = server.sockets[0].getsockname()[1]
         try:
-            with open(socket_path, "w") as f:
-                f.write(str(port))
+            _write_port_file_atomic(socket_path, port)
         except OSError as e:
             print(f"Failed to write port file: {e}", file=sys.stderr)
             sys.exit(1)
