@@ -11,11 +11,13 @@ RUN export DEBIAN_FRONTEND=noninteractive &&\
     tar -C /usr/local -xzf go*.linux-${ARCH}.tar.gz && \
     rm go*.linux-${ARCH}.tar.gz
 
+COPY . /build
+
 ENV PATH=/usr/local/go/bin:$PATH
 
 RUN go install github.com/caddyserver/xcaddy/cmd/xcaddy@latest &&\
     cd /usr/local/bin &&\
-    CGO_ENABLED=0 /root/go/bin/xcaddy build --with github.com/mliezun/caddy-snake &&\
+    CGO_ENABLED=0 /root/go/bin/xcaddy build --with github.com/mliezun/caddy-snake=/build &&\
     rm -rf /build
 
 CMD ["cp", "/usr/local/bin/caddy", "/output/caddy"]
