@@ -1,0 +1,55 @@
+---
+name: Caddy Binary Linux
+on:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+  release:
+    types:
+      - published
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, ubuntu-22.04-arm]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+          cache: false
+      - name: Install Xcaddy
+        run: go install github.com/caddyserver/xcaddy/cmd/xcaddy@latest
+      - name: Build the server
+        run: CGO_ENABLED=0 xcaddy build --with github.com/mliezun/caddy-snake=.
+      - name: Choose architecture
+        id: choose-arch
+        run: |
+          if [ "${{ matrix.os }}" == "ubuntu-22.04-arm" ]; then
+            ARCH=arm64
+          else
+            ARCH=amd64
+          fi
+          echo "ARCH=${ARCH}" >> $GITHUB_OUTPUT
+      - name: Rename binary
+        run: mv caddy caddy-linux-${{ steps.choose-arch.outputs.ARCH }}
+      - name: Upload caddy binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: caddy-linux-${{ steps.choose-arch.outputs.ARCH }}
+          path: caddy-linux-${{ steps.choose-arch.outputs.ARCH }}
+      - name: Package caddy binary
+        if: github.event_name == 'release'
+        run: |
+          tar -czf caddy-linux-${{ steps.choose-arch.outputs.ARCH }}.tar.gz caddy-linux-${{ steps.choose-arch.outputs.ARCH }}
+      - name: Upload to release
+        if: github.event_name == 'release'
+        run: |
+          gh release upload ${{ github.event.release.tag_name }} caddy-linux-${{ steps.choose-arch.outputs.ARCH }}.tar.gz --repo ${{ github.repository }} --clobber
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

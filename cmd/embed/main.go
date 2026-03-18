@@ -62,6 +62,14 @@ func extractTarGz(data []byte, targetDir string) error {
 				return err
 			}
 			outFile.Close()
+			
+		case tar.TypeSymlink:
+			if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+				return err
+			}
+			if err := os.Symlink(header.Linkname, path); err != nil {
+				return err
+			}
 		}
 	}
 
@@ -102,17 +110,22 @@ func run() int {
 	args := os.Args[1:]
 
 	env := []string{}
-	ld_library_path := ""
+	ldLibraryPath := ""
 	for _, e := range os.Environ() {
 		if strings.HasPrefix(e, "LD_LIBRARY_PATH=") {
-			ld_library_path = strings.Split(e, "=")[1]
+			ldLibraryPath = strings.SplitN(e, "=", 2)[1]
 		}
-		if !strings.HasPrefix(e, "PYTHONHOME=") && !strings.HasPrefix(e, "LD_LIBRARY_PATH=") {
-			env = append(env, e)
+		if strings.HasPrefix(e, "PYTHONHOME=") || strings.HasPrefix(e, "LD_LIBRARY_PATH=") || strings.HasPrefix(e, "DYLD_LIBRARY_PATH=") {
+			continue
 		}
+		env = append(env, e)
 	}
-	env = append(env, fmt.Sprintf("PYTHONHOME=%s", filepath.Join(tmpDirPkg, "python")))
-	env = append(env, fmt.Sprintf("LD_LIBRARY_PATH=%s:%s", filepath.Join(tmpDirPkg, "python", "lib"), ld_library_path))
+	pythonHome := filepath.Join(tmpDirPkg, "python")
+	env = append(env, fmt.Sprintf("PYTHONHOME=%s", pythonHome))
+	env = append(env, fmt.Sprintf("LD_LIBRARY_PATH=%s:%s", filepath.Join(pythonHome, "lib"), ldLibraryPath))
+	if runtime.GOOS == "darwin" {
+		env = append(env, fmt.Sprintf("DYLD_LIBRARY_PATH=%s:%s", filepath.Join(pythonHome, "lib"), os.Getenv("DYLD_LIBRARY_PATH")))
+	}
 
 	cmd := exec.Command(caddyPath, args...)
 	cmd.Env = env
