@@ -49,6 +49,7 @@ jobs:
           cd cmd/cli/target/wheels
           python${{ matrix.python-version }} -m pip install twine
           python${{ matrix.python-version }} -m twine upload \
+            --skip-existing \
             --username __token__ \
             --password ${{ secrets.PYPI_API_TOKEN }} \
             *.whl
