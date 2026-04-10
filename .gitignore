@@ -13,6 +13,9 @@ bin
 __pycache__
 .coverage
 coverage.out
+*.log
+tests/*/caddy
+/caddy
 
 # Local python builds
 Python-3.12*

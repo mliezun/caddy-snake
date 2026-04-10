@@ -621,8 +621,12 @@ func init() {
 	caddy.RegisterModule(CaddySnake{})
 	httpcaddyfile.RegisterHandlerDirective("python", parsePythonDirective)
 	caddycmd.RegisterCommand(caddycmd.Command{
-		Name:  "python-server",
-		Usage: "--server-type wsgi|asgi --app <module> [--domain <example.com>] [--listen <addr>] [--workers <count>] [--python-path <path>] [--static-path <path>] [--static-route <route>] [--debug] [--access-logs] [--autoreload]",
+		Name: "python-server",
+		Usage: "--server-type wsgi|asgi --app <module> " +
+			"[--domain <example.com>] [--listen <addr>] [--workers <count>] " +
+			"[--python-path <path>] [--working-dir <path>] [--venv <path>] " +
+			"[--static-path <path>] [--static-route <route>] " +
+			"[--debug] [--access-logs] [--autoreload]",
 		Short: "Spins up a Python server",
 		Long: `
 A Python WSGI or ASGI server designed for apps and frameworks.
@@ -639,10 +643,13 @@ Ensure DNS A/AAAA records are correctly set up if using a public domain for secu
 			cmd.Flags().StringP("listen", "l", "", "The address to which to bind the listener")
 			cmd.Flags().StringP("workers", "w", "0", "The number of workers to spawn")
 			cmd.Flags().String("python-path", "", "Path to the Python interpreter")
+			cmd.Flags().String("working-dir", "", "Working directory for the Python app")
+			cmd.Flags().String("venv", "", "Path to a Python virtual environment to use")
 			cmd.Flags().String("static-path", "", "Path to a static directory to serve: path/to/static")
 			cmd.Flags().String("static-route", "/static", "Route to serve the static directory: /static")
 			cmd.Flags().Bool("debug", false, "Enable debug logs")
 			cmd.Flags().Bool("access-logs", false, "Enable access logs")
+			cmd.Flags().String("lifespan", "off", "Enable ASGI lifespan support (ignored in WSGI mode)")
 			cmd.Flags().Bool("autoreload", false, "Watch .py files and reload on changes")
 			cmd.RunE = caddycmd.WrapCommandFuncForCobra(pythonServer)
 		},
@@ -664,6 +671,9 @@ func pythonServer(fs caddycmd.Flags) (int, error) {
 	staticRoute := fs.String("static-route")
 	serverType := fs.String("server-type")
 	pythonPath := fs.String("python-path")
+	workingDir := fs.String("working-dir")
+	venv := fs.String("venv")
+	lifespan := fs.String("lifespan")
 
 	if serverType == "" {
 		return caddy.ExitCodeFailedStartup, errors.New("--server-type is required")
@@ -694,7 +704,9 @@ func pythonServer(fs caddycmd.Flags) (int, error) {
 	} else {
 		pythonHandler.ModuleAsgi = app
 	}
-	if venv := os.Getenv("VIRTUAL_ENV"); venv != "" {
+	if venv != "" {
+		pythonHandler.VenvPath = venv
+	} else if venv := os.Getenv("VIRTUAL_ENV"); venv != "" {
 		pythonHandler.VenvPath = venv
 	}
 
@@ -703,6 +715,8 @@ func pythonServer(fs caddycmd.Flags) (int, error) {
 	if autoreload {
 		pythonHandler.Autoreload = "on"
 	}
+	pythonHandler.WorkingDir = workingDir
+	pythonHandler.Lifespan = lifespan
 
 	routes := caddyhttp.RouteList{}
 
