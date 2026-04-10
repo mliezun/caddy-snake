@@ -58,10 +58,14 @@ This starts a server on port `9080` serving your app. See `./caddy python-server
 --domain <example.com>    Enable HTTPS with automatic certificates
 --listen <addr>           Custom listen address (default: :9080)
 --workers <count>         Number of worker processes (default: CPU count)
+--python-path <path>      Path to Python executable (default: embedded Python)
+--working-dir <path>      Working directory for the Python app
+--venv <path>             Path to virtual environment
 --static-path <path>      Serve a static files directory
 --static-route <route>    Route prefix for static files (default: /static)
 --debug                   Enable debug logging
 --access-logs             Enable access logs
+--lifespan on|off         Enable ASGI lifespan events (default: off)
 --autoreload              Watch .py files and reload on changes
 ```
 
