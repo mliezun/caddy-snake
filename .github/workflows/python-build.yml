@@ -1,8 +1,11 @@
 name: Python Build Package - Linux
+
 on:
   push:
     tags: ["v*.*.*"]
   workflow_dispatch:
+
+permissions: {}
 
 jobs:
   build:

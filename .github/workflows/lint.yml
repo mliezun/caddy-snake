@@ -1,4 +1,5 @@
 name: Lint
+
 on:
   pull_request:
     branches:
@@ -6,6 +7,9 @@ on:
   push:
     branches:
       - main
+
+permissions: {}
+
 jobs:
   build:
     name: Lint

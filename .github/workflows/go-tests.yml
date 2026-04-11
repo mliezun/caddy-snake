@@ -1,4 +1,5 @@
 name: Go Tests
+
 on:
   pull_request:
     branches:
@@ -6,8 +7,9 @@ on:
   push:
     branches:
       - main
-permissions:
-  contents: write
+
+permissions: {}
+
 jobs:
   tests:
     strategy:
@@ -15,6 +17,8 @@ jobs:
       matrix:
         os: [ubuntu-24.04, ubuntu-24.04-arm]
     runs-on: ${{ matrix.os }}
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
         with:
