@@ -42,7 +42,7 @@ jobs:
           fi
           echo "ARCH=${ARCH}" >> $GITHUB_OUTPUT
       - name: Rename binary
-        run: mv caddy caddy-linux-${{ steps.choose-arch.outputs.ARCH }}
+        run: mv caddy caddy-linux-${{ steps.choose-arch.outputs.ARCH }} # zizmor: ignore[template-injection]
       - name: Upload caddy binary
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
@@ -50,11 +50,11 @@ jobs:
           path: caddy-linux-${{ steps.choose-arch.outputs.ARCH }}
       - name: Package caddy binary
         if: github.event_name == 'release'
-        run: |
+        run: | # zizmor: ignore[template-injection]
           tar -czf caddy-linux-${{ steps.choose-arch.outputs.ARCH }}.tar.gz caddy-linux-${{ steps.choose-arch.outputs.ARCH }}
       - name: Upload to release
         if: github.event_name == 'release'
-        run: |
+        run: | # zizmor: ignore[template-injection]
           gh release upload ${{ github.event.release.tag_name }} caddy-linux-${{ steps.choose-arch.outputs.ARCH }}.tar.gz --repo ${{ github.repository }} --clobber
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

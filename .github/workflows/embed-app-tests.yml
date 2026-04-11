@@ -47,7 +47,7 @@ jobs:
           fi
       - name: Build embed-app binary
         working-directory: cmd/embed-app
-        run: |
+        run: | # zizmor: ignore[template-injection]
           ./build.sh app.zip ${{ matrix.python-version }} --output embed-test --arch ${{ steps.arch.outputs.arch }}
       - name: Run embed-app and verify
         working-directory: cmd/embed-app

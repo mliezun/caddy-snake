@@ -49,7 +49,7 @@ jobs:
       - name: Retrieve python build standalone
         if: matrix.python-version != '3.13-nogil'
         working-directory: cmd/embed
-        run: |
+        run: | # zizmor: ignore[template-injection]
           python3 pybs.py latest --python-version ${{ matrix.python-version }} --architecture ${{ steps.choose-arch.outputs.PYBS_ARCH }} --build-config pgo+lto --content-type install_only_stripped
           mv cpython-*.tar.gz python-standalone.tar.gz
           go build main.go
@@ -57,7 +57,7 @@ jobs:
       - name: Retrieve python build standalone (nogil)
         if: matrix.python-version == '3.13-nogil'
         working-directory: cmd/embed
-        run: |
+        run: | # zizmor: ignore[template-injection]
           python3 pybs.py latest --python-version 3.13 --architecture ${{ steps.choose-arch.outputs.PYBS_ARCH }} --build-config freethreaded+pgo+lto --content-type full
           tar -xf cpython-*.tar.zst
           mv python/install .
@@ -74,11 +74,11 @@ jobs:
             cmd/embed/caddy
       - name: Package caddy standalone
         if: github.event_name == 'release'
-        run: |
+        run: | # zizmor: ignore[template-injection]
           tar -czf caddy-standalone-${{ matrix.python-version }}-${{ steps.choose-arch.outputs.PYBS_ARCH }}.tar.gz cmd/embed/caddy
       - name: Upload to release
         if: github.event_name == 'release'
-        run: |
+        run: | # zizmor: ignore[template-injection]
           gh release upload ${{ github.event.release.tag_name }} caddy-standalone-${{ matrix.python-version }}-${{ steps.choose-arch.outputs.PYBS_ARCH }}.tar.gz --repo ${{ github.repository }} --clobber
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
