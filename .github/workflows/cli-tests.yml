@@ -29,9 +29,7 @@ jobs:
         with:
           python-version: "3.13"
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master
-        with:
-          toolchain: stable
+        run: rustup toolchain install stable
       - name: Install Xcaddy
         run: go install github.com/caddyserver/xcaddy/cmd/xcaddy@latest
       - name: Build the CLI binary
