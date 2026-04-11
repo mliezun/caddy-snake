@@ -24,6 +24,7 @@ jobs:
       contents: read
       packages: write
       id-token: write
+    environment: docker-publish
 
     steps:
       - name: Checkout repository
