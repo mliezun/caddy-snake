@@ -20,10 +20,10 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           persist-credentials: false
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version: "1.26"
           cache: false
@@ -36,7 +36,7 @@ jobs:
           go test -race -coverprofile=coverage.out -tags=caddytest -timeout 90s . || \
           go test -race -coverprofile=coverage.out .
       - name: Update coverage report
-        uses: ncruces/go-coverage-report@v0
+        uses: ncruces/go-coverage-report@dfc237255099f2d25066babde51253992175e365 # v0.3.2
         with:
           coverage-file: coverage.out
         continue-on-error: true
