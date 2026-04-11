@@ -1,4 +1,3 @@
----
 name: Embed App Tests
 on:
   pull_request:
@@ -12,20 +11,20 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ['3.12', '3.13']
+        python-version: ["3.12", "3.13"]
         os: [ubuntu-22.04, ubuntu-22.04-arm]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.26'
+          go-version: "1.26"
           cache: false
       - name: Install xcaddy
         run: go install github.com/caddyserver/xcaddy/cmd/xcaddy@latest
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.13'
+          python-version: "3.13"
       - name: Choose architecture
         id: arch
         run: |

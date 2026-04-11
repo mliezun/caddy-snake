@@ -1,7 +1,7 @@
 name: Python Build Package - Linux
 on:
   push:
-    tags: [ 'v*.*.*' ]
+    tags: ["v*.*.*"]
   workflow_dispatch:
 
 jobs:
@@ -9,7 +9,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ['3.12', '3.13', '3.14']
+        python-version: ["3.12", "3.13", "3.14"]
         os: [ubuntu-22.04, ubuntu-22.04-arm]
     runs-on: ${{ matrix.os }}
     steps:

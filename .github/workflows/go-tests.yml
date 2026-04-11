@@ -1,39 +1,38 @@
----
-    name: Go Tests
-    on:
-      pull_request:
-        branches:
-          - main
-      push:
-        branches:
-          - main
-    permissions:
-      contents: write
-    jobs:
-      tests:
-        strategy:
-          fail-fast: false
-          matrix:
-            os: [ubuntu-24.04, ubuntu-24.04-arm]
-        runs-on: ${{ matrix.os }}
-        steps:
-          - uses: actions/checkout@v4
-          - uses: actions/setup-go@v5
-            with:
-              go-version: '1.26'
-              cache: false
-          - name: Install Xcaddy
-            run: go install github.com/caddyserver/xcaddy/cmd/xcaddy@latest
-          - name: Run module tests
-            run: go test -race -v .
-          - name: Run tests with coverage (including caddytest when available)
-            run: |
-              go test -race -coverprofile=coverage.out -tags=caddytest -timeout 90s . || \
-              go test -race -coverprofile=coverage.out .
-          - name: Update coverage report
-            uses: ncruces/go-coverage-report@v0
-            with:
-              coverage-file: coverage.out
-            continue-on-error: true
-          - name: Build the server
-            run: CGO_ENABLED=0 xcaddy build --with github.com/mliezun/caddy-snake=.
+name: Go Tests
+on:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+permissions:
+  contents: write
+jobs:
+  tests:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+          cache: false
+      - name: Install Xcaddy
+        run: go install github.com/caddyserver/xcaddy/cmd/xcaddy@latest
+      - name: Run module tests
+        run: go test -race -v .
+      - name: Run tests with coverage (including caddytest when available)
+        run: |
+          go test -race -coverprofile=coverage.out -tags=caddytest -timeout 90s . || \
+          go test -race -coverprofile=coverage.out .
+      - name: Update coverage report
+        uses: ncruces/go-coverage-report@v0
+        with:
+          coverage-file: coverage.out
+        continue-on-error: true
+      - name: Build the server
+        run: CGO_ENABLED=0 xcaddy build --with github.com/mliezun/caddy-snake=.

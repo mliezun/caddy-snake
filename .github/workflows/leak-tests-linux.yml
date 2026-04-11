@@ -1,52 +1,51 @@
----
-    name: Leak Tests Linux
-    on:
-      pull_request:
-        branches:
-          - main
-      push:
-        branches:
-          - main
-    jobs:
-      tests:
-        runs-on: ubuntu-24.04
-        strategy:
-          fail-fast: false
-          matrix:
-            tool-name: ['django', 'socketio']
-            python-version: ['3.13']
-        steps:
-          - uses: actions/checkout@v4
-          - uses: actions/setup-go@v5
-            with:
-              go-version: '1.26'
-              cache: false
-          - name: Install Xcaddy
-            run: go install github.com/caddyserver/xcaddy/cmd/xcaddy@latest
-          - uses: actions/setup-python@v5
-            with:
-              python-version: ${{ matrix.python-version }}
-          - name: Set up venv and install dependencies
-            working-directory: tests/${{ matrix.tool-name }}/
-            run: |
-              rm -rf venv
-              python -m venv venv
-              source venv/bin/activate
-              pip install -r requirements.txt
-          - name: Build the server
-            working-directory: tests/${{ matrix.tool-name }}/
-            run: CGO_ENABLED=0 xcaddy build --with github.com/mliezun/caddy-snake=../..
-          - name: Run integration tests
-            working-directory: tests/${{ matrix.tool-name }}/
-            run: |
-              ./caddy run --config Caddyfile > caddy.log 2>&1 &
-              timeout 60 bash -c 'while ! grep -q "finished cleaning storage units" caddy.log; do sleep 1; done'
-              source venv/bin/activate
-              python main_test.py
-          - name: Upload logs and report
-            if: always()
-            uses: actions/upload-artifact@v4
-            with:
-              name: caddy-leak-tests-logs-${{ matrix.tool-name }}-${{ matrix.python-version }}
-              path: |
-                tests/${{ matrix.tool-name }}/caddy.log
+name: Leak Tests Linux
+on:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+jobs:
+  tests:
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        tool-name: ["django", "socketio"]
+        python-version: ["3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+          cache: false
+      - name: Install Xcaddy
+        run: go install github.com/caddyserver/xcaddy/cmd/xcaddy@latest
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Set up venv and install dependencies
+        working-directory: tests/${{ matrix.tool-name }}/
+        run: |
+          rm -rf venv
+          python -m venv venv
+          source venv/bin/activate
+          pip install -r requirements.txt
+      - name: Build the server
+        working-directory: tests/${{ matrix.tool-name }}/
+        run: CGO_ENABLED=0 xcaddy build --with github.com/mliezun/caddy-snake=../..
+      - name: Run integration tests
+        working-directory: tests/${{ matrix.tool-name }}/
+        run: |
+          ./caddy run --config Caddyfile > caddy.log 2>&1 &
+          timeout 60 bash -c 'while ! grep -q "finished cleaning storage units" caddy.log; do sleep 1; done'
+          source venv/bin/activate
+          python main_test.py
+      - name: Upload logs and report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: caddy-leak-tests-logs-${{ matrix.tool-name }}-${{ matrix.python-version }}
+          path: |
+            tests/${{ matrix.tool-name }}/caddy.log
