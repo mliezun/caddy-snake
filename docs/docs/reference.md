@@ -207,6 +207,48 @@ Old app instances are cleaned up after a 10-second grace period to allow in-flig
 
 ---
 
+## On-demand TLS (certificate permission without `ask`)
+
+When you serve many HTTPS hostnames under one zone (for example `{branch}.project.example`), Caddy normally needs to know each name for automatic HTTPS, **or** you use [On-Demand TLS](https://caddyserver.com/docs/caddyfile/options#on-demand-tls). On-demand issuance **must** be gated by permission: either an HTTP **`ask`** URL or a **`tls.permission.*`** module. Caddy Snake ships **`tls.permission.python_dir`** so you can **avoid running a separate `ask`** service: it allows a certificate only if the hostname looks like **`{slug}.{your_domain_suffix}`** and **`{root}/{slug}`** exists as a directory.
+
+### Pairing `python_dir` with dynamic Python
+
+Use the **`python_dir` `root`** (and slug) naming as **`working_dir`**. **[Host labels](https://caddyserver.com/docs/caddyfile/concepts#placeholders)** are numbered from **the right**: for **`featureb.project.example`**, **`{http.request.host.labels.2}`** is **`featureb`**.
+
+```caddyfile
+{
+	on_demand_tls {
+		permission python_dir {
+			root /srv/branches
+			domain_suffix project.example
+		}
+	}
+}
+
+https://*.project.example {
+	tls {
+		on_demand
+	}
+	route /* {
+		python {
+			module_asgi "{http.request.host.labels.2}:app"
+			working_dir "/srv/branches/{http.request.host.labels.2}/"
+		}
+	}
+}
+```
+
+If you want a wildcard-style site (`*.project.example`), you can combine that pattern with matchers as usual.
+
+### Directive reference (`tls.permission.python_dir`)
+
+- **`root`** — Base directory containing one subdirectory per slug (deploy path).
+- **`domain_suffix`** — The registered suffix (without leading dot): hostname must be exactly **`{slug}.` plus this suffix (**one** label before it).
+
+DNS must point `*.yourzone` at the server, and **`email`** should be set in global options for ACME accounts when using public issuance.
+
+---
+
 ## Notes
 
 - You must specify either `module_wsgi` or `module_asgi`, but not both
