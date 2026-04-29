@@ -39,7 +39,7 @@ jobs:
         run: CGO_ENABLED=0 xcaddy build --with github.com/mliezun/caddy-snake=../..
       - name: Run integration tests
         working-directory: tests/${{ matrix.tool-name }}/
-        if: matrix.python-version != '3.13-nogil'
+        if: matrix.python-version != '3.13t'
         run: |
           ./caddy run --config Caddyfile > caddy.log 2>&1 &
           timeout 60 bash -c 'while ! grep -q "finished cleaning storage units" caddy.log; do sleep 1; done'
@@ -47,7 +47,7 @@ jobs:
           python main_test.py
       - name: Run integration tests (nogil)
         working-directory: tests/${{ matrix.tool-name }}/
-        if: matrix.python-version == '3.13-nogil' && matrix.tool-name != 'flask'
+        if: matrix.python-version == '3.13t' && matrix.tool-name != 'flask'
         continue-on-error: true
         run: |
           ./caddy run --config Caddyfile > caddy.log 2>&1 &
