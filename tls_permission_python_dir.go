@@ -19,9 +19,8 @@ func init() {
 
 // PermissionByPythonDir implements on-demand TLS permission by checking that the
 // requested hostname is of the form {slug}.{domain_suffix} (exactly one label
-// before the suffix), and that filepath.Join(root, slug) exists as a directory,
-// optionally with a marker path inside it. Users can pair this with a dynamic
-// python block using working_dir "{http.request.host.labels.2}/" when
+// before the suffix), and that filepath.Join(root, slug) exists as a directory.
+// Users can pair this with a dynamic python block using working_dir "{http.request.host.labels.2}/" when
 // slug.appdomain.com uses labels.2 == slug for a three-part host.
 //
 // Implements [caddytls.OnDemandPermission] as tls.permission.python_dir.
@@ -30,8 +29,6 @@ type PermissionByPythonDir struct {
 	Root string `json:"root,omitempty"`
 	// Registered domain suffix, e.g. appdomain.com (no leading dot). Hostname must be {slug}.{domain_suffix}.
 	DomainSuffix string `json:"domain_suffix,omitempty"`
-	// If non-empty, this path relative to the app directory must exist (file or subdirectory).
-	RequireRegularFile string `json:"require_regular_file,omitempty"`
 
 	rootAbs    string
 	suffixNorm string
@@ -77,12 +74,6 @@ func (p *PermissionByPythonDir) Provision(ctx caddy.Context) error {
 	s = strings.Trim(s, ".")
 	p.suffixNorm = s
 
-	if p.RequireRegularFile != "" {
-		cp := filepath.ToSlash(filepath.Clean(p.RequireRegularFile))
-		if cp == "" || cp == "." || cp == ".." || strings.HasPrefix(cp, "../") || strings.Contains(cp, "/../") || filepath.IsAbs(p.RequireRegularFile) {
-			return fmt.Errorf("tls.permission.python_dir: require_regular_file must be a non-empty relative path without ..")
-		}
-	}
 	return nil
 }
 
@@ -132,24 +123,6 @@ func (p *PermissionByPythonDir) CertificateAllowed(_ context.Context, name strin
 		return fmt.Errorf("%w", caddytls.ErrPermissionDenied)
 	}
 
-	if p.RequireRegularFile != "" {
-		marker := filepath.Join(dirResolved, filepath.FromSlash(filepath.ToSlash(filepath.Clean(p.RequireRegularFile))))
-		markerResolved, err := filepath.EvalSymlinks(marker)
-		if err != nil {
-			return fmt.Errorf("%w", caddytls.ErrPermissionDenied)
-		}
-		if !pathWithinRoot(dirResolved, filepath.Clean(markerResolved)) {
-			return fmt.Errorf("%w", caddytls.ErrPermissionDenied)
-		}
-		stM, err := os.Stat(markerResolved)
-		if err != nil {
-			return fmt.Errorf("%w", caddytls.ErrPermissionDenied)
-		}
-		if !stM.Mode().IsRegular() && !stM.IsDir() {
-			return fmt.Errorf("%w", caddytls.ErrPermissionDenied)
-		}
-	}
-
 	return nil
 }
 
@@ -158,7 +131,6 @@ func (p *PermissionByPythonDir) CertificateAllowed(_ context.Context, name strin
 //	python_dir {
 //	    root /home/server
 //	    domain_suffix appdomain.com
-//	    require_regular_file main.py
 //	}
 func (p *PermissionByPythonDir) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 	for d.Next() {
@@ -169,10 +141,6 @@ func (p *PermissionByPythonDir) UnmarshalCaddyfile(d *caddyfile.Dispenser) error
 			}
 		case "domain_suffix":
 			if !d.Args(&p.DomainSuffix) {
-				return d.ArgErr()
-			}
-		case "require_regular_file":
-			if !d.Args(&p.RequireRegularFile) {
 				return d.ArgErr()
 			}
 		default:

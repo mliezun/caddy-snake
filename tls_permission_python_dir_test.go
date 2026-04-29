@@ -47,9 +47,8 @@ func TestPermissionByPythonDir_CertificateAllowed(t *testing.T) {
 	}
 
 	p := &PermissionByPythonDir{
-		Root:               root,
-		DomainSuffix:       "project.example.net",
-		RequireRegularFile: "",
+		Root:         root,
+		DomainSuffix: "project.example.net",
 	}
 	provisionPerm(t, p)
 
@@ -81,39 +80,6 @@ func TestPermissionByPythonDir_CertificateAllowed(t *testing.T) {
 			t.Fatal("expected denial")
 		}
 	})
-}
-
-func TestPermissionByPythonDir_RequireRegularFile(t *testing.T) {
-	td := t.TempDir()
-	root := filepath.Join(td, "apps")
-	branchDir := filepath.Join(root, "app1")
-	if err := os.MkdirAll(branchDir, 0755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(branchDir, "app.py"), []byte(""), 0644); err != nil {
-		t.Fatal(err)
-	}
-
-	p := &PermissionByPythonDir{
-		Root:               root,
-		DomainSuffix:       "dev.example.test",
-		RequireRegularFile: "app.py",
-	}
-	provisionPerm(t, p)
-
-	if err := p.CertificateAllowed(context.Background(), "app1.dev.example.test"); err != nil {
-		t.Fatal(err)
-	}
-
-	p2 := &PermissionByPythonDir{
-		Root:               root,
-		DomainSuffix:       "dev.example.test",
-		RequireRegularFile: "absent.py",
-	}
-	provisionPerm(t, p2)
-	if err := p2.CertificateAllowed(context.Background(), "app1.dev.example.test"); err == nil {
-		t.Fatal("expected denial when marker missing")
-	}
 }
 
 func TestPermissionByPythonDir_SymlinkDirOutsideDenied(t *testing.T) {
@@ -166,7 +132,6 @@ func TestPermissionByPythonDir_UnmarshalCaddyfile(t *testing.T) {
 
 	input := `root ` + base + `
 	domain_suffix apps.example.dev
-	require_regular_file main.py
 `
 
 	d := caddyfile.NewTestDispenser(input)
@@ -174,7 +139,7 @@ func TestPermissionByPythonDir_UnmarshalCaddyfile(t *testing.T) {
 	if err := p.UnmarshalCaddyfile(d); err != nil {
 		t.Fatal(err)
 	}
-	if p.Root != base || p.DomainSuffix != "apps.example.dev" || p.RequireRegularFile != "main.py" {
+	if p.Root != base || p.DomainSuffix != "apps.example.dev" {
 		t.Fatalf("parsed unexpected values: %+v", p)
 	}
 }
