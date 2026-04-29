@@ -1,5 +1,5 @@
----
 name: Lint
+
 on:
   pull_request:
     branches:
@@ -7,19 +7,24 @@ on:
   push:
     branches:
       - main
+
+permissions: {}
+
 jobs:
   build:
     name: Lint
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout Code
-        uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
-          go-version: '1.26'
+          persist-credentials: false
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version: "1.26"
           cache: false
       - name: Check pre-commit
-        uses: pre-commit/action@v3.0.0
+        uses: pre-commit/action@646c83fcd040023954eafda54b4db0192ce70507 # v3.0.0
       - name: Go vet
         run: |
           go vet .
