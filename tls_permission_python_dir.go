@@ -128,6 +128,11 @@ func (p *PermissionByPythonDir) CertificateAllowed(_ context.Context, name strin
 
 // UnmarshalCaddyfile implements [caddyfile.Unmarshaler].
 //
+// The Caddy loader prepends the module short name (`python_dir`) before the `{ ... }` block,
+// so the first token may be `python_dir` (see caddyfile.UnmarshalModule + NewFromNextSegment).
+//
+// Example block body:
+//
 //	python_dir {
 //	    root /home/server
 //	    domain_suffix appdomain.com
@@ -135,6 +140,13 @@ func (p *PermissionByPythonDir) CertificateAllowed(_ context.Context, name strin
 func (p *PermissionByPythonDir) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 	for d.Next() {
 		switch d.Val() {
+		case "python_dir":
+			// optional first token — module name echoed at start of the segment
+			continue
+		case "{":
+			continue
+		case "}":
+			continue
 		case "root":
 			if !d.Args(&p.Root) {
 				return d.ArgErr()

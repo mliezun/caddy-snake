@@ -247,6 +247,15 @@ If you want a wildcard-style site (`*.project.example`), you can combine that pa
 
 DNS must point `*.yourzone` at the server, and **`email`** should be set in global options for ACME accounts when using public issuance.
 
+For **automated CI-style runs** without a public CA (internal issuer + on-demand TLS + `permission python_dir`), build Caddy Snake with xcaddy so the **`tls`** app loads the **`python_dir`** plugin, then use the **`caddytest`**-tagged HTTPS test:
+
+```bash
+go test -race -timeout 120s -tags=caddytest . \
+  -run TestPythonDir_OnDemandDynamicASGI_OverHTTPS -v
+```
+
+That test requires **Python 3** on `PATH`.
+
 ---
 
 ## Notes
