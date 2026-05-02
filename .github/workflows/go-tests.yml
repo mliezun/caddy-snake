@@ -31,10 +31,8 @@ jobs:
         run: go install github.com/caddyserver/xcaddy/cmd/xcaddy@latest
       - name: Run module tests
         run: go test -race -v .
-      - name: Run tests with coverage (including caddytest when available)
-        run: |
-          go test -race -coverprofile=coverage.out -tags=caddytest -timeout 90s . || \
-          go test -race -coverprofile=coverage.out .
+      - name: Run tests with coverage (caddytest incl. on-demand HTTPS)
+        run: go test -race -coverprofile=coverage.out -tags=caddytest -timeout 180s .
       - name: Update coverage report
         uses: ncruces/go-coverage-report@dfc237255099f2d25066babde51253992175e365 # v0.3.2
         with:

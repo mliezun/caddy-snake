@@ -12,7 +12,7 @@ import (
 	"github.com/caddyserver/caddy/v2/modules/caddytls"
 )
 
-func provisionPerm(t testing.TB, p *PermissionByPythonDir) {
+func provisionPythonDirPerm(t testing.TB, p *PermissionByPythonDir) {
 	t.Helper()
 	ctx := caddy.Context{}
 	if err := p.Provision(ctx); err != nil {
@@ -50,7 +50,7 @@ func TestPermissionByPythonDir_CertificateAllowed(t *testing.T) {
 		Root:         root,
 		DomainSuffix: "project.example.net",
 	}
-	provisionPerm(t, p)
+	provisionPythonDirPerm(t, p)
 
 	ctx := context.Background()
 
@@ -103,7 +103,7 @@ func TestPermissionByPythonDir_SymlinkDirOutsideDenied(t *testing.T) {
 		Root:         root,
 		DomainSuffix: "srv.test",
 	}
-	provisionPerm(t, p)
+	provisionPythonDirPerm(t, p)
 
 	if err := p.CertificateAllowed(context.Background(), "leak.srv.test"); err == nil {
 		t.Fatal("expected denial when slug dir escapes root via symlink")

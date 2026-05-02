@@ -9,11 +9,12 @@ This guide explains how to work on the caddy-snake project: environment setup, t
 Before committing, always run:
 
 1. **Go tests**: `go test -race -v .`
-2. **Python tests**: `pytest caddysnake_test.py -v` (or `python -m pytest caddysnake_test.py -v`)
-3. **Integration tests** — at minimum **Flask** and **FastAPI**:
+2. **Go + caddytest** (in-process Caddy, on-demand TLS HTTPS): `go test -race -tags=caddytest -timeout 180s .`
+3. **Python tests**: `pytest caddysnake_test.py -v` (or `python -m pytest caddysnake_test.py -v`)
+4. **Integration tests** — at minimum **Flask** and **FastAPI**:
    - `./tests/integration.sh flask 3.13`
    - `./tests/integration.sh fastapi 3.13`
-4. **Embed-app** (optional, requires network): `cd cmd/embed-app && ./build.sh app.zip 3.13 && ./test_embed.sh embed-test`
+5. **Embed-app** (optional, requires network): `cd cmd/embed-app && ./build.sh app.zip 3.13 && ./test_embed.sh embed-test`
 
 See [Running tests](#running-tests) for details.
 
@@ -95,6 +96,17 @@ go test -v .
 # With coverage
 go test -race -coverprofile=coverage.out .
 go tool cover -html=coverage.out
+
+# In-process Caddy integration (caddytest build tag — requires Python)
+go test -race -tags=caddytest -timeout 180s .
+```
+
+### caddytest (in-process)
+
+Use the **`caddytest`** build tag for **`caddysnake_caddytest_test.go`** (includes **HTTPS / on-demand TLS** coverage). Requires **`python`** on **`PATH`** and a generous timeout (**180s** is safe on CI-arm).
+
+```bash
+go test -race -tags=caddytest -timeout 180s .
 ```
 
 ### Python tests

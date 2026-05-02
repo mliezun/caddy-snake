@@ -42,7 +42,8 @@ func (PermissionByPythonDir) CaddyModule() caddy.ModuleInfo {
 	}
 }
 
-var validSlugSegment = regexp.MustCompile(`^(?:[a-z0-9]|[a-z0-9][a-z0-9_-]*[a-z0-9])$`)
+// Ungrouped names so a duplicate legacy file can't break the package build alongside this one.
+var pythonDirTLSPermSlug = regexp.MustCompile(`^(?:[a-z0-9]|[a-z0-9][a-z0-9_-]*[a-z0-9])$`)
 
 // Provision validates configuration and resolves Root to an absolute path.
 func (p *PermissionByPythonDir) Provision(ctx caddy.Context) error {
@@ -77,7 +78,7 @@ func (p *PermissionByPythonDir) Provision(ctx caddy.Context) error {
 	return nil
 }
 
-func pathWithinRoot(rootCleanAbs, resolved string) bool {
+func pythonDirTLSPermInsideRoot(rootCleanAbs, resolved string) bool {
 	rel, err := filepath.Rel(rootCleanAbs, resolved)
 	if err != nil {
 		return false
@@ -100,13 +101,13 @@ func (p *PermissionByPythonDir) CertificateAllowed(_ context.Context, name strin
 	if slug == "" || strings.Contains(slug, ".") {
 		return fmt.Errorf("%w", caddytls.ErrPermissionDenied)
 	}
-	if !validSlugSegment.MatchString(slug) {
+	if !pythonDirTLSPermSlug.MatchString(slug) {
 		return fmt.Errorf("%w", caddytls.ErrPermissionDenied)
 	}
 
 	dirPath := filepath.Join(p.rootAbs, slug)
 	dirPath = filepath.Clean(dirPath)
-	if !pathWithinRoot(p.rootAbs, dirPath) {
+	if !pythonDirTLSPermInsideRoot(p.rootAbs, dirPath) {
 		return fmt.Errorf("%w", caddytls.ErrPermissionDenied)
 	}
 
@@ -114,7 +115,7 @@ func (p *PermissionByPythonDir) CertificateAllowed(_ context.Context, name strin
 	if err != nil {
 		return fmt.Errorf("%w", caddytls.ErrPermissionDenied)
 	}
-	if !pathWithinRoot(p.rootAbs, filepath.Clean(dirResolved)) {
+	if !pythonDirTLSPermInsideRoot(p.rootAbs, filepath.Clean(dirResolved)) {
 		return fmt.Errorf("%w", caddytls.ErrPermissionDenied)
 	}
 
