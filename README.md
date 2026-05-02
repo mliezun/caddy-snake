@@ -13,7 +13,7 @@ Caddy Snake is a Caddy plugin that lets you **run Python web apps directly insid
 
 It embeds Python via the C API, so your WSGI or ASGI application runs in the same process as Caddy. This means less overhead, simpler deployments, and automatic HTTPS out of the box.
 
-To make it easier to get started you can also grab one of the precompiled binaries that comes with Caddy and Python, or one of the Docker images.
+To make it easier to get started you can also grab one of the precompiled binaries that come with Caddy and Python, or one of the Docker images.
 
 **Works with Flask, Django, FastAPI, and any other WSGI/ASGI framework.**
 
@@ -25,6 +25,7 @@ To make it easier to get started you can also grab one of the precompiled binari
 - **Multi-worker** — process-based (default) or thread-based workers for concurrent request handling
 - **Auto-reload** — watches `.py` files and hot-reloads your app on changes during development
 - **Dynamic module loading** — use Caddy placeholders to load different apps per subdomain or route
+- **On-demand TLS permission (`tls.permission.python_dir`)** — gate HTTPS issuance with filesystem checks so wildcard-style hosts work without running a separate ACME [`ask`](https://caddyserver.com/docs/caddyfile/options#on-demand-tls) service (pairs with dynamic `working_dir`)
 - **Virtual environment support** — point to a `venv` and dependencies are available automatically
 - **WebSocket support** — full WebSocket handling for ASGI apps
 - **ASGI lifespan events** — optional startup/shutdown lifecycle hooks
@@ -79,7 +80,7 @@ CGO_ENABLED=1 xcaddy build --with github.com/mliezun/caddy-snake
 
 - Python >= 3.12 + dev files
 - C compiler and build tools
-- Go >= 1.25 and [xcaddy](https://github.com/caddyserver/xcaddy)
+- Go >= 1.26 and [xcaddy](https://github.com/caddyserver/xcaddy)
 
 Install on Ubuntu 24.04:
 
@@ -288,6 +289,46 @@ This is useful for multi-tenant setups where each subdomain or route serves a di
 ```
 
 In this example, a request to `app1.example.com` loads the app from the `app1/` directory, `app2.example.com` loads from `app2/`, and so on. Apps are lazily created on first request and cached for subsequent requests.
+
+---
+
+## On-demand TLS without `ask`
+
+[Caddy on-demand TLS](https://caddyserver.com/docs/caddyfile/options#on-demand-tls) issues certificates for hostnames as clients connect. That flow normally requires an **`ask`** HTTP endpoint — unless you plug in a **`tls.permission.*`** module.
+
+Caddy Snake ships **`tls.permission.python_dir`**, which allows issuance only when the hostname matches **`{slug}.{domain_suffix}`** (exactly one label before the suffix) and **`{root}/{slug}`** exists as a directory — the same layout you use for dynamic Python apps.
+
+Minimal pattern (wildcard HTTPS site + dynamic `working_dir`; adjust **`domain_suffix`** and placeholder index to match your host shape):
+
+```Caddyfile
+{
+    email you@yourcompany.com
+
+    on_demand_tls {
+        permission python_dir {
+            root /srv/apps
+            domain_suffix project.example
+        }
+    }
+}
+
+https://*.project.example {
+    tls {
+        on_demand
+    }
+
+    route /* {
+        python {
+            module_asgi "{http.request.host.labels.2}:app"
+            working_dir "/srv/apps/{http.request.host.labels.2}/"
+        }
+    }
+}
+```
+
+Use a working mailbox on a **registrable domain** for `email` (Let's Encrypt rejects contacts at `example.com` and similar). For nip.io-style hosts and WSGI-only setups, see the **[configuration reference](https://caddy-snake.readthedocs.io/en/latest/docs/reference/)** and **[examples](https://caddy-snake.readthedocs.io/en/latest/docs/examples/)**.
+
+For **[nip.io](https://nip.io/)** names like **`app7.203.0.113.43.nip.io`**, the slug sits at **`{http.request.host.labels.6}`** (seven labels total).
 
 ---
 
