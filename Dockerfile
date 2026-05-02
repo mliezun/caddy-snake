@@ -4,6 +4,9 @@ FROM ubuntu:24.04
 ARG GO_VERSION=1.26.0
 ARG PY_VERSION=3.13
 
+ENV GO_VERSION=${GO_VERSION} \
+    PY_VERSION=${PY_VERSION}
+
 RUN printf 'Acquire::Retries "12";\n' >/etc/apt/apt.conf.d/80-retries
 
 RUN /bin/bash -eux <<'SETUP'
