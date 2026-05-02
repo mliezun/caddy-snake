@@ -42,7 +42,8 @@ RUN /bin/bash -eux <<'SETUP'
 	fi
 	ln -sf "/usr/bin/${VENV_PYTHON}" /usr/bin/python
 	wget -q https://bootstrap.pypa.io/get-pip.py
-	python get-pip.py
+	# PEP 668: Ubuntu marks distro Python as "externally managed"; Docker image intentionally uses pip on that interpreter for xcaddy build helpers.
+	python get-pip.py --break-system-packages
 	apt-get clean
 	rm -rf /var/lib/apt/lists/* get-pip.py
 	ARCH="$(dpkg --print-architecture)"
