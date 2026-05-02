@@ -443,6 +443,14 @@ When you edit `app1/app1.py`, only `app1` is reloaded — `app2` and `app3` rema
 
 ---
 
+## HTTPS + on-demand TLS on nip.io (wildcard, many apps)
+
+For **real TLS** on `[slug].[your-public-ip].nip.io`, use **one** site block like **`https://*.203.0.113.43.nip.io`** (swap in your VPS IPv4), enable **`tls { on_demand }`**, and gate issuance with **`tls.permission.python_dir`** so only existing `/srv/apps/[slug]` directories get certificates. Pair it with **`working_dir "/srv/apps/{http.request.host.labels.6}/"`** — same label index as the HTTP-only nip examples above.
+
+See **nip.io with embedded IPv4** in the [Configuration Reference](reference.md#nip-io-https-many-apps) for the full Caddyfile pattern, ACME email caveats, and curl checks.
+
+---
+
 ## Notes
 
 - All examples assume you have Caddy-Snake installed. See [Installation & Distribution](installation.md) for all the ways to install it — including `pip install caddysnake` for the quickest setup

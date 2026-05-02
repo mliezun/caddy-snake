@@ -240,6 +240,60 @@ https://*.project.example {
 
 If you want a wildcard-style site (`*.project.example`), you can combine that pattern with matchers as usual.
 
+### nip.io with embedded IPv4 (one wildcard site, many HTTPS apps) {#nip-io-https-many-apps}
+
+[nip.io](https://nip.io/) resolves hostnames that embed your public IPv4 in dotted quad form before `.nip.io`, e.g. **`app7.203.0.113.43.nip.io`** → `203.0.113.43`. That hostname has **seven** labels (`app7`, four octets, `nip`, `io`). Caddy [`http.request.host.labels.N`](https://caddyserver.com/docs/caddyfile/concepts#placeholders) counts **from the right**, so the leftmost slug (`app7`) is **`{http.request.host.labels.6}`**.
+
+Use the **same suffix** for TLS permission and for DNS:
+
+- **`domain_suffix`** (no leading dot): **`203.0.113.43.nip.io`** — substitute **`203.0.113.43`** with your server’s real public IPv4 (the example uses [RFC 5737 TEST-NET-3](https://datatracker.ietf.org/doc/html/rfc5737) documentation space only as illustration).
+- **`root`**: base directory with one subdirectory per slug (`app1`, `app2`, …).
+
+Put **`on_demand_tls`** + **`permission python_dir`** in global options, expose **one** HTTPS site **`https://*.{your-ipv4}.nip.io`** with **`tls { on_demand }`**, and point **`working_dir`** at **`/srv/apps/{http.request.host.labels.6}/`**. Each slug gets HTTPS only if **`python_dir`** allows it (directory exists); unknown slugs should **not** obtain a certificate.
+
+Fixed **`module_wsgi`** with per-request **`working_dir`** (every app exposes `application` in its own `app.py`):
+
+```caddyfile
+{
+	email you@your-domain.example
+
+	on_demand_tls {
+		permission python_dir {
+			root /srv/apps
+			domain_suffix 203.0.113.43.nip.io
+		}
+	}
+}
+
+https://*.203.0.113.43.nip.io {
+	tls {
+		on_demand
+	}
+
+	route /* {
+		python {
+			module_wsgi "app:application"
+			working_dir "/srv/apps/{http.request.host.labels.6}/"
+			workers 2
+		}
+	}
+}
+```
+
+:::note ACME account email
+
+Let's Encrypt rejects registration contacts at **`example.com`** and under **`.invalid`**. Use a normal mailbox on a registrable domain. For throwaway demos some operators use **`admin@nip.io`** because **`nip.io`** is a real zone — prefer your own domain for anything serious.
+
+:::
+
+Smoke-test many apps:
+
+```bash
+for i in $(seq 1 10); do curl -fsS "https://app${i}.203.0.113.43.nip.io/"; echo; done
+```
+
+(Again, replace `203.0.113.43` with your live IPv4.)
+
 ### Directive reference (`tls.permission.python_dir`)
 
 - **`root`** — Base directory containing one subdirectory per slug (deploy path).
