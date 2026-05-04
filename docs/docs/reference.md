@@ -207,6 +207,111 @@ Old app instances are cleaned up after a 10-second grace period to allow in-flig
 
 ---
 
+## On-demand TLS (certificate permission without `ask`)
+
+When you serve many HTTPS hostnames under one zone (for example `{branch}.project.example`), Caddy normally needs to know each name for automatic HTTPS, **or** you use [On-Demand TLS](https://caddyserver.com/docs/caddyfile/options#on-demand-tls). On-demand issuance **must** be gated by permission: either an HTTP **`ask`** URL or a **`tls.permission.*`** module. Caddy Snake ships **`tls.permission.python_dir`** so you can **avoid running a separate `ask`** service: it allows a certificate only if the hostname looks like **`{slug}.{your_domain_suffix}`** and **`{root}/{slug}`** exists as a directory.
+
+### Pairing `python_dir` with dynamic Python
+
+Use the **`python_dir` `root`** (and slug) naming as **`working_dir`**. **[Host labels](https://caddyserver.com/docs/caddyfile/concepts#placeholders)** are numbered from **the right**: for **`featureb.project.example`**, **`{http.request.host.labels.2}`** is **`featureb`**.
+
+```caddyfile
+{
+	on_demand_tls {
+		permission python_dir {
+			root /srv/branches
+			domain_suffix project.example
+		}
+	}
+}
+
+https://*.project.example {
+	tls {
+		on_demand
+	}
+	route /* {
+		python {
+			module_asgi "{http.request.host.labels.2}:app"
+			working_dir "/srv/branches/{http.request.host.labels.2}/"
+		}
+	}
+}
+```
+
+If you want a wildcard-style site (`*.project.example`), you can combine that pattern with matchers as usual.
+
+### nip.io with embedded IPv4 (one wildcard site, many HTTPS apps) {#nip-io-https-many-apps}
+
+[nip.io](https://nip.io/) resolves hostnames that embed your public IPv4 in dotted quad form before `.nip.io`, e.g. **`app7.203.0.113.43.nip.io`** → `203.0.113.43`. That hostname has **seven** labels (`app7`, four octets, `nip`, `io`). Caddy [`http.request.host.labels.N`](https://caddyserver.com/docs/caddyfile/concepts#placeholders) counts **from the right**, so the leftmost slug (`app7`) is **`{http.request.host.labels.6}`**.
+
+Use the **same suffix** for TLS permission and for DNS:
+
+- **`domain_suffix`** (no leading dot): **`203.0.113.43.nip.io`** — substitute **`203.0.113.43`** with your server’s real public IPv4 (the example uses [RFC 5737 TEST-NET-3](https://datatracker.ietf.org/doc/html/rfc5737) documentation space only as illustration).
+- **`root`**: base directory with one subdirectory per slug (`app1`, `app2`, …).
+
+Put **`on_demand_tls`** + **`permission python_dir`** in global options, expose **one** HTTPS site **`https://*.{your-ipv4}.nip.io`** with **`tls { on_demand }`**, and point **`working_dir`** at **`/srv/apps/{http.request.host.labels.6}/`**. Each slug gets HTTPS only if **`python_dir`** allows it (directory exists); unknown slugs should **not** obtain a certificate.
+
+Fixed **`module_wsgi`** with per-request **`working_dir`** (every app exposes `application` in its own `app.py`):
+
+```caddyfile
+{
+	email you@your-domain.example
+
+	on_demand_tls {
+		permission python_dir {
+			root /srv/apps
+			domain_suffix 203.0.113.43.nip.io
+		}
+	}
+}
+
+https://*.203.0.113.43.nip.io {
+	tls {
+		on_demand
+	}
+
+	route /* {
+		python {
+			module_wsgi "app:application"
+			working_dir "/srv/apps/{http.request.host.labels.6}/"
+			workers 2
+		}
+	}
+}
+```
+
+:::note ACME account email
+
+Let's Encrypt rejects registration contacts at **`example.com`** and under **`.invalid`**. Use a normal mailbox on a registrable domain. For throwaway demos some operators use **`admin@nip.io`** because **`nip.io`** is a real zone — prefer your own domain for anything serious.
+
+:::
+
+Smoke-test many apps:
+
+```bash
+for i in $(seq 1 10); do curl -fsS "https://app${i}.203.0.113.43.nip.io/"; echo; done
+```
+
+(Again, replace `203.0.113.43` with your live IPv4.)
+
+### Directive reference (`tls.permission.python_dir`)
+
+- **`root`** — Base directory containing one subdirectory per slug (deploy path).
+- **`domain_suffix`** — The registered suffix (without leading dot): hostname must be exactly **`{slug}.` plus this suffix (**one** label before it).
+
+DNS must point `*.yourzone` at the server, and **`email`** should be set in global options for ACME accounts when using public issuance.
+
+For **automated CI-style runs** without a public CA (internal issuer + on-demand TLS + `permission python_dir`), build Caddy Snake with xcaddy so the **`tls`** app loads the **`python_dir`** plugin, then use the **`caddytest`**-tagged HTTPS test:
+
+```bash
+go test -race -timeout 120s -tags=caddytest . \
+  -run TestPythonDir_OnDemandDynamicASGI_OverHTTPS -v
+```
+
+That test requires **Python 3** on `PATH`.
+
+---
+
 ## Notes
 
 - You must specify either `module_wsgi` or `module_asgi`, but not both
