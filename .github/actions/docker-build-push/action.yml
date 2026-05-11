@@ -1,5 +1,5 @@
 name: Docker build and push
-description: Build multi-arch caddy-snake image; optionally push to registries
+description: "Build multi-arch image; push optional. Caller must run actions/checkout before this local composite."
 inputs:
   python-version:
     description: Python version for PY_VERSION build-arg
@@ -20,11 +20,6 @@ secrets:
 runs:
   using: composite
   steps:
-    - name: Checkout repository
-      uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
-      with:
-        persist-credentials: false
-
     - name: Install cosign
       if: inputs.push-image == 'true'
       uses: sigstore/cosign-installer@6e04d228eb30da1757ee4e1dd75a0ec73a653e06
