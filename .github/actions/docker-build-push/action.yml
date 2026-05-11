@@ -7,16 +7,19 @@ inputs:
   push-image:
     description: If true, install cosign, log in, and push images
     required: true
-secrets:
-  GITHUB_TOKEN:
-    description: For GHCR login when push-image is true
+  # Registry credentials must be inputs (not secrets.* in composite steps — secrets context is invalid there).
+  ghcr_token:
+    description: secrets.GITHUB_TOKEN for GHCR when push-image is true
     required: false
-  DOCKER_USERNAME:
+    default: ""
+  docker_username:
     description: Docker Hub user when push-image is true
     required: false
-  DOCKER_PASSWORD:
+    default: ""
+  docker_password:
     description: Docker Hub token when push-image is true
     required: false
+    default: ""
 runs:
   using: composite
   steps:
@@ -35,15 +38,15 @@ runs:
       with:
         registry: ${{ env.REGISTRY_GHCR }}
         username: ${{ github.actor }}
-        password: ${{ secrets.GITHUB_TOKEN }}
+        password: ${{ inputs.ghcr_token }}
 
     - name: Log into Docker Hub
       if: inputs.push-image == 'true'
       uses: docker/login-action@343f7c4344506bcbf9b4de18042ae17996df046d
       with:
         registry: ${{ env.REGISTRY_DOCKER_HUB }}
-        username: ${{ secrets.DOCKER_USERNAME }}
-        password: ${{ secrets.DOCKER_PASSWORD }}
+        username: ${{ inputs.docker_username }}
+        password: ${{ inputs.docker_password }}
 
     - name: Extract Docker metadata
       id: meta
