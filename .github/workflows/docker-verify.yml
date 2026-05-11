@@ -1,0 +1,30 @@
+# PR Docker image build only (no push). Kept separate from docker-publish.yml so we never
+# use jobs.environment here — GitHub treats environment as a deployment (noisy PR UI, one
+# row per matrix cell when combined with publish jobs on the same workflow file).
+name: Docker
+
+on:
+  pull_request:
+    branches: ["main"]
+
+permissions: {}
+
+env:
+  REGISTRY_GHCR: ghcr.io
+  REGISTRY_DOCKER_HUB: docker.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        python-version: ["3.12", "3.13", "3.14"]
+        os: [ubuntu-24.04]
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+    steps:
+      - uses: ./.github/actions/docker-build-push
+        with:
+          python-version: ${{ matrix.python-version }}
+          push-image: "false"

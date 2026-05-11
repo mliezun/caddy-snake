@@ -1,43 +1,19 @@
-name: Docker
+# Tag releases only. Uses docker-publish environment for registry secrets / protection rules.
+name: Docker publish
 
 on:
   push:
     tags: ["v*.*.*"]
-  pull_request:
-    branches: ["main"]
 
 permissions: {}
 
 env:
-  # Use docker.io for Docker Hub if empty
   REGISTRY_GHCR: ghcr.io
   REGISTRY_DOCKER_HUB: docker.io
-  # github.repository as <account>/<repo>
   IMAGE_NAME: ${{ github.repository }}
 
-# Two jobs instead of one so pull requests do not attach jobs.environment: GitHub treats
-# that as a deployment (noisy PR UI, one row per matrix cell). Tag releases still use
-# the docker-publish environment for secrets and optional protection rules.
 jobs:
-  # PRs: build-only (push-image false). No environment, no registry secrets, least privilege.
-  build-verify:
-    if: github.event_name == 'pull_request'
-    strategy:
-      matrix:
-        python-version: ["3.12", "3.13", "3.14"]
-        os: [ubuntu-24.04]
-    runs-on: ${{ matrix.os }}
-    permissions:
-      contents: read
-    steps:
-      - uses: ./.github/actions/docker-build-push
-        with:
-          python-version: ${{ matrix.python-version }}
-          push-image: "false"
-
-  # Release tags: push images, cosign, GHCR/Docker Hub — needs docker-publish env + secrets.
   build-push:
-    if: github.event_name == 'push'
     strategy:
       matrix:
         python-version: ["3.12", "3.13", "3.14"]
