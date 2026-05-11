@@ -16,6 +16,7 @@ import base64
 import concurrent.futures
 import hashlib
 import importlib
+import ipaddress
 import os
 import signal
 import struct
@@ -357,11 +358,38 @@ def _call_wsgi_app(app, environ):
             result.close()
 
 
+def _client_from_caddy_snake_headers(raw_headers):
+    """Parse trusted Caddy-Snake-Remote-* set by the Go worker. Returns (ip_str, port) or None."""
+    addr = raw_headers.get("caddy-snake-remote-addr")
+    if not addr:
+        return None
+    port_s = raw_headers.get("caddy-snake-remote-port", "0")
+    try:
+        port = int(port_s)
+        if port < 0 or port > 65535:
+            return None
+    except ValueError:
+        return None
+    host = addr.strip()
+    if host.startswith("[") and host.endswith("]"):
+        host = host[1:-1]
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        return None
+    return (str(ip), port)
+
+
 def _build_wsgi_environ(method, path, version, headers_list, raw_headers, wsgi_input):
     """Build a WSGI environ dict from parsed HTTP request components."""
     path_part, query_string = _split_path(path)
     host_str = raw_headers.get("host", "localhost")
     server_name, server_port = _parse_host_header(host_str)
+
+    remote_ip = "127.0.0.1"
+    trusted_client = _client_from_caddy_snake_headers(raw_headers)
+    if trusted_client is not None:
+        remote_ip = trusted_client[0]
 
     environ = {
         "REQUEST_METHOD": method,
@@ -371,8 +399,8 @@ def _build_wsgi_environ(method, path, version, headers_list, raw_headers, wsgi_i
         "SERVER_NAME": server_name,
         "SERVER_PORT": str(server_port),
         "SERVER_PROTOCOL": version,
-        "REMOTE_ADDR": "127.0.0.1",
-        "REMOTE_HOST": "127.0.0.1",
+        "REMOTE_ADDR": remote_ip,
+        "REMOTE_HOST": remote_ip,
         "X_FROM": "caddy-snake",
         "wsgi.version": (1, 0),
         "wsgi.url_scheme": "http",
@@ -394,7 +422,13 @@ def _build_wsgi_environ(method, path, version, headers_list, raw_headers, wsgi_i
     for h_name_bytes, h_value_bytes in headers_list:
         key = h_name_bytes.decode("latin-1")
         key_upper = key.upper().replace("-", "_")
-        if key_upper in ("CONTENT_TYPE", "CONTENT_LENGTH", "PROXY"):
+        if key_upper in (
+            "CONTENT_TYPE",
+            "CONTENT_LENGTH",
+            "PROXY",
+            "CADDY_SNAKE_REMOTE_ADDR",
+            "CADDY_SNAKE_REMOTE_PORT",
+        ):
             continue
         http_key = "HTTP_" + key_upper
         if http_key not in header_groups:
@@ -1043,6 +1077,18 @@ async def _handle_asgi_connection(reader, writer, app, state):
             host_str = raw_headers.get("host", "localhost")
             server_host, server_port = _parse_host_header(host_str)
 
+            headers_for_scope = [
+                (n, v)
+                for n, v in headers
+                if n not in (b"caddy-snake-remote-addr", b"caddy-snake-remote-port")
+            ]
+            trusted_client = _client_from_caddy_snake_headers(raw_headers)
+            if trusted_client is not None:
+                client_host, client_port = trusted_client
+                client_tp = (client_host, client_port)
+            else:
+                client_tp = ("127.0.0.1", 0)
+
             if is_websocket:
                 conn_type = "websocket"
                 scheme = "ws"
@@ -1060,9 +1106,9 @@ async def _handle_asgi_connection(reader, writer, app, state):
                 "query_string": query_string.encode("latin-1"),
                 "root_path": "",
                 "scheme": scheme,
-                "headers": headers,
+                "headers": headers_for_scope,
                 "server": (server_host, server_port),
-                "client": ("127.0.0.1", 0),
+                "client": client_tp,
             }
 
             if state is not None:

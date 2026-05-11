@@ -886,6 +886,55 @@ class TestBuildWsgiEnviron:
         )
         assert "HTTP_PROXY" not in env
 
+    def test_trusted_remote_headers_set_remote_addr(self):
+        headers_list = [
+            (b"host", b"x"),
+            (b"caddy-snake-remote-addr", b"198.51.100.2"),
+            (b"caddy-snake-remote-port", b"9999"),
+            (b"x-forwarded-for", b"198.51.100.1"),
+        ]
+        raw_headers = {
+            "host": "x",
+            "caddy-snake-remote-addr": "198.51.100.2",
+            "caddy-snake-remote-port": "9999",
+            "x-forwarded-for": "198.51.100.1",
+        }
+        env = cs._build_wsgi_environ(
+            "GET", "/", "HTTP/1.1", headers_list, raw_headers, io.BytesIO(b"")
+        )
+        assert env["REMOTE_ADDR"] == "198.51.100.2"
+        assert env["REMOTE_HOST"] == "198.51.100.2"
+        assert env["HTTP_X_FORWARDED_FOR"] == "198.51.100.1"
+        assert "HTTP_CADDY_SNAKE_REMOTE_ADDR" not in env
+        assert "HTTP_CADDY_SNAKE_REMOTE_PORT" not in env
+
+    def test_trusted_remote_headers_invalid_ip_fallback(self):
+        raw_headers = {
+            "host": "x",
+            "caddy-snake-remote-addr": "not-an-ip",
+            "caddy-snake-remote-port": "443",
+        }
+        env = cs._build_wsgi_environ(
+            "GET", "/", "HTTP/1.1", [(b"host", b"x")], raw_headers, io.BytesIO(b"")
+        )
+        assert env["REMOTE_ADDR"] == "127.0.0.1"
+
+    def test_trusted_remote_bracketed_ipv6(self):
+        raw_headers = {
+            "host": "x",
+            "caddy-snake-remote-addr": "[::1]",
+            "caddy-snake-remote-port": "0",
+        }
+        env = cs._build_wsgi_environ(
+            "GET",
+            "/",
+            "HTTP/1.1",
+            [(b"host", b"x"), (b"caddy-snake-remote-addr", b"[::1]")],
+            raw_headers,
+            io.BytesIO(b""),
+        )
+        assert env["REMOTE_ADDR"] == "::1"
+
 
 # ==================== WSGI Handler (async) ====================
 
