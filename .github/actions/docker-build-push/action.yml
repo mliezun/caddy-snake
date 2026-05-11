@@ -7,6 +7,16 @@ inputs:
   push-image:
     description: If true, install cosign, log in, and push images
     required: true
+secrets:
+  GITHUB_TOKEN:
+    description: For GHCR login when push-image is true
+    required: false
+  DOCKER_USERNAME:
+    description: Docker Hub user when push-image is true
+    required: false
+  DOCKER_PASSWORD:
+    description: Docker Hub token when push-image is true
+    required: false
 runs:
   using: composite
   steps:

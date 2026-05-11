@@ -15,7 +15,11 @@ env:
   # github.repository as <account>/<repo>
   IMAGE_NAME: ${{ github.repository }}
 
+# Two jobs instead of one so pull requests do not attach jobs.environment: GitHub treats
+# that as a deployment (noisy PR UI, one row per matrix cell). Tag releases still use
+# the docker-publish environment for secrets and optional protection rules.
 jobs:
+  # PRs: build-only (push-image false). No environment, no registry secrets, least privilege.
   build-verify:
     if: github.event_name == 'pull_request'
     strategy:
@@ -30,8 +34,8 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
           push-image: "false"
-        secrets: inherit
 
+  # Release tags: push images, cosign, GHCR/Docker Hub — needs docker-publish env + secrets.
   build-push:
     if: github.event_name == 'push'
     strategy:
@@ -49,4 +53,7 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
           push-image: "true"
-        secrets: inherit
+        secrets:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
+          DOCKER_PASSWORD: ${{ secrets.DOCKER_PASSWORD }}
