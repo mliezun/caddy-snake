@@ -1,0 +1,74 @@
+name: Docker build and push
+description: "Build multi-arch image; push optional. Caller must run actions/checkout before this local composite."
+inputs:
+  python-version:
+    description: Python version for PY_VERSION build-arg
+    required: true
+  push-image:
+    description: If true, install cosign, log in, and push images
+    required: true
+  # Registry credentials must be inputs (not secrets.* in composite steps — secrets context is invalid there).
+  ghcr_token:
+    description: secrets.GITHUB_TOKEN for GHCR when push-image is true
+    required: false
+    default: ""
+  docker_username:
+    description: Docker Hub user when push-image is true
+    required: false
+    default: ""
+  docker_password:
+    description: Docker Hub token when push-image is true
+    required: false
+    default: ""
+runs:
+  using: composite
+  steps:
+    - name: Install cosign
+      if: inputs.push-image == 'true'
+      uses: sigstore/cosign-installer@6e04d228eb30da1757ee4e1dd75a0ec73a653e06
+      with:
+        cosign-release: "v2.1.1"
+
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@f95db51fddba0c2d1ec667646a06c2ce06100226
+
+    - name: Log into GitHub Container Registry
+      if: inputs.push-image == 'true'
+      uses: docker/login-action@343f7c4344506bcbf9b4de18042ae17996df046d
+      with:
+        registry: ${{ env.REGISTRY_GHCR }}
+        username: ${{ github.actor }}
+        password: ${{ inputs.ghcr_token }}
+
+    - name: Log into Docker Hub
+      if: inputs.push-image == 'true'
+      uses: docker/login-action@343f7c4344506bcbf9b4de18042ae17996df046d
+      with:
+        registry: ${{ env.REGISTRY_DOCKER_HUB }}
+        username: ${{ inputs.docker_username }}
+        password: ${{ inputs.docker_password }}
+
+    - name: Extract Docker metadata
+      id: meta
+      uses: docker/metadata-action@96383f45573cb7f253c731d3b3ab81c87ef81934
+      with:
+        images: |
+          ${{ env.REGISTRY_GHCR }}/${{ env.IMAGE_NAME }}
+          ${{ env.REGISTRY_DOCKER_HUB }}/${{ env.IMAGE_NAME }}
+
+    - name: Build and push Docker image
+      id: build-and-push
+      uses: docker/build-push-action@0565240e2d4ab88bba5387d719585280857ece09
+      with:
+        context: .
+        push: ${{ inputs.push-image == 'true' }}
+        build-args: PY_VERSION=${{ inputs.python-version }}
+        platforms: linux/amd64,linux/arm64
+        tags: |
+          ${{ env.REGISTRY_GHCR }}/${{ env.IMAGE_NAME }}:${{ endsWith(github.ref_name, '/merge') && 'dev' || github.ref_name }}-py${{ inputs.python-version }}
+          ${{ env.REGISTRY_GHCR }}/${{ env.IMAGE_NAME }}:latest-py${{ inputs.python-version }}
+          ${{ env.REGISTRY_DOCKER_HUB }}/${{ env.IMAGE_NAME }}:${{ endsWith(github.ref_name, '/merge') && 'dev' || github.ref_name }}-py${{ inputs.python-version }}
+          ${{ env.REGISTRY_DOCKER_HUB }}/${{ env.IMAGE_NAME }}:latest-py${{ inputs.python-version }}
+        labels: ${{ steps.meta.outputs.labels }}
+        cache-from: type=gha
+        cache-to: type=gha,mode=max

@@ -3,11 +3,13 @@ package caddysnake
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"net/http/httputil"
 	"os"
 	"os/exec"
@@ -1782,5 +1784,67 @@ func TestPythonWorkerGroup_LoadsAndServesASGI(t *testing.T) {
 	}
 	if !bytes.Contains(body, []byte("Hello from ASGI")) {
 		t.Errorf("expected body to contain 'Hello from ASGI', got: %s", body)
+	}
+}
+
+func TestSetPythonWorkerOutboundHeaders_XForwardedChainAndTrusted(t *testing.T) {
+	inReq := httptest.NewRequest(http.MethodGet, "http://example.com/foo", nil)
+	inReq.RemoteAddr = "203.0.113.5:12345"
+	inReq.Header.Set("X-Forwarded-For", "198.51.100.1")
+
+	outReq := inReq.Clone(context.Background())
+	pr := &httputil.ProxyRequest{In: inReq, Out: outReq}
+	setPythonWorkerOutboundHeaders(pr, "127.0.0.1:9999")
+
+	if got := pr.Out.Header.Get("X-Forwarded-For"); got != "198.51.100.1, 203.0.113.5" {
+		t.Fatalf("X-Forwarded-For = %q, want %q", got, "198.51.100.1, 203.0.113.5")
+	}
+	if got := pr.Out.Header.Get(caddySnakeRemoteAddrHeader); got != "203.0.113.5" {
+		t.Fatalf("Caddy-Snake-Remote-Addr = %q", got)
+	}
+	if got := pr.Out.Header.Get(caddySnakeRemotePortHeader); got != "12345" {
+		t.Fatalf("Caddy-Snake-Remote-Port = %q", got)
+	}
+	if pr.Out.URL.String() != "http://127.0.0.1:9999/foo" {
+		t.Fatalf("out URL = %s", pr.Out.URL.String())
+	}
+}
+
+func TestSetPythonWorkerOutboundHeaders_NoPriorXFFIPv6(t *testing.T) {
+	inReq := httptest.NewRequest(http.MethodGet, "https://example.com/", nil)
+	inReq.RemoteAddr = "[2001:db8::1]:49322"
+	inReq.TLS = &tls.ConnectionState{} // emulate TLS for SetXForwarded proto
+
+	outReq := inReq.Clone(context.Background())
+	setPythonWorkerOutboundHeaders(&httputil.ProxyRequest{In: inReq, Out: outReq}, "/tmp/sock")
+
+	if got := outReq.Header.Get("X-Forwarded-For"); got != "2001:db8::1" {
+		t.Fatalf("X-Forwarded-For = %q", got)
+	}
+	if got := outReq.Header.Get(caddySnakeRemoteAddrHeader); got != "2001:db8::1" {
+		t.Fatalf("Caddy-Snake-Remote-Addr = %q", got)
+	}
+	if got := outReq.Header.Get(caddySnakeRemotePortHeader); got != "49322" {
+		t.Fatalf("Caddy-Snake-Remote-Port = %q", got)
+	}
+	if outReq.Header.Get("X-Forwarded-Proto") != "https" {
+		t.Fatalf("X-Forwarded-Proto = %q", outReq.Header.Get("X-Forwarded-Proto"))
+	}
+}
+
+func TestSetPythonWorkerOutboundHeaders_StripsSpoofedTrustedHeaders(t *testing.T) {
+	inReq := httptest.NewRequest(http.MethodGet, "http://example.com/", nil)
+	inReq.RemoteAddr = "192.0.2.1:80"
+	inReq.Header.Set(caddySnakeRemoteAddrHeader, "6.6.6.6")
+	inReq.Header.Set(caddySnakeRemotePortHeader, "99999")
+
+	outReq := inReq.Clone(context.Background())
+	setPythonWorkerOutboundHeaders(&httputil.ProxyRequest{In: inReq, Out: outReq}, "127.0.0.1:1")
+
+	if got := outReq.Header.Get(caddySnakeRemoteAddrHeader); got != "192.0.2.1" {
+		t.Fatalf("trusted addr after spoof strip = %q", got)
+	}
+	if got := outReq.Header.Get(caddySnakeRemotePortHeader); got != "80" {
+		t.Fatalf("trusted port after spoof strip = %q", got)
 	}
 }

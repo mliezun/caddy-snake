@@ -42,6 +42,33 @@ import (
 //go:embed caddysnake.py
 var caddysnake_py string
 
+// Hop-internal headers: set only by the Go module after stripping client-supplied
+// values. The Python worker uses these for REMOTE_ADDR / ASGI client.
+const (
+	caddySnakeRemoteAddrHeader = "Caddy-Snake-Remote-Addr"
+	caddySnakeRemotePortHeader = "Caddy-Snake-Remote-Port"
+)
+
+// setPythonWorkerOutboundHeaders configures the outbound request to the Python
+// worker: target URL, standard X-Forwarded-* (preserve inbound X-Forwarded-For
+// chain, then append this hop per [httputil.ProxyRequest.SetXForwarded]), and
+// trusted Caddy-Snake-Remote-* from the inbound RemoteAddr.
+func setPythonWorkerOutboundHeaders(pr *httputil.ProxyRequest, dialAddr string) {
+	pr.Out.URL.Scheme = "http"
+	pr.Out.URL.Host = dialAddr
+	pr.Out.Header["X-Forwarded-For"] = pr.In.Header["X-Forwarded-For"]
+	pr.SetXForwarded()
+	pr.Out.Header.Del(caddySnakeRemoteAddrHeader)
+	pr.Out.Header.Del(caddySnakeRemotePortHeader)
+	host, port, err := net.SplitHostPort(pr.In.RemoteAddr)
+	if err != nil {
+		host = pr.In.RemoteAddr
+		port = "0"
+	}
+	pr.Out.Header.Set(caddySnakeRemoteAddrHeader, host)
+	pr.Out.Header.Set(caddySnakeRemotePortHeader, port)
+}
+
 // AppServer defines the interface to interacting with a WSGI or ASGI server
 type AppServer interface {
 	Cleanup() error
@@ -433,8 +460,7 @@ func (w *PythonWorker) Start() error {
 	}
 	w.Proxy = &httputil.ReverseProxy{
 		Rewrite: func(req *httputil.ProxyRequest) {
-			req.Out.URL.Scheme = "http"
-			req.Out.URL.Host = w.DialAddr
+			setPythonWorkerOutboundHeaders(req, w.DialAddr)
 		},
 		Transport:  w.Transport,
 		BufferPool: sharedProxyBufferPool,

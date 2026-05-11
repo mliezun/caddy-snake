@@ -1,9 +1,11 @@
-# Tag releases only. Uses docker-publish environment for registry secrets / protection rules.
-name: Docker publish
+# PR Docker image build only (no push). Kept separate from docker-publish.yml so we never
+# use jobs.environment here — GitHub treats environment as a deployment (noisy PR UI, one
+# row per matrix cell when combined with publish jobs on the same workflow file).
+name: Docker
 
 on:
-  push:
-    tags: ["v*.*.*"]
+  pull_request:
+    branches: ["main"]
 
 permissions: {}
 
@@ -13,7 +15,7 @@ env:
   IMAGE_NAME: ${{ github.repository }}
 
 jobs:
-  build-push:
+  build:
     strategy:
       matrix:
         python-version: ["3.12", "3.13", "3.14"]
@@ -21,9 +23,6 @@ jobs:
     runs-on: ${{ matrix.os }}
     permissions:
       contents: read
-      packages: write
-      id-token: write
-    environment: docker-publish
     steps:
       # Required before uses: ./.github/actions/... — the runner must have the repo (and action.yml) on disk.
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
@@ -32,7 +31,4 @@ jobs:
       - uses: ./.github/actions/docker-build-push
         with:
           python-version: ${{ matrix.python-version }}
-          push-image: "true"
-          ghcr_token: ${{ secrets.GITHUB_TOKEN }}
-          docker_username: ${{ secrets.DOCKER_USERNAME }}
-          docker_password: ${{ secrets.DOCKER_PASSWORD }}
+          push-image: "false"
