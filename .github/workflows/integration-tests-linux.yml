@@ -52,6 +52,10 @@ jobs:
           - "dynamic"
         python-version: ["3.12", "3.13", "3.13t", "3.14"]
         os: [ubuntu-22.04, ubuntu-22.04-arm]
+        exclude:
+          # gevent/cffi cannot install on CPython 3.13 free-threaded (nogil); ESGI requires gevent
+          - tool-name: simple_esgi
+            python-version: "3.13t"
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1

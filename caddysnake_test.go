@@ -1838,7 +1838,7 @@ func TestPythonWorkerGroup_LoadsAndServesESGI(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")
 	}
-	skipIfNoPython(t)
+	skipIfNoGevent(t)
 
 	tempDir := t.TempDir()
 	appPath := filepath.Join(tempDir, "app.py")

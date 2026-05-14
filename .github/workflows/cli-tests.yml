@@ -56,7 +56,7 @@ jobs:
           cd "$TMPDIR"
           caddysnake -t wsgi -a app:app -l :19080 -w 1 > caddy.log 2>&1 &
           CLI_PID=$!
-          timeout 60 bash -c 'while ! grep -q "finished cleaning storage units" caddy.log; do sleep 1; done'
+          timeout 120 bash -c 'while ! grep -qE "finished cleaning storage units|serving initial configuration" caddy.log; do sleep 1; done'
           RESPONSE=$(curl -sf http://localhost:19080/)
           kill $CLI_PID 2>/dev/null || true
           wait $CLI_PID 2>/dev/null || true
@@ -77,7 +77,7 @@ jobs:
           cd "$TMPDIR"
           caddysnake -t asgi -a app:app -l :19081 -w 1 > caddy.log 2>&1 &
           CLI_PID=$!
-          timeout 60 bash -c 'while ! grep -q "finished cleaning storage units" caddy.log; do sleep 1; done'
+          timeout 120 bash -c 'while ! grep -qE "finished cleaning storage units|serving initial configuration" caddy.log; do sleep 1; done'
           RESPONSE=$(curl -sf http://localhost:19081/)
           kill $CLI_PID 2>/dev/null || true
           wait $CLI_PID 2>/dev/null || true
