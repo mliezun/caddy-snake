@@ -6,7 +6,7 @@ sidebar_position: 2
 
 # Configuration Reference
 
-The `python` directive allows you to serve Python WSGI or ASGI applications through Caddy. It supports both a simple form and a block form with various configuration options.
+The `python` directive allows you to serve Python WSGI, ASGI, or ESGI applications through Caddy. It supports both a simple form and a block form with various configuration options.
 
 ---
 
@@ -36,6 +36,8 @@ The block form provides full configuration:
 python {
     module_wsgi <module_name:variable_name>
     module_asgi <module_name:variable_name>
+    module_esgi <module_name:variable_name>
+    runtime <sync|gevent|native|uvloop>
     lifespan on|off
     working_dir <path>
     venv <path>
@@ -58,7 +60,7 @@ python {
 }
 ```
 
-You must specify either `module_wsgi` or `module_asgi`, but not both.
+You must specify exactly one of `module_wsgi`, `module_asgi`, or `module_esgi`.
 
 ### `module_asgi`
 
@@ -67,6 +69,32 @@ Specifies an ASGI application using the `module:variable` pattern. Use this for 
 ```caddyfile
 python {
     module_asgi "main:app"
+}
+```
+
+### `module_esgi`
+
+Specifies an [ESGI](esgi) application using the `module:variable` pattern (a synchronous `application(scope, protocol)` or `__esgi__` callable).
+
+```caddyfile
+python {
+    module_esgi "main:application"
+    runtime gevent
+}
+```
+
+### `runtime`
+
+Selects how the Python worker runs your app at the gateway boundary. See [ESGI integration: runtime semantics](esgi#runtime-semantics) for details.
+
+- With **`module_wsgi`**: `sync` (default) or `gevent`.
+- With **`module_esgi`**: **`gevent` only** (default).
+- With **`module_asgi`**: `native` or `uvloop` (default when omitted: `uvloop`).
+
+```caddyfile
+python {
+    module_asgi "main:app"
+    runtime native
 }
 ```
 
@@ -314,7 +342,7 @@ That test requires **Python 3** on `PATH`.
 
 ## Notes
 
-- You must specify either `module_wsgi` or `module_asgi`, but not both
+- You must specify exactly one of `module_wsgi`, `module_asgi`, or `module_esgi`
 - The `lifespan` directive is only used in ASGI mode
 - When `working_dir` is specified, the path must exist and be a directory
 - When specified, the `venv` path must point to a valid Python virtual environment

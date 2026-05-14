@@ -5,6 +5,7 @@
 .python-version
 venv
 .venv
+.pytest-venv
 
 # Build artifacts
 buildenv*

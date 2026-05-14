@@ -47,6 +47,7 @@ jobs:
           - "fastapi"
           - "simple_autoreload"
           - "simple_async"
+          - "simple_esgi"
           - "socketio"
           - "dynamic"
         python-version: ["3.12", "3.13", "3.13t", "3.14"]
@@ -82,7 +83,7 @@ jobs:
           python main_test.py
       - name: Run integration tests (nogil)
         working-directory: tests/${{ matrix.tool-name }}/
-        if: matrix.python-version == '3.13t' && matrix.tool-name != 'flask'
+        if: matrix.python-version == '3.13t' && matrix.tool-name != 'flask' && matrix.tool-name != 'simple_esgi'
         continue-on-error: true
         run: |
           ./caddy run --config Caddyfile > caddy.log 2>&1 &

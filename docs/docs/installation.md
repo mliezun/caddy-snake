@@ -1,7 +1,7 @@
 ---
 title: Installation & Distribution
 description: All the ways to install Caddy Snake — PyPI, pre-built binaries, Docker, and building from source
-sidebar_position: 5
+sidebar_position: 6
 ---
 
 # Installation & Distribution

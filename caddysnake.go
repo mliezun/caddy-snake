@@ -79,6 +79,8 @@ type AppServer interface {
 type CaddySnake struct {
 	ModuleWsgi string `json:"module_wsgi,omitempty"`
 	ModuleAsgi string `json:"module_asgi,omitempty"`
+	ModuleEsgi string `json:"module_esgi,omitempty"`
+	Runtime    string `json:"runtime,omitempty"`
 	Lifespan   string `json:"lifespan,omitempty"`
 	WorkingDir string `json:"working_dir,omitempty"`
 	VenvPath   string `json:"venv_path,omitempty"`
@@ -87,6 +89,45 @@ type CaddySnake struct {
 	PythonPath string `json:"python_path,omitempty"`
 	logger     *zap.Logger
 	app        AppServer
+}
+
+// effectivePythonRuntime returns the runtime string passed to the Python worker.
+// When Runtime is empty: sync for WSGI, gevent for ESGI, uvloop for ASGI.
+func effectivePythonRuntime(iface, runtime string) string {
+	if iface == "asgi" && runtime == "libuv" {
+		runtime = "uvloop" // legacy alias; configuration name is uvloop
+	}
+	if runtime != "" {
+		return runtime
+	}
+	if iface == "asgi" {
+		return "uvloop"
+	}
+	if iface == "esgi" {
+		return "gevent"
+	}
+	return "sync"
+}
+
+func validatePythonRuntime(iface, runtime string) error {
+	eff := effectivePythonRuntime(iface, runtime)
+	switch iface {
+	case "wsgi":
+		if eff != "sync" && eff != "gevent" {
+			return fmt.Errorf("wsgi runtime must be sync or gevent, got %q", eff)
+		}
+	case "esgi":
+		if eff != "gevent" {
+			return fmt.Errorf("esgi runtime must be gevent, got %q", eff)
+		}
+	case "asgi":
+		if eff != "native" && eff != "uvloop" {
+			return fmt.Errorf("asgi runtime must be native or uvloop, got %q", eff)
+		}
+	default:
+		return fmt.Errorf("unknown python interface %q", iface)
+	}
+	return nil
 }
 
 // UnmarshalCaddyfile implements caddyfile.Unmarshaler.
@@ -102,9 +143,17 @@ func (f *CaddySnake) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 					if !d.Args(&f.ModuleAsgi) {
 						return d.Errf("expected exactly one argument for module_asgi")
 					}
+				case "module_esgi":
+					if !d.Args(&f.ModuleEsgi) {
+						return d.Errf("expected exactly one argument for module_esgi")
+					}
 				case "module_wsgi":
 					if !d.Args(&f.ModuleWsgi) {
 						return d.Errf("expected exactly one argument for module_wsgi")
+					}
+				case "runtime":
+					if !d.Args(&f.Runtime) {
+						return d.Errf("expected exactly one argument for runtime")
 					}
 				case "lifespan":
 					if !d.Args(&f.Lifespan) || (f.Lifespan != "on" && f.Lifespan != "off") {
@@ -157,6 +206,7 @@ func (f *CaddySnake) Provision(ctx caddy.Context) error {
 	}
 
 	isDynamic := containsPlaceholder(f.ModuleWsgi) || containsPlaceholder(f.ModuleAsgi) ||
+		containsPlaceholder(f.ModuleEsgi) ||
 		containsPlaceholder(f.WorkingDir) || containsPlaceholder(f.VenvPath)
 
 	if isDynamic {
@@ -166,22 +216,34 @@ func (f *CaddySnake) Provision(ctx caddy.Context) error {
 	pythonBin := resolvePythonInterpreter(f.PythonPath, f.VenvPath)
 
 	if f.ModuleWsgi != "" {
-		f.app, err = NewPythonWorkerGroup("wsgi", f.ModuleWsgi, f.WorkingDir, f.VenvPath, f.Lifespan, workers, pythonBin)
+		rt := effectivePythonRuntime("wsgi", f.Runtime)
+		f.app, err = NewPythonWorkerGroup("wsgi", f.ModuleWsgi, f.WorkingDir, f.VenvPath, f.Lifespan, rt, workers, pythonBin)
 		if err != nil {
 			return err
 		}
 		if f.Lifespan != "" {
 			f.logger.Warn("lifespan attribute is ignored in WSGI mode", zap.String("lifespan", f.Lifespan))
 		}
-		f.logger.Info("serving wsgi app", zap.String("module_wsgi", f.ModuleWsgi), zap.String("working_dir", f.WorkingDir), zap.String("venv_path", f.VenvPath), zap.String("python", pythonBin))
+		f.logger.Info("serving wsgi app", zap.String("module_wsgi", f.ModuleWsgi), zap.String("working_dir", f.WorkingDir), zap.String("venv_path", f.VenvPath), zap.String("python", pythonBin), zap.String("runtime", rt))
 	} else if f.ModuleAsgi != "" {
-		f.app, err = NewPythonWorkerGroup("asgi", f.ModuleAsgi, f.WorkingDir, f.VenvPath, f.Lifespan, workers, pythonBin)
+		rt := effectivePythonRuntime("asgi", f.Runtime)
+		f.app, err = NewPythonWorkerGroup("asgi", f.ModuleAsgi, f.WorkingDir, f.VenvPath, f.Lifespan, rt, workers, pythonBin)
 		if err != nil {
 			return err
 		}
-		f.logger.Info("serving asgi app", zap.String("module_asgi", f.ModuleAsgi), zap.String("working_dir", f.WorkingDir), zap.String("venv_path", f.VenvPath), zap.String("python", pythonBin))
+		f.logger.Info("serving asgi app", zap.String("module_asgi", f.ModuleAsgi), zap.String("working_dir", f.WorkingDir), zap.String("venv_path", f.VenvPath), zap.String("python", pythonBin), zap.String("runtime", rt))
+	} else if f.ModuleEsgi != "" {
+		rt := effectivePythonRuntime("esgi", f.Runtime)
+		f.app, err = NewPythonWorkerGroup("esgi", f.ModuleEsgi, f.WorkingDir, f.VenvPath, "", rt, workers, pythonBin)
+		if err != nil {
+			return err
+		}
+		if f.Lifespan != "" {
+			f.logger.Warn("lifespan is for ASGI only; ignored in ESGI mode", zap.String("lifespan", f.Lifespan))
+		}
+		f.logger.Info("serving esgi app", zap.String("module_esgi", f.ModuleEsgi), zap.String("working_dir", f.WorkingDir), zap.String("venv_path", f.VenvPath), zap.String("python", pythonBin), zap.String("runtime", rt))
 	} else {
-		return errors.New("asgi or wsgi app needs to be specified")
+		return errors.New("a wsgi, asgi, or esgi app must be specified")
 	}
 
 	if f.Autoreload == "on" {
@@ -196,12 +258,19 @@ func (f *CaddySnake) Provision(ctx caddy.Context) error {
 
 		var factory func() (AppServer, error)
 		if f.ModuleWsgi != "" {
+			rt := effectivePythonRuntime("wsgi", f.Runtime)
 			factory = func() (AppServer, error) {
-				return NewPythonWorkerGroup("wsgi", f.ModuleWsgi, f.WorkingDir, f.VenvPath, f.Lifespan, workers, pythonBin)
+				return NewPythonWorkerGroup("wsgi", f.ModuleWsgi, f.WorkingDir, f.VenvPath, f.Lifespan, rt, workers, pythonBin)
+			}
+		} else if f.ModuleAsgi != "" {
+			rt := effectivePythonRuntime("asgi", f.Runtime)
+			factory = func() (AppServer, error) {
+				return NewPythonWorkerGroup("asgi", f.ModuleAsgi, f.WorkingDir, f.VenvPath, f.Lifespan, rt, workers, pythonBin)
 			}
 		} else {
+			rt := effectivePythonRuntime("esgi", f.Runtime)
 			factory = func() (AppServer, error) {
-				return NewPythonWorkerGroup("asgi", f.ModuleAsgi, f.WorkingDir, f.VenvPath, f.Lifespan, workers, pythonBin)
+				return NewPythonWorkerGroup("esgi", f.ModuleEsgi, f.WorkingDir, f.VenvPath, "", rt, workers, pythonBin)
 			}
 		}
 
@@ -216,16 +285,17 @@ func (f *CaddySnake) Provision(ctx caddy.Context) error {
 }
 
 // provisionDynamic sets up the module in dynamic mode where Caddy placeholders
-// in module_wsgi/module_asgi, working_dir, or venv are resolved per-request.
+// in module_wsgi/module_asgi/module_esgi, working_dir, or venv are resolved per-request.
 func (f *CaddySnake) provisionDynamic(workers int) error {
 	autoreload := f.Autoreload == "on"
 	pythonPath := f.PythonPath
 
 	if f.ModuleWsgi != "" {
 		lifespan := f.Lifespan
+		rt := effectivePythonRuntime("wsgi", f.Runtime)
 		factory := func(module, dir, venv string) (AppServer, error) {
 			pythonBin := resolvePythonInterpreter(pythonPath, venv)
-			return NewPythonWorkerGroup("wsgi", module, dir, venv, lifespan, workers, pythonBin)
+			return NewPythonWorkerGroup("wsgi", module, dir, venv, lifespan, rt, workers, pythonBin)
 		}
 		var err error
 		f.app, err = NewDynamicApp(f.ModuleWsgi, f.WorkingDir, f.VenvPath, factory, f.logger, autoreload, nil)
@@ -242,9 +312,10 @@ func (f *CaddySnake) provisionDynamic(workers int) error {
 		)
 	} else if f.ModuleAsgi != "" {
 		lifespan := f.Lifespan
+		rt := effectivePythonRuntime("asgi", f.Runtime)
 		factory := func(module, dir, venv string) (AppServer, error) {
 			pythonBin := resolvePythonInterpreter(pythonPath, venv)
-			return NewPythonWorkerGroup("asgi", module, dir, venv, lifespan, workers, pythonBin)
+			return NewPythonWorkerGroup("asgi", module, dir, venv, lifespan, rt, workers, pythonBin)
 		}
 		var err error
 		f.app, err = NewDynamicApp(f.ModuleAsgi, f.WorkingDir, f.VenvPath, factory, f.logger, autoreload, nil)
@@ -256,19 +327,57 @@ func (f *CaddySnake) provisionDynamic(workers int) error {
 			zap.String("working_dir", f.WorkingDir),
 			zap.String("venv_path", f.VenvPath),
 		)
+	} else if f.ModuleEsgi != "" {
+		rt := effectivePythonRuntime("esgi", f.Runtime)
+		factory := func(module, dir, venv string) (AppServer, error) {
+			pythonBin := resolvePythonInterpreter(pythonPath, venv)
+			return NewPythonWorkerGroup("esgi", module, dir, venv, "", rt, workers, pythonBin)
+		}
+		var err error
+		f.app, err = NewDynamicApp(f.ModuleEsgi, f.WorkingDir, f.VenvPath, factory, f.logger, autoreload, nil)
+		if err != nil {
+			return err
+		}
+		if f.Lifespan != "" {
+			f.logger.Warn("lifespan is for ASGI only; ignored in dynamic ESGI mode", zap.String("lifespan", f.Lifespan))
+		}
+		f.logger.Info("serving dynamic esgi app",
+			zap.String("module_esgi", f.ModuleEsgi),
+			zap.String("working_dir", f.WorkingDir),
+			zap.String("venv_path", f.VenvPath),
+		)
 	} else {
-		return errors.New("asgi or wsgi app needs to be specified")
+		return errors.New("a wsgi, asgi, or esgi app must be specified for dynamic mode")
 	}
 	return nil
 }
 
 // Validate implements caddy.Validator.
 func (m *CaddySnake) Validate() error {
-	if m.ModuleWsgi != "" && m.ModuleAsgi != "" {
-		return errors.New("cannot specify both module_wsgi and module_asgi")
+	n := 0
+	if m.ModuleWsgi != "" {
+		n++
 	}
-	if m.ModuleWsgi == "" && m.ModuleAsgi == "" {
-		return errors.New("one of module_wsgi or module_asgi is required")
+	if m.ModuleAsgi != "" {
+		n++
+	}
+	if m.ModuleEsgi != "" {
+		n++
+	}
+	if n != 1 {
+		return errors.New("exactly one of module_wsgi, module_asgi, or module_esgi is required")
+	}
+	var iface string
+	switch {
+	case m.ModuleWsgi != "":
+		iface = "wsgi"
+	case m.ModuleAsgi != "":
+		iface = "asgi"
+	default:
+		iface = "esgi"
+	}
+	if err := validatePythonRuntime(iface, m.Runtime); err != nil {
+		return err
 	}
 	if m.Workers != "" {
 		w, err := strconv.Atoi(m.Workers)
@@ -386,6 +495,7 @@ type PythonWorker struct {
 	WorkingDir string
 	Venv       string
 	Lifespan   string
+	Runtime    string
 	PythonBin  string
 	Socket     *os.File
 	SockDir    string // private directory containing the socket (Unix only)
@@ -398,7 +508,7 @@ type PythonWorker struct {
 	Proxy     *httputil.ReverseProxy
 }
 
-func NewPythonWorker(iface, app, workingDir, venv, lifespan, pythonBin, scriptPath string) (*PythonWorker, error) {
+func NewPythonWorker(iface, app, workingDir, venv, lifespan, pyRuntime, pythonBin, scriptPath string) (*PythonWorker, error) {
 	var socket *os.File
 	var sockDir string
 	var err error
@@ -437,6 +547,7 @@ func NewPythonWorker(iface, app, workingDir, venv, lifespan, pythonBin, scriptPa
 		WorkingDir: workingDir,
 		Venv:       venv,
 		Lifespan:   lifespan,
+		Runtime:    pyRuntime,
 		PythonBin:  pythonBin,
 		Socket:     socket,
 		SockDir:    sockDir,
@@ -485,6 +596,9 @@ func (w *PythonWorker) Start() error {
 	}
 	if w.Lifespan != "" {
 		args = append(args, "--lifespan", w.Lifespan)
+	}
+	if w.Runtime != "" {
+		args = append(args, "--runtime", w.Runtime)
 	}
 
 	w.Cmd = exec.Command(w.PythonBin, args...)
@@ -599,7 +713,7 @@ type PythonWorkerGroup struct {
 	ScriptPath string
 }
 
-func NewPythonWorkerGroup(iface, app, workingDir, venv, lifespan string, count int, pythonBin string) (*PythonWorkerGroup, error) {
+func NewPythonWorkerGroup(iface, app, workingDir, venv, lifespan, runtime string, count int, pythonBin string) (*PythonWorkerGroup, error) {
 	scriptPath, err := writeCaddysnakePy()
 	if err != nil {
 		return nil, fmt.Errorf("failed to write caddysnake.py: %w", err)
@@ -608,7 +722,7 @@ func NewPythonWorkerGroup(iface, app, workingDir, venv, lifespan string, count i
 	errs := make([]error, count)
 	workers := make([]*PythonWorker, count)
 	for i := 0; i < count; i++ {
-		workers[i], errs[i] = NewPythonWorker(iface, app, workingDir, venv, lifespan, pythonBin, scriptPath)
+		workers[i], errs[i] = NewPythonWorker(iface, app, workingDir, venv, lifespan, runtime, pythonBin, scriptPath)
 	}
 	wg := &PythonWorkerGroup{
 		Workers:    workers,
@@ -648,10 +762,11 @@ func init() {
 	httpcaddyfile.RegisterHandlerDirective("python", parsePythonDirective)
 	caddycmd.RegisterCommand(caddycmd.Command{
 		Name: "python-server",
-		Usage: "--server-type wsgi|asgi --app <module> " +
+		Usage: "--server-type wsgi|asgi|esgi --app <module> " +
 			"[--domain <example.com>] [--listen <addr>] [--workers <count>] " +
 			"[--python-path <path>] [--working-dir <path>] [--venv <path>] " +
 			"[--static-path <path>] [--static-route <route>] " +
+			"[--runtime <name>] " +
 			"[--debug] [--access-logs] [--autoreload]",
 		Short: "Spins up a Python server",
 		Long: `
@@ -663,7 +778,7 @@ Providing a domain name with the '--domain' flag enables HTTPS and sets the list
 Ensure DNS A/AAAA records are correctly set up if using a public domain for secure connections.
 `,
 		CobraFunc: func(cmd *cobra.Command) {
-			cmd.Flags().StringP("server-type", "t", "", "Required. The type of server to use: wsgi|asgi")
+			cmd.Flags().StringP("server-type", "t", "", "Required. The type of server to use: wsgi|asgi|esgi")
 			cmd.Flags().StringP("app", "a", "", "Required. App module to be imported")
 			cmd.Flags().StringP("domain", "d", "", "Domain name at which to serve the files")
 			cmd.Flags().StringP("listen", "l", "", "The address to which to bind the listener")
@@ -676,7 +791,7 @@ Ensure DNS A/AAAA records are correctly set up if using a public domain for secu
 			cmd.Flags().Bool("debug", false, "Enable debug logs")
 			cmd.Flags().Bool("access-logs", false, "Enable access logs")
 			cmd.Flags().String("lifespan", "off", "Enable ASGI lifespan support (ignored in WSGI mode)")
-			cmd.Flags().Bool("autoreload", false, "Watch .py files and reload on changes")
+			cmd.Flags().String("runtime", "", "Worker runtime (wsgi: sync|gevent; esgi: gevent only; asgi: native|uvloop); defaults: sync for WSGI, gevent for ESGI, uvloop for ASGI")
 			cmd.RunE = caddycmd.WrapCommandFuncForCobra(pythonServer)
 		},
 	})
@@ -700,9 +815,13 @@ func pythonServer(fs caddycmd.Flags) (int, error) {
 	workingDir := fs.String("working-dir")
 	venv := fs.String("venv")
 	lifespan := fs.String("lifespan")
+	runtimeFlag := fs.String("runtime")
 
 	if serverType == "" {
 		return caddy.ExitCodeFailedStartup, errors.New("--server-type is required")
+	}
+	if serverType != "wsgi" && serverType != "asgi" && serverType != "esgi" {
+		return caddy.ExitCodeFailedStartup, fmt.Errorf("invalid --server-type %q (want wsgi, asgi, or esgi)", serverType)
 	}
 	if app == "" {
 		return caddy.ExitCodeFailedStartup, errors.New("--app is required")
@@ -727,8 +846,10 @@ func pythonServer(fs caddycmd.Flags) (int, error) {
 	pythonHandler := CaddySnake{}
 	if serverType == "wsgi" {
 		pythonHandler.ModuleWsgi = app
-	} else {
+	} else if serverType == "asgi" {
 		pythonHandler.ModuleAsgi = app
+	} else {
+		pythonHandler.ModuleEsgi = app
 	}
 	if venv != "" {
 		pythonHandler.VenvPath = venv
@@ -743,6 +864,11 @@ func pythonServer(fs caddycmd.Flags) (int, error) {
 	}
 	pythonHandler.WorkingDir = workingDir
 	pythonHandler.Lifespan = lifespan
+	pythonHandler.Runtime = runtimeFlag
+
+	if err := pythonHandler.Validate(); err != nil {
+		return caddy.ExitCodeFailedStartup, err
+	}
 
 	routes := caddyhttp.RouteList{}
 

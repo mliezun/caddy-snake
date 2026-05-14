@@ -13,13 +13,13 @@ set -euo pipefail
 #   ./integration_test.sh simple 3.13-nogil
 #
 # Valid tool names:
-#   django, django_channels, flask, fastapi, simple_autoreload, simple_async, socketio, dynamic
+#   django, django_channels, flask, fastapi, simple_autoreload, simple_async, simple_esgi, socketio, dynamic
 #
 # Valid python versions:
 #   3.12, 3.13, 3.13-nogil, 3.14
 # ---------------------------------------------------------------------------
 
-VALID_TOOLS=("django" "django_channels" "flask" "fastapi" "simple_autoreload" "simple_async" "socketio" "dynamic")
+VALID_TOOLS=("django" "django_channels" "flask" "fastapi" "simple_autoreload" "simple_async" "simple_esgi" "socketio" "dynamic")
 VALID_PYVERSIONS=("3.12" "3.13" "3.13-nogil" "3.14")
 
 usage() {
@@ -94,7 +94,7 @@ apt-get install -yyqq software-properties-common curl ca-certificates git
 
 # Install Go
 echo ">>> Installing Go..."
-curl -fsSL "https://go.dev/dl/go1.24.0.linux-amd64.tar.gz" -o /tmp/go.tar.gz
+curl -fsSL "https://go.dev/dl/go1.26.0.linux-amd64.tar.gz" -o /tmp/go.tar.gz
 tar -C /usr/local -xzf /tmp/go.tar.gz
 export PATH="/usr/local/go/bin:$HOME/go/bin:$PATH"
 go version

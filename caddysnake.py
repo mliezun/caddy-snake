@@ -7,7 +7,7 @@ Designed to be spawned as a subprocess by the caddy-snake Go module.
 
 Usage:
     python caddysnake.py --socket /path/to/sock --app module:variable \
-        --interface wsgi|asgi [--working-dir DIR] [--venv DIR] [--lifespan on|off]
+        --interface wsgi|asgi|esgi [--working-dir DIR] [--venv DIR] [--lifespan on|off] [--runtime NAME]
 """
 
 import argparse
@@ -572,8 +572,14 @@ async def _run_wsgi_server_async(app, socket_path):
         pass
 
 
-def run_wsgi_server(app, socket_path):
+def run_wsgi_server(app, socket_path, runtime: str = "sync"):
     """Run a WSGI server. On Unix: Unix socket at socket_path. On Windows: TCP, write port to socket_path."""
+    if runtime == "gevent":
+        print(
+            "Note: runtime=gevent uses the same thread-pool scheduling as sync until "
+            "native gevent integration lands.",
+            file=sys.stderr,
+        )
     asyncio.run(_run_wsgi_server_async(app, socket_path))
 
 
@@ -1057,6 +1063,713 @@ async def _handle_asgi_websocket(reader, writer, app, scope, raw_headers):
                 pass
 
 
+# ==================== ESGI Server (gevent, 0.1-draft) ====================
+# Specification: https://github.com/mliezun/esgi/blob/main/PROTOCOL.md
+#
+# ESGI is gevent-only: StreamServer + plain sockets + greenlets. No asyncio in this
+# worker mode. Each client connection runs in its own greenlet; apps are synchronous.
+
+
+def _configure_asgi_event_loop(runtime: str) -> None:
+    """Apply event loop policy before asyncio.run for ASGI workers."""
+    if runtime in ("uvloop", "libuv"):
+        try:
+            import uvloop
+
+            asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
+        except ImportError:
+            print(
+                "warning: ASGI runtime is uvloop but uvloop is not installed; "
+                "falling back to native asyncio",
+                file=sys.stderr,
+            )
+    # native: standard asyncio loop
+
+
+def _recv_exact_sock(sock, n: int) -> bytes:
+    chunks = []
+    got = 0
+    while got < n:
+        b = sock.recv(n - got)
+        if not b:
+            raise OSError("connection closed while reading HTTP/WebSocket")
+        chunks.append(b)
+        got += len(b)
+    return b"".join(chunks)
+
+
+def _read_http_request_sync(sock):
+    """Blocking HTTP/1.x request parser; returns None on EOF/parse error."""
+    buf = bytearray()
+    while True:
+        if len(buf) > MAX_HEADERS_SIZE:
+            return None
+        sep = buf.find(b"\r\n\r\n")
+        if sep >= 0:
+            header_blob = bytes(buf[: sep + 4])
+            leftover = bytes(buf[sep + 4 :])
+            break
+        chunk = sock.recv(16384)
+        if not chunk:
+            return None
+        buf.extend(chunk)
+
+    lines = header_blob[:-4].split(b"\r\n")
+    if not lines or len(lines[0]) > MAX_REQUEST_LINE:
+        return None
+    request_line = lines[0].decode("latin-1")
+    parts = request_line.split(" ", 2)
+    if len(parts) != 3:
+        return None
+    method, path, version = parts
+
+    if len(lines) - 1 > MAX_HEADER_COUNT:
+        return None
+
+    headers = []
+    raw_headers = {}
+    for line in lines[1:]:
+        colon = line.find(b":")
+        if colon < 0:
+            continue
+        name = line[:colon].strip().lower()
+        value = line[colon + 1 :].strip()
+        headers.append((name, value))
+        raw_headers[name.decode("latin-1")] = value.decode("latin-1")
+
+    content_length = raw_headers.get("content-length")
+    transfer_encoding = raw_headers.get("transfer-encoding", "")
+    if content_length and transfer_encoding:
+        return None
+
+    if content_length:
+        try:
+            cl = int(content_length)
+        except ValueError:
+            return None
+        if cl < 0 or cl > MAX_BODY_SIZE:
+            return None
+        body_stream = _SyncHttpBodyStream(sock, leftover, content_length=cl)
+    elif "chunked" in transfer_encoding.lower():
+        body_stream = _SyncHttpBodyStream(sock, leftover, chunked=True)
+    else:
+        body_stream = _SyncHttpBodyStream(sock, leftover, content_length=0)
+
+    return method, path, version, headers, raw_headers, body_stream
+
+
+class _SyncHttpBodyStream:
+    """Blocking request body reader (Content-Length or chunked)."""
+
+    def __init__(self, sock, initial=b"", content_length=None, chunked=False):
+        self._sock = sock
+        self._buf = bytearray(initial)
+        self._remaining = content_length
+        self._chunked = chunked
+        self._chunk_remaining = 0
+        self._total_read = 0
+        self._done = (content_length == 0) and not chunked
+
+    def _bump_total(self, size):
+        if size <= 0:
+            return
+        self._total_read += size
+        if self._total_read > MAX_BODY_SIZE:
+            raise ValueError("HTTP request body too large")
+
+    def read(self, max_bytes=64 * 1024):
+        if self._done:
+            return b""
+        if max_bytes is None or max_bytes <= 0:
+            max_bytes = 64 * 1024
+
+        if self._remaining is not None:
+            if self._remaining <= 0:
+                self._done = True
+                return b""
+            to_read = min(max_bytes, self._remaining)
+            if len(self._buf) < to_read:
+                need = to_read - len(self._buf)
+                chunk = self._sock.recv(max(need, 4096))
+                if not chunk:
+                    raise OSError("unexpected EOF reading body")
+                self._buf.extend(chunk)
+            data = bytes(self._buf[:to_read])
+            del self._buf[:to_read]
+            self._bump_total(len(data))
+            self._remaining -= len(data)
+            if self._remaining == 0:
+                self._done = True
+            return data
+
+        if not self._chunked:
+            self._done = True
+            return b""
+
+        while True:
+            if self._chunk_remaining == 0:
+                line = self._readline_chunked()
+                if not line:
+                    raise OSError("EOF in chunked body")
+                if len(line) > MAX_REQUEST_LINE:
+                    raise ValueError("Chunk size line too long")
+                size_str = line.strip()
+                if b";" in size_str:
+                    size_str = size_str.split(b";", 1)[0]
+                try:
+                    chunk_size = int(size_str, 16)
+                except ValueError as exc:
+                    raise ValueError("Invalid chunk size") from exc
+                if chunk_size < 0:
+                    raise ValueError("Invalid negative chunk size")
+                if chunk_size == 0:
+                    while True:
+                        trailer_line = self._readline_chunked()
+                        if trailer_line in (b"\r\n", b"\n", b""):
+                            break
+                        if len(trailer_line) > MAX_REQUEST_LINE:
+                            raise ValueError("Chunk trailer line too long")
+                    self._done = True
+                    return b""
+                self._chunk_remaining = chunk_size
+
+            to_read = min(max_bytes, self._chunk_remaining)
+            if len(self._buf) < to_read:
+                need = to_read - len(self._buf)
+                chunk = self._sock.recv(max(need, 4096))
+                if not chunk:
+                    raise OSError("unexpected EOF in chunk")
+                self._buf.extend(chunk)
+            data = bytes(self._buf[:to_read])
+            del self._buf[:to_read]
+            self._bump_total(len(data))
+            self._chunk_remaining -= len(data)
+            if self._chunk_remaining == 0:
+                _recv_exact_sock(self._sock, 2)
+            if data:
+                return data
+
+    def _readline_chunked(self):
+        while True:
+            nl = self._buf.find(b"\n")
+            if nl >= 0:
+                line = bytes(self._buf[: nl + 1])
+                del self._buf[: nl + 1]
+                return line
+            chunk = self._sock.recv(4096)
+            if not chunk:
+                return b""
+            self._buf.extend(chunk)
+
+    def discard(self):
+        while True:
+            chunk = self.read()
+            if not chunk:
+                return
+
+
+def _esgi_http_version(req_version: str) -> str:
+    if "/" in req_version:
+        return req_version.split("/", 1)[1]
+    return "1.1"
+
+
+def _esgi_scheme_from_headers(raw_headers: dict) -> str:
+    xfp = raw_headers.get("x-forwarded-proto", "").lower().strip()
+    if xfp in ("https", "http"):
+        return xfp
+    return "http"
+
+
+def _esgi_ws_scheme_from_headers(raw_headers: dict) -> str:
+    return "wss" if _esgi_scheme_from_headers(raw_headers) == "https" else "ws"
+
+
+def _esgi_headers_mapping(headers_list, raw_headers: dict) -> dict:
+    headers_map = {}
+    for n, v in headers_list:
+        k = n.decode("latin-1").lower()
+        if k in ("caddy-snake-remote-addr", "caddy-snake-remote-port"):
+            continue
+        val = v.decode("latin-1")
+        if k in headers_map:
+            headers_map[k] = headers_map[k] + ", " + val
+        else:
+            headers_map[k] = val
+    return headers_map
+
+
+def _esgi_decode_path(path_part: str) -> str:
+    if "%" not in path_part:
+        return path_part
+    return unquote(path_part, encoding="utf-8", errors="replace")
+
+
+def _build_esgi_http_scope(method, path, version, headers_list, raw_headers: dict):
+    path_part, query_string = _split_path(path)
+    path_decoded = _esgi_decode_path(path_part)
+    host_str = raw_headers.get("host", "localhost")
+    server_host, server_port = _parse_host_header(host_str)
+    trusted = _client_from_caddy_snake_headers(raw_headers)
+    if trusted:
+        client_host, client_port = trusted
+    else:
+        client_host, client_port = "127.0.0.1", 0
+
+    return {
+        "proto": "http",
+        "esgi_version": "0.1",
+        "http_version": _esgi_http_version(version),
+        "server": f"{server_host}:{server_port}",
+        "client": f"{client_host}:{client_port}",
+        "scheme": _esgi_scheme_from_headers(raw_headers),
+        "method": method.upper(),
+        "path": path_decoded,
+        "query_string": query_string,
+        "headers": _esgi_headers_mapping(headers_list, raw_headers),
+        "authority": raw_headers.get("host") or None,
+    }
+
+
+def _build_esgi_ws_scope(method, path, version, headers_list, raw_headers: dict):
+    path_part, query_string = _split_path(path)
+    path_decoded = _esgi_decode_path(path_part)
+    host_str = raw_headers.get("host", "localhost")
+    server_host, server_port = _parse_host_header(host_str)
+    trusted = _client_from_caddy_snake_headers(raw_headers)
+    if trusted:
+        client_host, client_port = trusted
+    else:
+        client_host, client_port = "127.0.0.1", 0
+
+    return {
+        "proto": "ws",
+        "esgi_version": "0.1",
+        "http_version": _esgi_http_version(version),
+        "server": f"{server_host}:{server_port}",
+        "client": f"{client_host}:{client_port}",
+        "scheme": _esgi_ws_scheme_from_headers(raw_headers),
+        "method": method.upper(),
+        "path": path_decoded,
+        "query_string": query_string,
+        "headers": _esgi_headers_mapping(headers_list, raw_headers),
+        "authority": raw_headers.get("host") or None,
+    }
+
+
+class _EsgiWsMessage:
+    __slots__ = ("kind", "data")
+
+    def __init__(self, kind, data=None):
+        self.kind = kind
+        self.data = data
+
+
+def ws_read_frame_sync(sock):
+    data = _recv_exact_sock(sock, 2)
+    fin = (data[0] >> 7) & 1
+    opcode = data[0] & 0xF
+    masked = (data[1] >> 7) & 1
+    payload_len = data[1] & 0x7F
+
+    if payload_len == 126:
+        data = _recv_exact_sock(sock, 2)
+        payload_len = struct.unpack("!H", data)[0]
+    elif payload_len == 127:
+        data = _recv_exact_sock(sock, 8)
+        payload_len = struct.unpack("!Q", data)[0]
+
+    if payload_len > MAX_WS_FRAME_SIZE:
+        raise ValueError(f"WebSocket frame too large: {payload_len}")
+
+    mask_key = None
+    if masked:
+        mask_key = _recv_exact_sock(sock, 4)
+
+    payload = _recv_exact_sock(sock, payload_len) if payload_len > 0 else b""
+
+    if mask_key:
+        payload = bytes(b ^ mask_key[i % 4] for i, b in enumerate(payload))
+
+    return fin, opcode, payload
+
+
+def _ws_close_frame_bytes(code: int) -> bytes:
+    payload = struct.pack("!H", code)
+    return ws_build_frame(WS_OPCODE_CLOSE, payload)
+
+
+def _esgi_ws_reader_greenlet(sock, msg_queue):
+    try:
+        while True:
+            fin, opcode, payload = ws_read_frame_sync(sock)
+            if opcode == WS_OPCODE_CLOSE:
+                code = 1005
+                if len(payload) >= 2:
+                    code = struct.unpack("!H", payload[:2])[0]
+                msg_queue.put(_EsgiWsMessage(0, code))
+                break
+            if opcode == WS_OPCODE_PING:
+                sock.sendall(ws_build_frame(WS_OPCODE_PONG, payload))
+                continue
+            if opcode == WS_OPCODE_PONG:
+                continue
+            if opcode == WS_OPCODE_TEXT:
+                if not fin:
+                    sock.sendall(_ws_close_frame_bytes(1003))
+                    msg_queue.put(_EsgiWsMessage(0, 1003))
+                    break
+                try:
+                    text = payload.decode("utf-8")
+                except UnicodeDecodeError:
+                    sock.sendall(_ws_close_frame_bytes(1007))
+                    msg_queue.put(_EsgiWsMessage(0, 1007))
+                    break
+                msg_queue.put(_EsgiWsMessage(2, text))
+            elif opcode == WS_OPCODE_BINARY:
+                if not fin:
+                    sock.sendall(_ws_close_frame_bytes(1003))
+                    msg_queue.put(_EsgiWsMessage(0, 1003))
+                    break
+                msg_queue.put(_EsgiWsMessage(1, payload))
+            else:
+                sock.sendall(_ws_close_frame_bytes(1002))
+                msg_queue.put(_EsgiWsMessage(0, 1002))
+                break
+    except (ValueError, OSError, ConnectionError):
+        msg_queue.put(_EsgiWsMessage(0, 1006))
+
+
+class _EsgiWsTransportSync:
+    def __init__(self, sock, msg_queue):
+        self._sock = sock
+        self._q = msg_queue
+
+    def receive(self):
+        return self._q.get()
+
+    def send_bytes(self, data: bytes) -> None:
+        self._sock.sendall(ws_build_frame(WS_OPCODE_BINARY, data))
+
+    def send_str(self, data: str) -> None:
+        self._sock.sendall(ws_build_frame(WS_OPCODE_TEXT, data.encode("utf-8")))
+
+
+class _EsgiWsRootProtocolSync:
+    def __init__(self, sock, raw_headers):
+        self._sock = sock
+        self._raw_headers = raw_headers
+        self._accepted = False
+        self._closed = False
+        self._reader = None
+        self._q = None
+
+    def accept(self):
+        if self._accepted:
+            raise RuntimeError("websocket already accepted")
+        import gevent.queue
+
+        ws_key = self._raw_headers.get("sec-websocket-key", "")
+        if not ws_key:
+            raise ValueError("missing Sec-WebSocket-Key")
+        accept_value = ws_accept_key(ws_key)
+        response = (
+            "HTTP/1.1 101 Switching Protocols\r\n"
+            "Upgrade: websocket\r\n"
+            "Connection: Upgrade\r\n"
+            f"Sec-WebSocket-Accept: {accept_value}\r\n\r\n"
+        )
+        self._sock.sendall(response.encode("latin-1"))
+        self._q = gevent.queue.Queue()
+        import gevent
+
+        self._reader = gevent.spawn(_esgi_ws_reader_greenlet, self._sock, self._q)
+        self._accepted = True
+        return _EsgiWsTransportSync(self._sock, self._q)
+
+    def close(self, code=None, reason=None) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        if not self._accepted:
+            try:
+                self._sock.sendall(
+                    b"HTTP/1.1 403 Forbidden\r\nContent-Length: 13\r\n\r\n403 Forbidden"
+                )
+            except OSError:
+                pass
+            return
+        c = 1000 if code is None else int(code)
+        r = reason or ""
+        payload = struct.pack("!H", c) + r.encode("utf-8")
+        try:
+            self._sock.sendall(ws_build_frame(WS_OPCODE_CLOSE, payload))
+        except OSError:
+            pass
+        if self._reader is not None:
+            self._reader.kill(block=False)
+
+    def cleanup_after_app(self):
+        if self._reader is not None:
+            try:
+                if not self._reader.dead:
+                    self._reader.kill(block=False)
+            except Exception:
+                pass
+
+
+class _EsgiHttpProtocolSync:
+    def __init__(self, sock, body_stream):
+        self._sock = sock
+        self._body_stream = body_stream
+        self._responded = False
+        self._body_started = False
+
+    def _ensure_not_responded(self):
+        if self._responded:
+            raise RuntimeError("response already sent for this request")
+
+    def read_body(self) -> bytes:
+        if self._body_started:
+            raise RuntimeError("request body already consumed")
+        self._body_started = True
+        chunks = []
+        while True:
+            chunk = self._body_stream.read()
+            if not chunk:
+                break
+            chunks.append(chunk)
+        return b"".join(chunks)
+
+    def iter_body(self):
+        if self._body_started:
+            raise RuntimeError("request body already consumed")
+        self._body_started = True
+
+        def gen():
+            while True:
+                chunk = self._body_stream.read()
+                if not chunk:
+                    break
+                yield chunk
+
+        return gen()
+
+    def _write_response(self, status, headers, body: bytes):
+        buf = bytearray(_get_status_line(status))
+        cl_present = False
+        for name, value in headers:
+            buf.extend(f"{name}: {value}\r\n".encode("latin-1"))
+            if name.lower() == "content-length":
+                cl_present = True
+        if not cl_present:
+            buf.extend(b"Content-Length: ")
+            buf.extend(str(len(body)).encode("ascii"))
+            buf.extend(b"\r\n")
+        buf.extend(b"\r\n")
+        buf.extend(body)
+        self._sock.sendall(bytes(buf))
+
+    def response_empty(self, status: int, headers: list) -> None:
+        self.response_bytes(status, headers, b"")
+
+    def response_str(self, status: int, headers: list, body: str) -> None:
+        self.response_bytes(status, headers, body.encode("utf-8"))
+
+    def response_bytes(self, status: int, headers: list, body: bytes) -> None:
+        self._ensure_not_responded()
+        self._responded = True
+        self._write_response(status, headers, body)
+
+    def response_file(self, status: int, headers: list, file) -> None:
+        path = os.fsdecode(file)
+        with open(path, "rb") as f:
+            data = f.read()
+        self.response_bytes(status, headers, data)
+
+    def response_file_range(
+        self, status: int, headers: list, file, start: int, end: int
+    ) -> None:
+        path = os.fsdecode(file)
+        with open(path, "rb") as f:
+            f.seek(start)
+            data = f.read(end - start)
+        self.response_bytes(status, headers, data)
+
+    def response_stream(self, status: int, headers: list):
+        raise NotImplementedError("ESGI response_stream is not implemented yet")
+
+    def wait_disconnect(self) -> None:
+        pass
+
+
+def _invoke_esgi_app(app, scope, protocol) -> None:
+    if hasattr(app, "__esgi__"):
+        app.__esgi__(scope, protocol)
+    else:
+        app(scope, protocol)
+
+
+def _handle_esgi_http_sync(
+    sock, app, method, path, version, headers_list, raw_headers, body_stream
+):
+    scope = _build_esgi_http_scope(method, path, version, headers_list, raw_headers)
+    protocol = _EsgiHttpProtocolSync(sock, body_stream)
+    try:
+        _invoke_esgi_app(app, scope, protocol)
+    except Exception:
+        traceback.print_exc(file=sys.stderr)
+        if not protocol._responded:
+            try:
+                protocol.response_bytes(
+                    500,
+                    [("Content-Type", "text/plain")],
+                    b"Internal Server Error",
+                )
+            except Exception:
+                pass
+    if not protocol._body_started:
+        body_stream.discard()
+
+
+def _handle_esgi_websocket_sync(
+    sock, app, raw_headers, headers_list, version, path, method
+):
+    scope = _build_esgi_ws_scope(method, path, version, headers_list, raw_headers)
+    ws_proto = _EsgiWsRootProtocolSync(sock, raw_headers)
+    try:
+        _invoke_esgi_app(app, scope, ws_proto)
+    except Exception:
+        traceback.print_exc(file=sys.stderr)
+        if not ws_proto._accepted:
+            try:
+                sock.sendall(
+                    b"HTTP/1.1 500 Internal Server Error\r\n"
+                    b"Content-Length: 21\r\n\r\n"
+                    b"Internal Server Error"
+                )
+            except OSError:
+                pass
+    finally:
+        ws_proto.cleanup_after_app()
+
+
+def _esgi_connection_loop(sock, app):
+    try:
+        while True:
+            result = _read_http_request_sync(sock)
+            if result is None:
+                return
+            method, path, version, headers_list, raw_headers, body_stream = result
+            is_websocket = (
+                method.upper() == "GET"
+                and raw_headers.get("upgrade", "").lower() == "websocket"
+                and "upgrade" in raw_headers.get("connection", "").lower()
+            )
+            if is_websocket:
+                body_stream.discard()
+                _handle_esgi_websocket_sync(
+                    sock, app, raw_headers, headers_list, version, path, method
+                )
+                return
+            _handle_esgi_http_sync(
+                sock, app, method, path, version, headers_list, raw_headers, body_stream
+            )
+            connection = raw_headers.get("connection", "")
+            if "close" in connection.lower():
+                return
+    except (OSError, ValueError, ConnectionError):
+        pass
+
+
+def run_esgi_server(app, socket_path: str, runtime: str):
+    if runtime != "gevent":
+        print("ESGI requires runtime gevent (no asyncio transport)", file=sys.stderr)
+        sys.exit(1)
+
+    try:
+        import gevent
+        import gevent.socket
+        from gevent.server import StreamServer
+    except ImportError:
+        print("ESGI requires gevent; pip install gevent", file=sys.stderr)
+        sys.exit(1)
+
+    import gevent.signal as gsig
+
+    if hasattr(app, "__esgi_init__"):
+        try:
+            app.__esgi_init__()
+        except Exception:
+            traceback.print_exc(file=sys.stderr)
+            sys.exit(1)
+
+    def handle(sock, _addr):
+        try:
+            _esgi_connection_loop(sock, app)
+        finally:
+            try:
+                sock.close()
+            except OSError:
+                pass
+
+    server = None
+
+    try:
+        if _USE_TCP:
+            server = StreamServer(("127.0.0.1", 0), handle)
+        else:
+            if os.path.exists(socket_path):
+                os.unlink(socket_path)
+            listener_sock = gevent.socket.socket(
+                gevent.socket.AF_UNIX, gevent.socket.SOCK_STREAM
+            )
+            listener_sock.bind(socket_path)
+            listener_sock.listen(256)
+            server = StreamServer(listener_sock, handle)
+        server.start()
+
+        if _USE_TCP:
+            port = server.socket.getsockname()[1]
+            try:
+                _write_port_file_atomic(socket_path, port)
+            except OSError as e:
+                print(f"Failed to write port file: {e}", file=sys.stderr)
+                sys.exit(1)
+            print(f"ESGI server listening on 127.0.0.1:{port}", file=sys.stderr)
+        else:
+            print(f"ESGI server listening on {socket_path}", file=sys.stderr)
+
+        def _stop(*_args):
+            if server is not None:
+                try:
+                    server.close()
+                except Exception:
+                    pass
+
+        gsig.signal(signal.SIGTERM, _stop)
+        gsig.signal(signal.SIGINT, _stop)
+        server.serve_forever()
+    finally:
+        if hasattr(app, "__esgi_del__"):
+            try:
+                app.__esgi_del__()
+            except Exception:
+                traceback.print_exc(file=sys.stderr)
+        if server is not None:
+            try:
+                server.close()
+            except Exception:
+                pass
+        try:
+            if not _USE_TCP and os.path.exists(socket_path):
+                os.unlink(socket_path)
+        except OSError:
+            pass
+        sys.stderr.flush()
+        sys.stdout.flush()
+
+
 async def _handle_asgi_connection(reader, writer, app, state):
     """Handle a single TCP connection (supports keep-alive)."""
     try:
@@ -1287,26 +2000,28 @@ async def run_asgi_server(app, socket_path, lifespan):
 
 
 def main():
-    try:
-        import uvloop
-
-        asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
-    except ImportError:
-        pass
-
     parser = argparse.ArgumentParser(description="caddy-snake Python server")
-    parser.add_argument("--socket", required=True, help="Unix socket path")
+    parser.add_argument(
+        "--socket",
+        required=True,
+        help="Platform path: Unix socket path (Unix) or port file path (Windows)",
+    )
     parser.add_argument("--app", required=True, help="Application module:variable")
     parser.add_argument(
         "--interface",
         required=True,
-        choices=["wsgi", "asgi"],
+        choices=["wsgi", "asgi", "esgi"],
         help="Server interface type",
     )
     parser.add_argument("--working-dir", default="", help="Working directory")
     parser.add_argument("--venv", default="", help="Virtual environment path")
     parser.add_argument(
         "--lifespan", default="off", choices=["on", "off"], help="ASGI lifespan events"
+    )
+    parser.add_argument(
+        "--runtime",
+        default="",
+        help="Worker runtime: wsgi uses sync|gevent; esgi uses gevent only; asgi uses native|uvloop",
     )
 
     args = parser.parse_args()
@@ -1315,9 +2030,12 @@ def main():
     app = import_app(args.app)
 
     if args.interface == "wsgi":
-        run_wsgi_server(app, args.socket)
-    else:
+        run_wsgi_server(app, args.socket, args.runtime or "sync")
+    elif args.interface == "asgi":
+        _configure_asgi_event_loop(args.runtime or "uvloop")
         asyncio.run(run_asgi_server(app, args.socket, args.lifespan == "on"))
+    else:
+        run_esgi_server(app, args.socket, args.runtime or "gevent")
 
 
 if __name__ == "__main__":
