@@ -12,6 +12,8 @@ permissions: {}
 
 jobs:
   embed-app:
+    env:
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     strategy:
       fail-fast: false
       matrix:
