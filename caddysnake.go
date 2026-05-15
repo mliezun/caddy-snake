@@ -790,6 +790,7 @@ Ensure DNS A/AAAA records are correctly set up if using a public domain for secu
 			cmd.Flags().String("static-route", "/static", "Route to serve the static directory: /static")
 			cmd.Flags().Bool("debug", false, "Enable debug logs")
 			cmd.Flags().Bool("access-logs", false, "Enable access logs")
+			cmd.Flags().Bool("autoreload", false, "Watch .py files and reload on changes")
 			cmd.Flags().String("lifespan", "off", "Enable ASGI lifespan support (ignored in WSGI mode)")
 			cmd.Flags().String("runtime", "", "Worker runtime (wsgi: sync|gevent; esgi: gevent only; asgi: native|uvloop); defaults: sync for WSGI, gevent for ESGI, uvloop for ASGI")
 			cmd.RunE = caddycmd.WrapCommandFuncForCobra(pythonServer)
