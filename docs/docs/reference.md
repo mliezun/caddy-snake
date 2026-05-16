@@ -340,6 +340,124 @@ That test requires **Python 3** on `PATH`.
 
 ---
 
+## Shared worker cache {#shared-worker-cache}
+
+When Caddy Snake runs **Python in process worker mode** (the default multi-process layout), it may start a small **in-process cache server** inside the **Go plugin**. Worker processes talk to it over a **stream socket** using a **RESP2**-shaped line protocol (Redis-compatible enough for simple clients):
+
+- **Linux and macOS:** the listener is a **Unix domain socket** in a private temporary directory. The **`CADDYSNAKE_CACHE_ADDR`** environment variable is set to **`unix:///absolute/path/to/cache.sock`** (three slashes after the scheme: `unix://` plus an absolute path).
+- **Windows:** the listener is **TCP on loopback**; **`CADDYSNAKE_CACHE_ADDR`** is **`127.0.0.1:<port>`**.
+
+Caddy sets these automatically for eligible workers:
+
+| Variable | Purpose |
+| --- | --- |
+| **`CADDYSNAKE_CACHE_ADDR`** | Socket path (`unix://…`) or `host:port` for the cache |
+| **`CADDYSNAKE_WORKER_INTERFACE`** | Worker kind (`wsgi`, `asgi`, `esgi`, …); selects compatible client socket APIs (e.g. gevent for ESGI) |
+| **`CADDYSNAKE_CACHE_TIMEOUT`** | Hint for client read/connect timeouts (seconds) |
+
+If **`CADDYSNAKE_CACHE_ADDR`** is unset, the cache client is not available (for example, thread workers or configurations that omit the shared cache).
+
+### How values are stored
+
+Each key is in one of two shapes:
+
+| Shape | How it is created | What `get` returns |
+| --- | --- | --- |
+| **Scalar** | `set(key, value)` | `bytes` |
+| **List** (FIFO) | `append` on a missing key, or on a scalar (scalar becomes first element) | `list[bytes]` (may be empty) |
+
+- **`set`** replaces whatever was there (scalar or list) with a new scalar. Optional **`ttl`** is in whole **seconds**; omit for no expiry until delete/overwrite.
+- **`get`** returns `None` if the key is missing or expired.
+- **`delete`** returns `1` if a key was removed, `0` if nothing was stored under that key.
+- **`append`** appends one chunk to the list. If the key held a scalar, the value becomes `[old_scalar, new_chunk]`. **TTL is cleared** when working with list data.
+- **`pop`** removes the **first** list element (FIFO). It returns `None` if the key is missing, expired, holds a **scalar**, or the list is empty when **`timeout`** is omitted. With **`timeout=float(seconds)`**, the server waits up to that long for another worker to **`append`**; it still returns `None` if the wait elapses with no element. This is the usual pattern for **cross-worker queues** (one worker blocks on `pop`, others `append`).
+
+### Python API
+
+Install the **`caddysnake`** Python package (same as the CLI). Import the module-level singleton (or instantiate `Cache`):
+
+```python
+from caddysnake import cache
+```
+
+#### `cache.set(key, value, ttl=None)`
+
+Store a scalar. Overwrites any prior value.
+
+```python
+cache.set("config:theme", b"dark")
+cache.set("session:abc", serialized, ttl=3600)  # expire after 1 hour (server-side)
+```
+
+#### `cache.get(key)`
+
+Return `bytes` (scalar), `list[bytes]` (list), or `None`.
+
+```python
+raw = cache.get("config:theme")
+if raw is None:
+    ...
+queue = cache.get("events")
+if isinstance(queue, list):
+    for chunk in queue:
+        ...
+```
+
+#### `cache.delete(key) -> int`
+
+```python
+if cache.delete("session:abc"):
+    ...
+```
+
+#### `cache.append(key, chunk)`
+
+Build or grow a list. Typical pattern: **job queue** chunks or log lines.
+
+```python
+cache.append("jobs", b"task-1")
+cache.append("jobs", b"task-2")
+```
+
+#### `cache.pop(key, timeout=None)`
+
+FIFO pop for **list** keys only.
+
+```python
+# Non-blocking: returns None if the list is empty
+item = cache.pop("jobs")
+
+# Wait up to 30s for another worker to append
+item = cache.pop("jobs", timeout=30.0)
+```
+
+#### `cache.aset` / `cache.aget` / `cache.adelete` / `cache.aappend` / `cache.apop`
+
+Async variants for ASGI: each call runs the blocking client in `asyncio.to_thread`, so the event loop stays responsive.
+
+```python
+await cache.aset("k", b"v")
+val = await cache.aget("k")
+await cache.aappend("q", b"work")
+item = await cache.apop("q", timeout=5.0)
+```
+
+:::note
+
+`CacheError` is raised when the server returns an error line or the connection fails. `CacheConfigurationError` (a subclass) means `CADDYSNAKE_CACHE_ADDR` is missing or invalid — for example, code was not started under Caddy process workers with the shared cache enabled.
+
+:::
+
+`cache` is a thin façade; you can use the **`Cache`** class directly if you prefer. ESGI workers need **`gevent`** installed (TCP cache client path on Windows); Unix cache paths use the standard library `socket` for `unix://` addresses.
+
+:::note
+
+This cache is **ephemeral** and **not** a substitute for Redis or a database: it is scoped to the Caddy process, subject to memory limits, and intended for small shared objects or coordination between workers. Prefer an external store for durability or large payloads.
+
+:::
+
+---
+
 ## Notes
 
 - You must specify exactly one of `module_wsgi`, `module_asgi`, or `module_esgi`

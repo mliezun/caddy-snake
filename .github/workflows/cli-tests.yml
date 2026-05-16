@@ -43,6 +43,11 @@ jobs:
           pip install maturin
           maturin build --release
           pip install target/wheels/*.whl
+      - name: Pytest caddysnake.cache client
+        working-directory: cmd/cli
+        run: |
+          pip install pytest pytest-asyncio
+          pytest tests -v
       - name: Test caddysnake --help
         run: caddysnake --help
       - name: Test WSGI server

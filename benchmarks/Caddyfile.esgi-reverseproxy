@@ -1,0 +1,13 @@
+{
+	http_port 9080
+	https_port 9443
+}
+
+localhost:9080 {
+	route /* {
+		# Same gevent StreamServer worker as embedded ESGI, reached over HTTP via Unix socket.
+		reverse_proxy unix//workspace/benchmarks/esgi_upstream.sock {
+			header_up Host localhost:9080
+		}
+	}
+}

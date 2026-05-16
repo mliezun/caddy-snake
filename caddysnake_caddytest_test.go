@@ -3,6 +3,7 @@
 package caddysnake
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"net/http"
@@ -15,19 +16,36 @@ import (
 	"github.com/caddyserver/caddy/v2/caddytest"
 )
 
-// TestProvision_WSGI_ServesRequests and TestProvision_ASGI_ServesRequests use
-// caddytest, which starts Caddy in-process. Caddy does not exit when tests
-// complete, so these tests are excluded from the default test run to avoid
-// "Test I/O incomplete" / "WaitDelay expired" failures. Run them explicitly with:
-//
-//	go test -race -v -tags=caddytest .
-//
-// Note: The process may not exit cleanly after these tests; use a timeout if
-// running in CI: go test -race -v -tags=caddytest -timeout 90s .
-//
-// For end-to-end coverage of tls.permission.python_dir with on-demand TLS (no ACME):
-//
-//	go test -race -v -tags=caddytest . -run TestPythonDir_OnDemandDynamicASGI_OverHTTPS -timeout 90s
+// TestMain stops the in-process Caddy started by caddytest after all tests in
+// this package finish. caddytest launches caddycmd.Main() in a background
+// goroutine; without an explicit /stop, Python worker subprocesses may still
+// hold a duplicate of the test process stdout when the driver expects the
+// test binary's stdio pipes to close, causing exec.ErrWaitDelay (Go 1.20+).
+func TestMain(m *testing.M) {
+	code := m.Run()
+	stopCaddyInProcess()
+	os.Exit(code)
+}
+
+const caddytestAdminPort = 2999
+
+func stopCaddyInProcess() {
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
+		fmt.Sprintf("http://127.0.0.1:%d/stop", caddytestAdminPort), nil)
+	if err != nil {
+		return
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return
+	}
+	defer resp.Body.Close()
+	_, _ = io.Copy(io.Discard, resp.Body)
+	// Allow module cleanup (Python workers, cache listener) to finish.
+	time.Sleep(400 * time.Millisecond)
+}
 
 func TestProvision_WSGI_ServesRequests(t *testing.T) {
 	if testing.Short() {

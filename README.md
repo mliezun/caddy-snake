@@ -23,6 +23,7 @@ To make it easier to get started you can also grab one of the precompiled binari
 
 - **WSGI, ASGI & ESGI** — serve WSGI and ASGI frameworks, plus [ESGI](https://github.com/mliezun/esgi) apps (blocking `application(scope, protocol)` per connection)
 - **Multi-worker** — process-based (default) or thread-based workers for concurrent request handling
+- **Shared worker cache** — optional key/value store in the Caddy (Go) process so Python **process** workers can share state via a small RESP client; on Linux/macOS the transport is a **Unix domain socket** (`unix://…` in `CADDYSNAKE_CACHE_ADDR`), on Windows it uses **loopback TCP**
 - **Auto-reload** — watches `.py` files and hot-reloads your app on changes during development
 - **Dynamic module loading** — use Caddy placeholders to load different apps per subdomain or route
 - **On-demand TLS permission (`tls.permission.python_dir`)** — gate HTTPS issuance with filesystem checks so wildcard-style hosts work without running a separate ACME [`ask`](https://caddyserver.com/docs/caddyfile/options#on-demand-tls) service (pairs with dynamic `working_dir`)
@@ -305,6 +306,8 @@ python {
 
 Number of worker processes to spawn. Defaults to the number of CPUs (`GOMAXPROCS`).
 
+When you use **process workers** (more than one worker, or the default multi-worker layout), Caddy Snake may start an **in-process shared cache** in the Go plugin and pass connection details to each worker via environment variables (see [Shared worker cache](#shared-worker-cache)).
+
 ### `lifespan`
 
 Enables ASGI [lifespan events](https://asgi.readthedocs.io/en/latest/specs/lifespan.html) (`startup` and `shutdown`). Only applies to ASGI apps. Defaults to `off`.
@@ -321,6 +324,28 @@ python {
     autoreload
 }
 ```
+
+---
+
+## Shared worker cache
+
+Process-based workers run in **separate Python interpreters**, so they do not share `sys.modules` or in-memory globals. For lightweight cross-worker state (queues, small shared counters, etc.), Caddy Snake can expose a **key/value cache** that lives in the **Caddy plugin process** and is reached over a stream socket using a small **RESP2**-like protocol.
+
+- **Linux and macOS:** the plugin listens on a **Unix domain socket** under a private temporary directory and sets **`CADDYSNAKE_CACHE_ADDR`** to a **`unix:///absolute/path/to/cache.sock`** URL. Traffic stays on the filesystem socket, not the generic TCP/IP stack.
+- **Windows:** workers use **loopback TCP**; **`CADDYSNAKE_CACHE_ADDR`** is like **`127.0.0.1:<ephemeral-port>`**.
+
+Caddy also sets **`CADDYSNAKE_WORKER_INTERFACE`** (`wsgi`, `asgi`, `esgi`, …) and **`CADDYSNAKE_CACHE_TIMEOUT`** (read/connect hint in seconds) for the Python client.
+
+From app code (with the **`caddysnake`** PyPI package / CLI wheel installed in your venv), use the façade described in the [configuration reference](https://caddy-snake.readthedocs.io/en/latest/docs/reference/#shared-worker-cache):
+
+```python
+from caddysnake import cache
+
+cache.set("visits", b"1")
+cache.append("log", b"line\n")
+```
+
+Thread workers and single-worker setups do not need this path. See the docs for semantics, limits, and when to prefer Redis or another external store.
 
 ---
 
@@ -434,18 +459,20 @@ Make sure to match the Python version with your target environment.
 
 ## Benchmarks
 
-Caddy Snake outperforms traditional reverse proxy setups — **2.4x faster** than Flask+Gunicorn and **1.6x faster** than FastAPI+Uvicorn:
+Caddy Snake compares favorably to **separate reverse-proxy stacks** for **Flask (WSGI)**, **FastAPI (ASGI)**, and **ESGI (gevent)** on the JSON `/hello` workload below. Figures are the averages committed in [`benchmarks/results.json`](benchmarks/results.json) from a **Scaleway POP2-2C-8G (linux/amd64)** run; use [`benchmarks/scaleway_bench.sh`](benchmarks/scaleway_bench.sh) or local Docker to reproduce on other hardware.
 
 ![Benchmark Chart](benchmarks/benchmark_chart.svg)
 
 | Configuration | Requests/sec | Avg Latency (ms) | P99 Latency (ms) |
 |---|---|---|---|
-| Flask + Gunicorn + Caddy | 1,592 | 63.81 | 89.18 |
-| **Flask + Caddy Snake** | **3,782** | **26.42** | **41.46** |
-| FastAPI + Uvicorn + Caddy | 3,537 | 28.20 | 282.19 |
-| **FastAPI + Caddy Snake** | **5,730** | **17.44** | **31.11** |
+| Flask + Gunicorn + Caddy | 1,759 | 56.68 | 72.67 |
+| **Flask + Caddy Snake** | **2,905** | **34.40** | **53.24** |
+| FastAPI + Uvicorn + Caddy | 3,382 | 29.54 | 233.59 |
+| **FastAPI + Caddy Snake** | **4,854** | **20.57** | **38.98** |
+| ESGI (gevent) + Caddy reverse proxy | 5,011 | 19.92 | 50.45 |
+| **ESGI + Caddy Snake** | **5,146** | **19.42** | **45.04** |
 
-> Benchmarked on Scaleway POP2-2C-8G (linux/amd64) with [hey](https://github.com/rakyll/hey) — 100 concurrent connections, 10s duration, 10 runs averaged, Python 3.13, Go 1.26, process workers. See [benchmarks/](benchmarks/) for methodology and how to reproduce.
+> Benchmarked with [hey](https://github.com/rakyll/hey) on **Scaleway POP2-2C-8G (linux/amd64)**: 100 concurrent connections, 10 s per run, 10 runs averaged, Python 3.13, Go 1.26 (see [`benchmarks/scaleway_bench.sh`](benchmarks/scaleway_bench.sh)). Throughput varies by machine.
 
 ---
 

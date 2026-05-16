@@ -13,13 +13,13 @@ set -euo pipefail
 #   ./integration_test.sh simple 3.13-nogil
 #
 # Valid tool names:
-#   django, django_channels, flask, fastapi, simple_autoreload, simple_async, simple_esgi, socketio, dynamic
+#   django, django_channels, flask, fastapi, simple_autoreload, simple_async, simple_esgi, simple_cache, socketio, dynamic
 #
 # Valid python versions:
 #   3.12, 3.13, 3.13-nogil, 3.14
 # ---------------------------------------------------------------------------
 
-VALID_TOOLS=("django" "django_channels" "flask" "fastapi" "simple_autoreload" "simple_async" "simple_esgi" "socketio" "dynamic")
+VALID_TOOLS=("django" "django_channels" "flask" "fastapi" "simple_autoreload" "simple_async" "simple_esgi" "simple_cache" "socketio" "dynamic")
 VALID_PYVERSIONS=("3.12" "3.13" "3.13-nogil" "3.14")
 
 usage() {
@@ -125,6 +125,18 @@ else
   pip install -r requirements.txt
 fi
 
+if [[ "$TOOL_NAME" == "simple_cache" ]]; then
+  echo ">>> Installing Rust via rustup (Cargo.lock v4) + build deps for maturin..."
+  apt-get install -yyqq build-essential pkg-config "python${PY_PKG_VERSION}-dev"
+  curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain stable
+  # shellcheck disable=SC1091
+  source "$HOME/.cargo/env"
+  export PATH="$HOME/.cargo/bin:$PATH"
+  rustc --version
+  pip install maturin
+  pip install "/workspace/cmd/cli"
+fi
+
 # Build caddy with caddy-snake plugin (no CGO needed)
 echo ">>> Building caddy with caddy-snake..."
 CGO_ENABLED=0 xcaddy build --with github.com/mliezun/caddy-snake=/workspace
@@ -144,7 +156,7 @@ source venv/bin/activate
 if [[ "$IS_NOGIL" == "1" ]]; then
   python main_test.py || true
 else
-  python main_test.py
+  python main_test.py || { echo ">>> Caddy log (tail):"; tail -300 caddy.log; exit 1; }
 fi
 
 echo ""

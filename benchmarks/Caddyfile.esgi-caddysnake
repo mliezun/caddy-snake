@@ -1,0 +1,15 @@
+{
+	http_port 9080
+	https_port 9443
+}
+
+localhost:9080 {
+	route /* {
+		python {
+			module_esgi "app_esgi:application"
+			runtime gevent
+			venv "./venv"
+			workers 1
+		}
+	}
+}
