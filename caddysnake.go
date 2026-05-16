@@ -89,7 +89,7 @@ type CaddySnake struct {
 	PythonPath string `json:"python_path,omitempty"`
 	logger     *zap.Logger
 	app        AppServer
-	cacheSrv   *cacheTCPServer
+	cacheSrv   *cacheServer
 }
 
 // effectivePythonRuntime returns the runtime string passed to the Python worker.
@@ -202,7 +202,7 @@ func (f *CaddySnake) Provision(ctx caddy.Context) error {
 	var err error
 	f.logger = ctx.Logger(f)
 
-	cs, err := startCacheTCPServer()
+	cs, err := startCacheServer()
 	if err != nil {
 		return fmt.Errorf("in-process cache: %w", err)
 	}

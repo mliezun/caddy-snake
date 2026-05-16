@@ -55,6 +55,23 @@ def _require_addr() -> str:
     return a
 
 
+def _parse_tcp_host_port(addr: str) -> tuple[str, int]:
+    """Parse host:port for the Windows TCP cache listener (IPv4 or bracketed IPv6)."""
+    if addr.startswith("["):
+        try:
+            br = addr.index("]:")
+            host = addr[1:br]
+            port = int(addr[br + 2 :])
+        except ValueError as e:
+            raise CacheConfigurationError(f"invalid TCP cache address {addr!r}") from e
+        return host, port
+    if ":" in addr:
+        host, _, port_s = addr.rpartition(":")
+        if host and port_s.isdigit():
+            return host, int(port_s)
+    raise CacheConfigurationError(f"invalid TCP cache address {addr!r}")
+
+
 def _to_bytes(x: str | bytes) -> bytes:
     if isinstance(x, bytes):
         return x
@@ -135,21 +152,37 @@ def _read_reply(sock, buf: bytearray) -> Any:
 
 
 class Cache:
-    """Process-local façade for the shared Caddy cache (one TCP round-trip per call)."""
+    """Process-local façade for the shared Caddy cache (Unix socket or TCP)."""
 
     __slots__ = ()
 
-    def _roundtrip(self, parts: list[bytes]) -> Any:
-        _require_addr()
-        mod = _socket_module()
+    def _open_socket(self, mod):
+        addr = _require_addr()
+        if addr.startswith("unix://"):
+            path = addr[7:]
+            sock = mod.socket(mod.AF_UNIX, mod.SOCK_STREAM)
+            sock.settimeout(_timeout_sec())
+            try:
+                sock.connect(path)
+            except OSError as e:
+                sock.close()
+                raise CacheError(
+                    f"cannot connect to cache unix socket {path!r}: {e}"
+                ) from e
+            return sock
+        host, port = _parse_tcp_host_port(addr)
         sock = mod.socket(mod.AF_INET, mod.SOCK_STREAM)
         sock.settimeout(_timeout_sec())
-        host, port_s = _require_addr().rsplit(":", 1)
         try:
-            sock.connect((host, int(port_s)))
+            sock.connect((host, port))
         except OSError as e:
             sock.close()
-            raise CacheError(f"cannot connect to cache at {host}:{port_s}: {e}") from e
+            raise CacheError(f"cannot connect to cache at {host!r}:{port}: {e}") from e
+        return sock
+
+    def _roundtrip(self, parts: list[bytes]) -> Any:
+        mod = _socket_module()
+        sock = self._open_socket(mod)
         buf = bytearray()
         try:
             sock.sendall(_encode_cmd(parts))

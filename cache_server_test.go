@@ -199,17 +199,32 @@ func TestCacheStore_SetScalarUnblocksWaitingPop(t *testing.T) {
 	}
 }
 
-func TestCacheTCPServer_CRUD(t *testing.T) {
-	srv, err := startCacheTCPServer()
+func dialCacheServer(t *testing.T, srv *cacheServer) net.Conn {
+	t.Helper()
+	addr := srv.Addr()
+	if strings.HasPrefix(addr, "unix://") {
+		path := strings.TrimPrefix(addr, "unix://")
+		c, err := net.Dial("unix", path)
+		if err != nil {
+			t.Fatalf("dial unix: %v", err)
+		}
+		return c
+	}
+	c, err := net.Dial("tcp", addr)
+	if err != nil {
+		t.Fatalf("dial tcp: %v", err)
+	}
+	return c
+}
+
+func TestCacheServer_CRUD(t *testing.T) {
+	srv, err := startCacheServer()
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer srv.Close()
 
-	conn, err := net.Dial("tcp", srv.Addr())
-	if err != nil {
-		t.Fatal(err)
-	}
+	conn := dialCacheServer(t, srv)
 	defer conn.Close()
 	r := bufio.NewReader(conn)
 
@@ -238,17 +253,14 @@ func TestCacheTCPServer_CRUD(t *testing.T) {
 	}
 }
 
-func TestCacheTCPServer_AppendAndPop(t *testing.T) {
-	srv, err := startCacheTCPServer()
+func TestCacheServer_AppendAndPop(t *testing.T) {
+	srv, err := startCacheServer()
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer srv.Close()
 
-	conn, err := net.Dial("tcp", srv.Addr())
-	if err != nil {
-		t.Fatal(err)
-	}
+	conn := dialCacheServer(t, srv)
 	defer conn.Close()
 	r := bufio.NewReader(conn)
 
@@ -288,17 +300,14 @@ func TestCacheTCPServer_AppendAndPop(t *testing.T) {
 	}
 }
 
-func TestCacheTCPServer_EmptyListCSGET(t *testing.T) {
-	srv, err := startCacheTCPServer()
+func TestCacheServer_EmptyListCSGET(t *testing.T) {
+	srv, err := startCacheServer()
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer srv.Close()
 
-	conn, err := net.Dial("tcp", srv.Addr())
-	if err != nil {
-		t.Fatal(err)
-	}
+	conn := dialCacheServer(t, srv)
 	defer conn.Close()
 	r := bufio.NewReader(conn)
 
@@ -314,17 +323,14 @@ func TestCacheTCPServer_EmptyListCSGET(t *testing.T) {
 	}
 }
 
-func TestCacheTCPServer_CSPOPTimeout(t *testing.T) {
-	srv, err := startCacheTCPServer()
+func TestCacheServer_CSPOPTimeout(t *testing.T) {
+	srv, err := startCacheServer()
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer srv.Close()
 
-	conn, err := net.Dial("tcp", srv.Addr())
-	if err != nil {
-		t.Fatal(err)
-	}
+	conn := dialCacheServer(t, srv)
 	defer conn.Close()
 	r := bufio.NewReader(conn)
 
@@ -340,17 +346,14 @@ func TestCacheTCPServer_CSPOPTimeout(t *testing.T) {
 	}
 }
 
-func TestCacheTCPServer_CSQUIT(t *testing.T) {
-	srv, err := startCacheTCPServer()
+func TestCacheServer_CSQUIT(t *testing.T) {
+	srv, err := startCacheServer()
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer srv.Close()
 
-	conn, err := net.Dial("tcp", srv.Addr())
-	if err != nil {
-		t.Fatal(err)
-	}
+	conn := dialCacheServer(t, srv)
 	defer conn.Close()
 	r := bufio.NewReader(conn)
 

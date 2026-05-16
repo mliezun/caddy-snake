@@ -6,6 +6,9 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"os"
+	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -19,8 +22,11 @@ const (
 	EnvCaddysnakeCacheTimeoutSeconds = "CADDYSNAKE_CACHE_TIMEOUT"
 )
 
-// Default TCP read/connect timeout hint for clients (seconds); client may ignore.
+// DefaultCacheClientTimeoutSec is a TCP/read timeout hint for clients (seconds); client may ignore.
 const DefaultCacheClientTimeoutSec = 30
+
+// cacheAddrUnixScheme prefixes CADDYSNAKE_CACHE_ADDR when listening on a Unix domain socket.
+const cacheAddrUnixScheme = "unix://"
 
 // Resource limits (conservative defaults).
 const (
@@ -482,36 +488,78 @@ func respReadArray(r *bufio.Reader) ([][]byte, error) {
 	return out, nil
 }
 
-// --- TCP server ---
+// --- IPC server (Unix socket on unix-like OS; loopback TCP on Windows) ---
 
-type cacheTCPServer struct {
+type cacheServer struct {
 	store   *cacheStore
 	ln      net.Listener
 	done    chan struct{}
 	closeMu sync.Mutex
 	closed  bool
-	addr    string // host:port
+	// addr is CADDYSNAKE_CACHE_ADDR: "unix://" + filesystem path, or "127.0.0.1:<port>" on Windows.
+	addr    string
+	sockDir string // non-empty when using a Unix socket — removed on Close
 }
 
-func startCacheTCPServer() (*cacheTCPServer, error) {
+func startCacheServer() (*cacheServer, error) {
+	if runtime.GOOS == "windows" {
+		return startCacheServerTCPOnly()
+	}
+	return startCacheServerUnixSocket()
+}
+
+func startCacheServerTCPOnly() (*cacheServer, error) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		return nil, err
 	}
-	addr := ln.Addr().String()
-	s := &cacheTCPServer{
+	s := &cacheServer{
 		store: newCacheStore(),
 		ln:    ln,
 		done:  make(chan struct{}),
-		addr:  addr,
+		addr:  ln.Addr().String(),
 	}
 	go s.acceptLoop()
 	return s, nil
 }
 
-func (s *cacheTCPServer) Addr() string { return s.addr }
+func startCacheServerUnixSocket() (*cacheServer, error) {
+	dir, err := os.MkdirTemp("", "cs-*")
+	if err != nil {
+		return nil, err
+	}
+	if chErr := os.Chmod(dir, 0o700); chErr != nil {
+		os.RemoveAll(dir)
+		return nil, chErr
+	}
+	path := filepath.Join(dir, "cache.sock")
+	_ = os.Remove(path)
+	ln, err := net.Listen("unix", path)
+	if err != nil {
+		os.RemoveAll(dir)
+		return nil, err
+	}
+	absPath, err := filepath.Abs(path)
+	if err != nil {
+		ln.Close()
+		os.RemoveAll(dir)
+		return nil, err
+	}
+	envAddr := cacheAddrUnixScheme + filepath.ToSlash(absPath)
+	s := &cacheServer{
+		store:   newCacheStore(),
+		ln:      ln,
+		done:    make(chan struct{}),
+		addr:    envAddr,
+		sockDir: dir,
+	}
+	go s.acceptLoop()
+	return s, nil
+}
 
-func (s *cacheTCPServer) Close() error {
+func (s *cacheServer) Addr() string { return s.addr }
+
+func (s *cacheServer) Close() error {
 	s.closeMu.Lock()
 	if s.closed {
 		s.closeMu.Unlock()
@@ -521,10 +569,13 @@ func (s *cacheTCPServer) Close() error {
 	s.closeMu.Unlock()
 	err := s.ln.Close()
 	<-s.done
+	if s.sockDir != "" {
+		_ = os.RemoveAll(s.sockDir)
+	}
 	return err
 }
 
-func (s *cacheTCPServer) acceptLoop() {
+func (s *cacheServer) acceptLoop() {
 	defer close(s.done)
 	for {
 		conn, err := s.ln.Accept()
@@ -538,7 +589,7 @@ func (s *cacheTCPServer) acceptLoop() {
 	}
 }
 
-func (s *cacheTCPServer) handleConn(conn net.Conn) {
+func (s *cacheServer) handleConn(conn net.Conn) {
 	defer conn.Close()
 	r := bufio.NewReader(conn)
 	w := bufio.NewWriter(conn)
