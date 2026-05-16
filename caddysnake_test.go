@@ -826,26 +826,29 @@ func TestResolvePythonInterpreter_VenvNoPython(t *testing.T) {
 	}
 }
 
-// ====================== writeCaddysnakePy Tests ======================
+// ====================== writeCaddysnakePyBundle Tests ======================
 
-func TestWriteCaddysnakePy_CreateTempFails(t *testing.T) {
+func TestWriteCaddysnakePyBundle_CreateTempFails(t *testing.T) {
 	orig := os.Getenv("TMPDIR")
 	os.Setenv("TMPDIR", "/nonexistent_directory_for_caddysnake_test_xyz")
 	defer os.Setenv("TMPDIR", orig)
 
-	_, err := writeCaddysnakePy()
+	_, _, err := writeCaddysnakePyBundle()
 	if err == nil {
 		t.Error("expected error when TMPDIR points to nonexistent directory")
 	}
 }
 
-func TestWriteCaddysnakePy(t *testing.T) {
-	path, err := writeCaddysnakePy()
+func TestWriteCaddysnakePyBundle(t *testing.T) {
+	path, bundleDir, err := writeCaddysnakePyBundle()
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	defer os.Remove(path)
+	defer os.RemoveAll(bundleDir)
 
+	if filepath.Base(path) != "worker_main.py" {
+		t.Errorf("expected worker script name worker_main.py, got %q", filepath.Base(path))
+	}
 	info, err := os.Stat(path)
 	if err != nil {
 		t.Fatalf("file not found: %v", err)
@@ -1550,7 +1553,7 @@ func TestNewPythonWorkerGroup_InvalidPythonPath(t *testing.T) {
 	tempDir := t.TempDir()
 	os.WriteFile(filepath.Join(tempDir, "app.py"), []byte(minimalWSGIApp), 0644)
 
-	_, err := NewPythonWorkerGroup("wsgi", "app:app", tempDir, "", "", "sync", 1, "/nonexistent/python-not-found")
+	_, err := NewPythonWorkerGroup("wsgi", "app:app", tempDir, "", "", "sync", 1, "/nonexistent/python-not-found", "")
 	if err == nil {
 		t.Fatal("expected error when python path is invalid")
 	}
@@ -1573,7 +1576,7 @@ func TestPythonWorkerCleanup_Timeout(t *testing.T) {
 	tempDir := t.TempDir()
 	os.WriteFile(filepath.Join(tempDir, "app.py"), []byte(minimalWSGIAppIgnoringSIGTERM), 0644)
 
-	wg, err := NewPythonWorkerGroup("wsgi", "app:app", tempDir, "", "", "sync", 1, "python3")
+	wg, err := NewPythonWorkerGroup("wsgi", "app:app", tempDir, "", "", "sync", 1, "python3", "")
 	if err != nil {
 		t.Fatalf("NewPythonWorkerGroup: %v", err)
 	}
@@ -1735,7 +1738,7 @@ func TestPythonWorkerGroup_LoadsAndServesWSGI(t *testing.T) {
 		t.Fatalf("failed to write app.py: %v", err)
 	}
 
-	wg, err := NewPythonWorkerGroup("wsgi", "app:app", tempDir, "", "", "sync", 1, "python3")
+	wg, err := NewPythonWorkerGroup("wsgi", "app:app", tempDir, "", "", "sync", 1, "python3", "")
 	if err != nil {
 		t.Fatalf("NewPythonWorkerGroup failed: %v", err)
 	}
@@ -1787,7 +1790,7 @@ func TestPythonWorkerGroup_LoadsAndServesASGI(t *testing.T) {
 		t.Fatalf("failed to write app.py: %v", err)
 	}
 
-	wg, err := NewPythonWorkerGroup("asgi", "app:app", tempDir, "", "", "uvloop", 1, "python3")
+	wg, err := NewPythonWorkerGroup("asgi", "app:app", tempDir, "", "", "uvloop", 1, "python3", "")
 	if err != nil {
 		t.Fatalf("NewPythonWorkerGroup failed: %v", err)
 	}
@@ -1846,7 +1849,7 @@ func TestPythonWorkerGroup_LoadsAndServesESGI(t *testing.T) {
 		t.Fatalf("failed to write app.py: %v", err)
 	}
 
-	wg, err := NewPythonWorkerGroup("esgi", "app:application", tempDir, "", "", "gevent", 1, "python3")
+	wg, err := NewPythonWorkerGroup("esgi", "app:application", tempDir, "", "", "gevent", 1, "python3", "")
 	if err != nil {
 		t.Fatalf("NewPythonWorkerGroup failed: %v", err)
 	}

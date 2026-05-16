@@ -13,13 +13,13 @@ set -euo pipefail
 #   ./integration_test.sh simple 3.13-nogil
 #
 # Valid tool names:
-#   django, django_channels, flask, fastapi, simple_autoreload, simple_async, simple_esgi, socketio, dynamic
+#   django, django_channels, flask, fastapi, simple_autoreload, simple_async, simple_esgi, simple_cache, socketio, dynamic
 #
 # Valid python versions:
 #   3.12, 3.13, 3.13-nogil, 3.14
 # ---------------------------------------------------------------------------
 
-VALID_TOOLS=("django" "django_channels" "flask" "fastapi" "simple_autoreload" "simple_async" "simple_esgi" "socketio" "dynamic")
+VALID_TOOLS=("django" "django_channels" "flask" "fastapi" "simple_autoreload" "simple_async" "simple_esgi" "simple_cache" "socketio" "dynamic")
 VALID_PYVERSIONS=("3.12" "3.13" "3.13-nogil" "3.14")
 
 usage() {
@@ -123,6 +123,13 @@ else
   python${PY_PKG_VERSION} -m venv venv
   source venv/bin/activate
   pip install -r requirements.txt
+fi
+
+if [[ "$TOOL_NAME" == "simple_cache" ]]; then
+  echo ">>> Installing Rust toolchain + local caddysnake package (cmd/cli)..."
+  apt-get install -yyqq rustc cargo
+  pip install maturin
+  pip install "/workspace/cmd/cli"
 fi
 
 # Build caddy with caddy-snake plugin (no CGO needed)

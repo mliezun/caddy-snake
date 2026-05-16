@@ -89,6 +89,7 @@ type CaddySnake struct {
 	PythonPath string `json:"python_path,omitempty"`
 	logger     *zap.Logger
 	app        AppServer
+	cacheSrv   *cacheTCPServer
 }
 
 // effectivePythonRuntime returns the runtime string passed to the Python worker.
@@ -200,6 +201,21 @@ func (CaddySnake) CaddyModule() caddy.ModuleInfo {
 func (f *CaddySnake) Provision(ctx caddy.Context) error {
 	var err error
 	f.logger = ctx.Logger(f)
+
+	cs, err := startCacheTCPServer()
+	if err != nil {
+		return fmt.Errorf("in-process cache: %w", err)
+	}
+	f.cacheSrv = cs
+	cacheAddr := cs.Addr()
+	success := false
+	defer func() {
+		if !success && f.cacheSrv != nil {
+			_ = f.cacheSrv.Close()
+			f.cacheSrv = nil
+		}
+	}()
+
 	workers, _ := strconv.Atoi(f.Workers)
 	if workers <= 0 {
 		workers = runtime.GOMAXPROCS(0)
@@ -210,14 +226,18 @@ func (f *CaddySnake) Provision(ctx caddy.Context) error {
 		containsPlaceholder(f.WorkingDir) || containsPlaceholder(f.VenvPath)
 
 	if isDynamic {
-		return f.provisionDynamic(workers)
+		if err = f.provisionDynamic(workers, cacheAddr); err != nil {
+			return err
+		}
+		success = true
+		return nil
 	}
 
 	pythonBin := resolvePythonInterpreter(f.PythonPath, f.VenvPath)
 
 	if f.ModuleWsgi != "" {
 		rt := effectivePythonRuntime("wsgi", f.Runtime)
-		f.app, err = NewPythonWorkerGroup("wsgi", f.ModuleWsgi, f.WorkingDir, f.VenvPath, f.Lifespan, rt, workers, pythonBin)
+		f.app, err = NewPythonWorkerGroup("wsgi", f.ModuleWsgi, f.WorkingDir, f.VenvPath, f.Lifespan, rt, workers, pythonBin, cacheAddr)
 		if err != nil {
 			return err
 		}
@@ -227,14 +247,14 @@ func (f *CaddySnake) Provision(ctx caddy.Context) error {
 		f.logger.Info("serving wsgi app", zap.String("module_wsgi", f.ModuleWsgi), zap.String("working_dir", f.WorkingDir), zap.String("venv_path", f.VenvPath), zap.String("python", pythonBin), zap.String("runtime", rt))
 	} else if f.ModuleAsgi != "" {
 		rt := effectivePythonRuntime("asgi", f.Runtime)
-		f.app, err = NewPythonWorkerGroup("asgi", f.ModuleAsgi, f.WorkingDir, f.VenvPath, f.Lifespan, rt, workers, pythonBin)
+		f.app, err = NewPythonWorkerGroup("asgi", f.ModuleAsgi, f.WorkingDir, f.VenvPath, f.Lifespan, rt, workers, pythonBin, cacheAddr)
 		if err != nil {
 			return err
 		}
 		f.logger.Info("serving asgi app", zap.String("module_asgi", f.ModuleAsgi), zap.String("working_dir", f.WorkingDir), zap.String("venv_path", f.VenvPath), zap.String("python", pythonBin), zap.String("runtime", rt))
 	} else if f.ModuleEsgi != "" {
 		rt := effectivePythonRuntime("esgi", f.Runtime)
-		f.app, err = NewPythonWorkerGroup("esgi", f.ModuleEsgi, f.WorkingDir, f.VenvPath, "", rt, workers, pythonBin)
+		f.app, err = NewPythonWorkerGroup("esgi", f.ModuleEsgi, f.WorkingDir, f.VenvPath, "", rt, workers, pythonBin, cacheAddr)
 		if err != nil {
 			return err
 		}
@@ -260,17 +280,17 @@ func (f *CaddySnake) Provision(ctx caddy.Context) error {
 		if f.ModuleWsgi != "" {
 			rt := effectivePythonRuntime("wsgi", f.Runtime)
 			factory = func() (AppServer, error) {
-				return NewPythonWorkerGroup("wsgi", f.ModuleWsgi, f.WorkingDir, f.VenvPath, f.Lifespan, rt, workers, pythonBin)
+				return NewPythonWorkerGroup("wsgi", f.ModuleWsgi, f.WorkingDir, f.VenvPath, f.Lifespan, rt, workers, pythonBin, cacheAddr)
 			}
 		} else if f.ModuleAsgi != "" {
 			rt := effectivePythonRuntime("asgi", f.Runtime)
 			factory = func() (AppServer, error) {
-				return NewPythonWorkerGroup("asgi", f.ModuleAsgi, f.WorkingDir, f.VenvPath, f.Lifespan, rt, workers, pythonBin)
+				return NewPythonWorkerGroup("asgi", f.ModuleAsgi, f.WorkingDir, f.VenvPath, f.Lifespan, rt, workers, pythonBin, cacheAddr)
 			}
 		} else {
 			rt := effectivePythonRuntime("esgi", f.Runtime)
 			factory = func() (AppServer, error) {
-				return NewPythonWorkerGroup("esgi", f.ModuleEsgi, f.WorkingDir, f.VenvPath, "", rt, workers, pythonBin)
+				return NewPythonWorkerGroup("esgi", f.ModuleEsgi, f.WorkingDir, f.VenvPath, "", rt, workers, pythonBin, cacheAddr)
 			}
 		}
 
@@ -281,12 +301,13 @@ func (f *CaddySnake) Provision(ctx caddy.Context) error {
 		}
 	}
 
+	success = true
 	return nil
 }
 
 // provisionDynamic sets up the module in dynamic mode where Caddy placeholders
 // in module_wsgi/module_asgi/module_esgi, working_dir, or venv are resolved per-request.
-func (f *CaddySnake) provisionDynamic(workers int) error {
+func (f *CaddySnake) provisionDynamic(workers int, cacheAddr string) error {
 	autoreload := f.Autoreload == "on"
 	pythonPath := f.PythonPath
 
@@ -295,7 +316,7 @@ func (f *CaddySnake) provisionDynamic(workers int) error {
 		rt := effectivePythonRuntime("wsgi", f.Runtime)
 		factory := func(module, dir, venv string) (AppServer, error) {
 			pythonBin := resolvePythonInterpreter(pythonPath, venv)
-			return NewPythonWorkerGroup("wsgi", module, dir, venv, lifespan, rt, workers, pythonBin)
+			return NewPythonWorkerGroup("wsgi", module, dir, venv, lifespan, rt, workers, pythonBin, cacheAddr)
 		}
 		var err error
 		f.app, err = NewDynamicApp(f.ModuleWsgi, f.WorkingDir, f.VenvPath, factory, f.logger, autoreload, nil)
@@ -315,7 +336,7 @@ func (f *CaddySnake) provisionDynamic(workers int) error {
 		rt := effectivePythonRuntime("asgi", f.Runtime)
 		factory := func(module, dir, venv string) (AppServer, error) {
 			pythonBin := resolvePythonInterpreter(pythonPath, venv)
-			return NewPythonWorkerGroup("asgi", module, dir, venv, lifespan, rt, workers, pythonBin)
+			return NewPythonWorkerGroup("asgi", module, dir, venv, lifespan, rt, workers, pythonBin, cacheAddr)
 		}
 		var err error
 		f.app, err = NewDynamicApp(f.ModuleAsgi, f.WorkingDir, f.VenvPath, factory, f.logger, autoreload, nil)
@@ -331,7 +352,7 @@ func (f *CaddySnake) provisionDynamic(workers int) error {
 		rt := effectivePythonRuntime("esgi", f.Runtime)
 		factory := func(module, dir, venv string) (AppServer, error) {
 			pythonBin := resolvePythonInterpreter(pythonPath, venv)
-			return NewPythonWorkerGroup("esgi", module, dir, venv, "", rt, workers, pythonBin)
+			return NewPythonWorkerGroup("esgi", module, dir, venv, "", rt, workers, pythonBin, cacheAddr)
 		}
 		var err error
 		f.app, err = NewDynamicApp(f.ModuleEsgi, f.WorkingDir, f.VenvPath, factory, f.logger, autoreload, nil)
@@ -393,11 +414,18 @@ func (m *CaddySnake) Validate() error {
 
 // Cleanup frees resources uses by module
 func (m *CaddySnake) Cleanup() error {
+	var err error
 	if m != nil && m.app != nil {
 		m.logger.Info("cleaning up module")
-		return m.app.Cleanup()
+		err = m.app.Cleanup()
 	}
-	return nil
+	if m != nil && m.cacheSrv != nil {
+		if cerr := m.cacheSrv.Close(); cerr != nil && err == nil {
+			err = cerr
+		}
+		m.cacheSrv = nil
+	}
+	return err
 }
 
 // ServeHTTP implements caddyhttp.MiddlewareHandler.
@@ -455,19 +483,25 @@ func resolvePythonInterpreter(pythonPath, venvPath string) string {
 	return "python3"
 }
 
-// writeCaddysnakePy writes the embedded caddysnake.py to a temp file and returns the path.
-func writeCaddysnakePy() (string, error) {
-	f, err := os.CreateTemp("", "caddysnake-*.py")
+// writeCaddysnakePyBundle writes the embedded worker implementation as worker_main.py
+// inside a private temp directory so user apps can import the PyPI `caddysnake` package.
+func writeCaddysnakePyBundle() (scriptPath, bundleDir string, err error) {
+	bundleDir, err = os.MkdirTemp("", "caddysnake-worker-*")
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
-	if _, err := f.WriteString(caddysnake_py); err != nil {
-		f.Close()
-		os.Remove(f.Name())
-		return "", err
+	if runtime.GOOS != "windows" {
+		if chErr := os.Chmod(bundleDir, 0700); chErr != nil {
+			os.RemoveAll(bundleDir)
+			return "", "", chErr
+		}
 	}
-	f.Close()
-	return f.Name(), nil
+	scriptPath = filepath.Join(bundleDir, "worker_main.py")
+	if wrErr := os.WriteFile(scriptPath, []byte(caddysnake_py), 0600); wrErr != nil {
+		os.RemoveAll(bundleDir)
+		return "", "", wrErr
+	}
+	return scriptPath, bundleDir, nil
 }
 
 // proxyBufferPool implements httputil.BufferPool using sync.Pool to reduce GC pressure.
@@ -502,13 +536,14 @@ type PythonWorker struct {
 	ScriptPath string
 	DialNet    string // "unix" or "tcp"
 	DialAddr   string // socket path or host:port
+	CacheAddr  string // Caddy in-process cache TCP addr (127.0.0.1:port); empty = omit env
 
 	Cmd       *exec.Cmd
 	Transport *http.Transport
 	Proxy     *httputil.ReverseProxy
 }
 
-func NewPythonWorker(iface, app, workingDir, venv, lifespan, pyRuntime, pythonBin, scriptPath string) (*PythonWorker, error) {
+func NewPythonWorker(iface, app, workingDir, venv, lifespan, pyRuntime, pythonBin, scriptPath, cacheAddr string) (*PythonWorker, error) {
 	var socket *os.File
 	var sockDir string
 	var err error
@@ -554,6 +589,7 @@ func NewPythonWorker(iface, app, workingDir, venv, lifespan, pyRuntime, pythonBi
 		ScriptPath: scriptPath,
 		DialNet:    dialNet,
 		DialAddr:   dialAddr,
+		CacheAddr:  cacheAddr,
 	}
 	err = w.Start()
 	return w, err
@@ -604,7 +640,15 @@ func (w *PythonWorker) Start() error {
 	w.Cmd = exec.Command(w.PythonBin, args...)
 	w.Cmd.Stdout = os.Stdout
 	w.Cmd.Stderr = os.Stderr
-	w.Cmd.Env = append(os.Environ(), "PYTHONUNBUFFERED=1")
+	env := append(os.Environ(), "PYTHONUNBUFFERED=1")
+	if w.CacheAddr != "" {
+		env = append(env,
+			EnvCaddysnakeCacheAddr+"="+w.CacheAddr,
+			EnvCaddysnakeWorkerInterface+"="+w.Interface,
+			EnvCaddysnakeCacheTimeoutSeconds+"="+strconv.Itoa(DefaultCacheClientTimeoutSec),
+		)
+	}
+	w.Cmd.Env = env
 	setSysProcAttr(w.Cmd)
 
 	if err := w.Cmd.Start(); err != nil {
@@ -710,22 +754,24 @@ func (w *PythonWorker) HandleRequest(rw http.ResponseWriter, req *http.Request) 
 type PythonWorkerGroup struct {
 	Workers    []*PythonWorker
 	roundRobin atomic.Uint64
-	ScriptPath string
+	BundleDir  string
+	ScriptPath string // path to worker_main.py inside BundleDir
 }
 
-func NewPythonWorkerGroup(iface, app, workingDir, venv, lifespan, runtime string, count int, pythonBin string) (*PythonWorkerGroup, error) {
-	scriptPath, err := writeCaddysnakePy()
+func NewPythonWorkerGroup(iface, app, workingDir, venv, lifespan, runtime string, count int, pythonBin, cacheAddr string) (*PythonWorkerGroup, error) {
+	scriptPath, bundleDir, err := writeCaddysnakePyBundle()
 	if err != nil {
-		return nil, fmt.Errorf("failed to write caddysnake.py: %w", err)
+		return nil, fmt.Errorf("failed to write worker bundle: %w", err)
 	}
 
 	errs := make([]error, count)
 	workers := make([]*PythonWorker, count)
 	for i := 0; i < count; i++ {
-		workers[i], errs[i] = NewPythonWorker(iface, app, workingDir, venv, lifespan, runtime, pythonBin, scriptPath)
+		workers[i], errs[i] = NewPythonWorker(iface, app, workingDir, venv, lifespan, runtime, pythonBin, scriptPath, cacheAddr)
 	}
 	wg := &PythonWorkerGroup{
 		Workers:    workers,
+		BundleDir:  bundleDir,
 		ScriptPath: scriptPath,
 	}
 	if err := errors.Join(errs...); err != nil {
@@ -744,8 +790,8 @@ func (wg *PythonWorkerGroup) Cleanup() error {
 			errs[i] = worker.Cleanup()
 		}
 	}
-	if wg.ScriptPath != "" {
-		os.Remove(wg.ScriptPath)
+	if wg.BundleDir != "" {
+		_ = os.RemoveAll(wg.BundleDir)
 	}
 	return errors.Join(errs...)
 }

@@ -48,6 +48,7 @@ jobs:
           - "simple_autoreload"
           - "simple_async"
           - "simple_esgi"
+          - "simple_cache"
           - "socketio"
           - "dynamic"
         python-version: ["3.12", "3.13", "3.13t", "3.14"]
@@ -55,6 +56,8 @@ jobs:
         exclude:
           # gevent/cffi cannot install on CPython 3.13 free-threaded (nogil); ESGI requires gevent
           - tool-name: simple_esgi
+            python-version: "3.13t"
+          - tool-name: simple_cache
             python-version: "3.13t"
     runs-on: ${{ matrix.os }}
     steps:
@@ -64,6 +67,11 @@ jobs:
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: ${{ matrix.python-version }}
+      - name: Install Rust (simple_cache)
+        if: matrix.tool-name == 'simple_cache'
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y rustc cargo
       - name: Set up venv and install dependencies
         working-directory: tests/${{ matrix.tool-name }}/
         run: |
@@ -71,6 +79,13 @@ jobs:
           python -m venv venv
           source venv/bin/activate
           pip install -r requirements.txt
+      - name: Install local caddysnake package (simple_cache)
+        if: matrix.tool-name == 'simple_cache'
+        working-directory: tests/${{ matrix.tool-name }}/
+        run: |
+          source venv/bin/activate
+          pip install maturin
+          pip install "${GITHUB_WORKSPACE}/cmd/cli"
       - name: Download caddy binary
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
@@ -87,7 +102,7 @@ jobs:
           python main_test.py
       - name: Run integration tests (nogil)
         working-directory: tests/${{ matrix.tool-name }}/
-        if: matrix.python-version == '3.13t' && matrix.tool-name != 'flask' && matrix.tool-name != 'simple_esgi'
+        if: matrix.python-version == '3.13t' && matrix.tool-name != 'flask' && matrix.tool-name != 'simple_esgi' && matrix.tool-name != 'simple_cache'
         continue-on-error: true
         run: |
           ./caddy run --config Caddyfile > caddy.log 2>&1 &
