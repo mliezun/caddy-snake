@@ -19,6 +19,31 @@ APPS = {
 }
 
 
+def wait_for_all_apps_healthy(
+    timeout_seconds: float = 90.0, interval: float = 0.5
+) -> None:
+    """Block until every app returns 200 — workers can start after Caddy's storage log line."""
+
+    deadline = time.time() + timeout_seconds
+    last: dict[str, str] = {}
+    while time.time() < deadline:
+        ok = True
+        for name, expected_body in APPS.items():
+            resp = request_app(name)
+            if resp.status_code != 200 or resp.text != expected_body:
+                ok = False
+                body_preview = (resp.text or "")[:120]
+                last[name] = f"status={resp.status_code} body={body_preview!r}"
+                break
+        if ok:
+            return
+        time.sleep(interval)
+
+    raise AssertionError(
+        f"Dynamic apps not healthy after {timeout_seconds}s ({last=!r})"
+    )
+
+
 def request_app(name: str) -> requests.Response:
     """Send a GET request to the given app subdomain via Host header."""
     host = f"{name}.127.0.0.1.nip.io"
@@ -78,6 +103,9 @@ def test_concurrent_requests():
 
 if __name__ == "__main__":
     start = time.time()
+
+    print(">>> Waiting for all dynamic apps...")
+    wait_for_all_apps_healthy()
 
     print(">>> Testing individual apps...")
     test_individual_apps()

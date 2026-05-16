@@ -936,6 +936,84 @@ class TestBuildWsgiEnviron:
         assert env["REMOTE_ADDR"] == "::1"
 
 
+# ==================== ESGI scope building ====================
+
+
+class TestEsgiHelpers:
+    def test_http_version(self):
+        assert cs._esgi_http_version("HTTP/1.1") == "1.1"
+        assert cs._esgi_http_version("HTTP/1.0") == "1.0"
+        assert cs._esgi_http_version("1.0") == "1.1"  # no slash: fallback in handler
+
+    def test_scheme_from_headers(self):
+        assert cs._esgi_scheme_from_headers({}) == "http"
+        assert cs._esgi_scheme_from_headers({"x-forwarded-proto": "https"}) == "https"
+        assert cs._esgi_scheme_from_headers({"x-forwarded-proto": "HTTP"}) == "http"
+
+    def test_ws_scheme_from_headers(self):
+        assert cs._esgi_ws_scheme_from_headers({}) == "ws"
+        assert cs._esgi_ws_scheme_from_headers({"x-forwarded-proto": "https"}) == "wss"
+
+    def test_headers_mapping_drops_caddy_internal(self):
+        headers_list = [
+            (b"host", b"x"),
+            (b"caddy-snake-remote-addr", b"10.0.0.1"),
+            (b"x-custom", b"a"),
+            (b"x-custom", b"b"),
+        ]
+        raw = {"host": "x", "caddy-snake-remote-addr": "10.0.0.1"}
+        m = cs._esgi_headers_mapping(headers_list, raw)
+        assert "caddy-snake-remote-addr" not in m
+        assert m.get("x-custom") == "a, b"
+
+    def test_build_http_scope(self):
+        raw = {"host": "example.com:9443", "x-forwarded-proto": "http"}
+        headers_list = [(b"host", b"example.com:9443")]
+        scope = cs._build_esgi_http_scope(
+            "post",
+            "/p%61th/to?foo=bar",
+            "HTTP/1.1",
+            headers_list,
+            raw,
+        )
+        assert scope["proto"] == "http"
+        assert scope["esgi_version"] == "0.1"
+        assert scope["http_version"] == "1.1"
+        assert scope["method"] == "POST"
+        assert scope["path"] == "/path/to"
+        assert scope["query_string"] == "foo=bar"
+        assert scope["server"] == "example.com:9443"
+        assert scope["scheme"] == "http"
+        assert scope["authority"] == "example.com:9443"
+
+    def test_build_http_scope_trusted_client(self):
+        raw = {
+            "host": "x",
+            "caddy-snake-remote-addr": "198.51.100.2",
+            "caddy-snake-remote-port": "12345",
+        }
+        scope = cs._build_esgi_http_scope(
+            "GET",
+            "/",
+            "HTTP/1.1",
+            [(b"host", b"x")],
+            raw,
+        )
+        assert scope["client"] == "198.51.100.2:12345"
+
+    def test_build_ws_scope_scheme(self):
+        raw = {"host": "x", "x-forwarded-proto": "https"}
+        scope = cs._build_esgi_ws_scope(
+            "GET",
+            "/ws",
+            "HTTP/1.1",
+            [(b"host", b"x")],
+            raw,
+        )
+        assert scope["proto"] == "ws"
+        assert scope["scheme"] == "wss"
+
+
 # ==================== WSGI Handler (async) ====================
 
 
@@ -1133,12 +1211,13 @@ class TestMain:
                 ],
             ):
                 # main() would block in run_wsgi_server; mock it to return immediately
-                run_wsgi.side_effect = lambda app, sock: None
+                run_wsgi.side_effect = lambda *args, **kwargs: None
                 cs.main()
                 run_wsgi.assert_called_once()
-                args = run_wsgi.call_args[0]
-                assert callable(args[0])
-                assert args[1] == "/tmp/test.sock"
+                call = run_wsgi.call_args
+                assert callable(call[0][0])
+                assert call[0][1] == "/tmp/test.sock"
+                assert call[0][2] == "sync"
 
     def test_main_asgi_calls_run_asgi_server(self):
         """main() with --interface asgi calls run_asgi_server with imported app."""
@@ -1168,6 +1247,30 @@ class TestMain:
                 assert callable(args[0])
                 assert args[1] == "/tmp/test.sock"
                 assert args[2] is False  # lifespan off
+
+    def test_main_esgi_calls_run_esgi_server(self):
+        """main() with --interface esgi calls run_esgi_server with imported app."""
+        with mock.patch.object(cs, "run_esgi_server") as run_esgi:
+            run_esgi.side_effect = lambda *args, **kwargs: None
+            with mock.patch.object(
+                sys,
+                "argv",
+                [
+                    "caddysnake.py",
+                    "--socket",
+                    "/tmp/test.sock",
+                    "--app",
+                    "tests.test_apps.minimal:app",
+                    "--interface",
+                    "esgi",
+                ],
+            ):
+                cs.main()
+                run_esgi.assert_called_once()
+                call = run_esgi.call_args[0]
+                assert callable(call[0])
+                assert call[1] == "/tmp/test.sock"
+                assert call[2] == "gevent"
 
     def test_main_invalid_interface(self):
         with mock.patch.object(

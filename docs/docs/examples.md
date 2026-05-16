@@ -1,7 +1,7 @@
 ---
 title: Examples
 description: Example implementations using different Python web frameworks
-sidebar_position: 3
+sidebar_position: 4
 ---
 
 # Examples

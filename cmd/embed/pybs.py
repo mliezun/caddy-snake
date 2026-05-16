@@ -5,6 +5,7 @@ import json
 import time
 import urllib.request
 import urllib.error
+import random
 import os
 from pathlib import Path
 
@@ -81,12 +82,31 @@ WINDOWS_VARIANTS = {
 }
 
 
-def urlopen_with_retry(url, max_retries=5, initial_delay=5):
+def _github_headers() -> dict:
+    """Headers for github.com REST API (uses GITHUB_TOKEN in Actions CI)."""
+    h = {"User-Agent": "caddy-snake-pybs (github.com/mliezun/caddy-snake)"}
+    token = os.environ.get("GITHUB_TOKEN")
+    if token:
+        h["Authorization"] = f"Bearer {token}"
+        h["Accept"] = "application/vnd.github+json"
+    return h
+
+
+def urlopen_with_retry(
+    url,
+    *,
+    headers=None,
+    max_retries=14,
+    initial_delay=8,
+    max_sleep_seconds=240,
+):
     """Open a URL with retry logic for rate limit errors (HTTP 403/429)."""
     delay = initial_delay
-    for attempt in range(max_retries + 1):
+    total_attempts = max_retries + 1
+    for attempt in range(total_attempts):
         try:
-            response = urllib.request.urlopen(url)
+            req = urllib.request.Request(url, headers=dict(headers or {}))
+            response = urllib.request.urlopen(req)
             if response.status != 200:
                 raise urllib.error.HTTPError(
                     url, response.status, "HTTP Error", response.headers, None
@@ -94,18 +114,20 @@ def urlopen_with_retry(url, max_retries=5, initial_delay=5):
             return response
         except urllib.error.HTTPError as e:
             if e.code in (403, 429) and attempt < max_retries:
-                # Check for Retry-After header
+                # Check for Retry-After header (seconds), cap to avoid stalls
                 retry_after = e.headers.get("Retry-After") if e.headers else None
-                wait = (
+                base = (
                     int(retry_after) if retry_after and retry_after.isdigit() else delay
                 )
+                wait = min(max(base, initial_delay), max_sleep_seconds)
+                jitter = random.uniform(0, min(15.0, max(3.0, wait * 0.15)))
                 print(
-                    f"Rate limited (HTTP {e.code}). Retrying in {wait}s "
-                    f"(attempt {attempt + 1}/{max_retries})...",
+                    f"Rate limited (HTTP {e.code}). Retrying in {wait + jitter:.1f}s "
+                    f"(attempt {attempt + 2}/{total_attempts})...",
                     file=sys.stderr,
                 )
-                time.sleep(wait)
-                delay *= 2  # Exponential backoff
+                time.sleep(wait + jitter)
+                delay = min(delay * 2, max_sleep_seconds)
                 continue
             raise
 
@@ -113,7 +135,7 @@ def urlopen_with_retry(url, max_retries=5, initial_delay=5):
 def get_release(tag: str | None):
     url = f"{GITHUB_API}/latest" if tag == "latest" else f"{GITHUB_API}/tags/{tag}"
     try:
-        with urlopen_with_retry(url) as response:
+        with urlopen_with_retry(url, headers=_github_headers()) as response:
             return json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as e:
         print(f"HTTP Error {e.code}: {e.reason}", file=sys.stderr)
@@ -361,8 +383,16 @@ def select_asset(
 
 def download_asset(url, filename, dest):
     dest_path = Path(dest) / filename
+    dl_headers = None
+    if "github.com" in url:
+        dl_headers = {
+            "User-Agent": "caddy-snake-pybs (github.com/mliezun/caddy-snake)",
+        }
+        token = os.environ.get("GITHUB_TOKEN")
+        if token:
+            dl_headers["Authorization"] = f"Bearer {token}"
     try:
-        with urlopen_with_retry(url) as response:
+        with urlopen_with_retry(url, headers=dl_headers) as response:
             with open(dest_path, "wb") as f:
                 while True:
                     chunk = response.read(8192)

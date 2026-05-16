@@ -21,7 +21,7 @@ To make it easier to get started you can also grab one of the precompiled binari
 
 ## Features
 
-- **WSGI & ASGI support** — serve any Python web framework (Flask, Django, FastAPI, Starlette, etc.)
+- **WSGI, ASGI & ESGI** — serve WSGI and ASGI frameworks, plus [ESGI](https://github.com/mliezun/esgi) apps (blocking `application(scope, protocol)` per connection)
 - **Multi-worker** — process-based (default) or thread-based workers for concurrent request handling
 - **Auto-reload** — watches `.py` files and hot-reloads your app on changes during development
 - **Dynamic module loading** — use Caddy placeholders to load different apps per subdomain or route
@@ -47,14 +47,14 @@ The easiest way to get started on Linux is to download a pre-compiled Caddy bina
 # Start a WSGI server
 ./caddy python-server --server-type wsgi --app main:app
 
-# Start an ASGI server
-./caddy python-server --server-type asgi --app main:app
+# Start an ESGI server
+./caddy python-server --server-type esgi --app main:application
 ```
 
 This starts a server on port `9080` serving your app. See `./caddy python-server --help` for all options:
 
 ```
---server-type wsgi|asgi   Required. Type of Python app
+--server-type wsgi|asgi|esgi   Required. Type of Python app
 --app <module:var>        Required. Python module and app variable (e.g. main:app)
 --domain <example.com>    Enable HTTPS with automatic certificates
 --listen <addr>           Custom listen address (default: :9080)
@@ -67,6 +67,7 @@ This starts a server on port `9080` serving your app. See `./caddy python-server
 --debug                   Enable debug logging
 --access-logs             Enable access logs
 --lifespan on|off         Enable ASGI lifespan events (default: off)
+--runtime <name>           WSGI: sync|gevent; ESGI: gevent only; ASGI: native|uvloop (see docs)
 --autoreload              Watch .py files and reload on changes
 ```
 
@@ -128,6 +129,38 @@ See [Apps as Standalone Binaries](https://caddy-snake.readthedocs.io/en/latest/d
 ---
 
 ## Usage examples
+
+### ESGI (experimental)
+
+Caddy Snake can serve **[ESGI](https://github.com/mliezun/esgi)** applications — synchronous gateway apps with one invocation per HTTP or WebSocket connection and blocking I/O on a `protocol` object (see the [protocol draft](https://github.com/mliezun/esgi/blob/main/PROTOCOL.md)). **`module_esgi` uses gevent only** (no asyncio in the ESGI worker). For **`module_wsgi` / `module_asgi`**, see the **`runtime`** row in the table below (`native` / **`uvloop`** apply only to ASGI).
+
+`main.py` (sketch)
+
+```python
+def application(scope, protocol):
+    if scope["proto"] == "http":
+        body = protocol.read_body()
+        protocol.response_bytes(200, [("Content-Type", "text/plain")], b"ok")
+    elif scope["proto"] == "ws":
+        ws = protocol.accept()
+        ...
+        protocol.close()
+```
+
+`Caddyfile`
+
+```caddyfile
+http://localhost:9080 {
+    route {
+        python {
+            module_esgi "main:application"
+            runtime gevent
+        }
+    }
+}
+```
+
+See the [ESGI integration](https://caddy-snake.readthedocs.io/en/latest/docs/esgi) doc for the roadmap, `runtime` semantics, and how this relates to WSGI/ASGI.
 
 ### Flask (WSGI)
 
@@ -210,8 +243,10 @@ The `python` directive supports the following subdirectives:
 
 ```Caddyfile
 python {
-    module_wsgi "module:variable"       # WSGI app to serve (e.g. "main:app")
-    module_asgi "module:variable"       # ASGI app to serve (e.g. "main:app")
+    module_wsgi "module:variable"       # WSGI app (e.g. "main:app")
+    module_asgi "module:variable"       # ASGI app (e.g. "main:app")
+    module_esgi "module:variable"       # ESGI app (gevent worker; requires gevent installed)
+    runtime sync|gevent|native|uvloop   # See table; ESGI allows gevent only
     venv "/path/to/venv"                # Virtual environment path
     working_dir "/path/to/app"          # Working directory for module resolution
     workers 4                           # Number of worker processes (default: CPU count)
@@ -220,7 +255,7 @@ python {
 }
 ```
 
-You must specify either `module_wsgi` or `module_asgi` (not both).
+You must specify exactly one of `module_wsgi`, `module_asgi`, or `module_esgi`.
 
 ### `module_wsgi`
 
@@ -229,6 +264,24 @@ The Python module and WSGI application variable to import, in `"module:variable"
 ### `module_asgi`
 
 The Python module and ASGI application variable to import, in `"module:variable"` format.
+
+### `module_esgi`
+
+The Python module and ESGI application callable to import (`def application(scope, protocol): ...` or `__esgi__`), in `"module:variable"` format. See [ESGI](https://caddy-snake.readthedocs.io/en/latest/docs/esgi).
+
+### `runtime`
+
+Selects how the Python worker schedules work at the gateway boundary:
+
+| Interface | Allowed values | Default (when omitted) |
+| --- | --- | --- |
+| `module_wsgi` | `sync`, `gevent` | `sync` |
+| `module_esgi` | **`gevent`** only | `gevent` |
+| `module_asgi` | `native`, `uvloop` | `uvloop` |
+
+`native` uses the standard `asyncio` loop. **`uvloop`** selects the [uvloop](https://github.com/MagicStack/uvloop) event loop when the package is installed (with a warning and fallback to native asyncio if it is not). For **WSGI**, **`gevent`** is still the thread-pool compatibility mode unless/until a dedicated gevent stack is added. **ESGI** always runs the **gevent** `StreamServer` stack on plain sockets (install **`gevent`** in your app environment).
+
+**ESGI:** application code is synchronous (`def` + blocking `protocol` methods). The **ESGI Python subprocess does not use asyncio** for the Go-facing socket; it uses **gevent** only.
 
 ### `venv`
 

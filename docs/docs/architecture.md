@@ -1,7 +1,7 @@
 ---
 title: Architecture
 description: Technical details about how Caddy-Snake works, its worker model, autoreload, and dynamic modules
-sidebar_position: 4
+sidebar_position: 5
 ---
 
 # Architecture

@@ -423,7 +423,7 @@ func TestValidate(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error when neither wsgi nor asgi specified")
 	}
-	if !strings.Contains(err.Error(), "one of module_wsgi or module_asgi is required") {
+	if !strings.Contains(err.Error(), "exactly one of module_wsgi, module_asgi, or module_esgi is required") {
 		t.Errorf("expected module required error, got: %v", err)
 	}
 }
@@ -442,11 +442,43 @@ func TestValidate_AsgiOnly(t *testing.T) {
 	}
 }
 
+func TestValidate_EsgiOnly(t *testing.T) {
+	cs := &CaddySnake{ModuleEsgi: "main:app"}
+	if err := cs.Validate(); err != nil {
+		t.Errorf("expected nil error, got: %v", err)
+	}
+}
+
+func TestValidate_EsgiRequiresGevent(t *testing.T) {
+	cs := &CaddySnake{ModuleEsgi: "main:app", Runtime: "sync"}
+	err := cs.Validate()
+	if err == nil {
+		t.Fatal("expected error: esgi must use gevent runtime")
+	}
+}
+
+func TestValidate_InvalidRuntimeForAsgi(t *testing.T) {
+	cs := &CaddySnake{ModuleAsgi: "main:app", Runtime: "gevent"}
+	err := cs.Validate()
+	if err == nil {
+		t.Fatal("expected error for invalid asgi runtime")
+	}
+}
+
+func TestEffectivePythonRuntime_LibuvAlias(t *testing.T) {
+	if got := effectivePythonRuntime("asgi", "libuv"); got != "uvloop" {
+		t.Fatalf("legacy libuv alias: got %q want uvloop", got)
+	}
+}
+
 func TestValidate_BothModules(t *testing.T) {
 	cs := &CaddySnake{ModuleWsgi: "main:app", ModuleAsgi: "main:app"}
 	err := cs.Validate()
 	if err == nil {
-		t.Fatal("expected error when both modules specified")
+		t.Fatal("expected error when two modules specified")
+	}
+	if !strings.Contains(err.Error(), "exactly one of") {
+		t.Errorf("expected exactly one module error, got: %v", err)
 	}
 }
 
@@ -483,13 +515,13 @@ func TestProvision_NoModule(t *testing.T) {
 		t.Fatalf("ProvisionContext: %v", err)
 	}
 
-	cs := &CaddySnake{} // neither ModuleWsgi nor ModuleAsgi set
+	cs := &CaddySnake{} // no module set
 	err = cs.Provision(ctx)
 	if err == nil {
-		t.Fatal("expected error when neither wsgi nor asgi specified")
+		t.Fatal("expected error when neither wsgi nor asgi nor esgi specified")
 	}
-	if !strings.Contains(err.Error(), "asgi or wsgi") {
-		t.Errorf("expected 'asgi or wsgi' in error, got: %v", err)
+	if !strings.Contains(err.Error(), "wsgi, asgi, or esgi") {
+		t.Errorf("expected module error in error, got: %v", err)
 	}
 }
 
@@ -1518,7 +1550,7 @@ func TestNewPythonWorkerGroup_InvalidPythonPath(t *testing.T) {
 	tempDir := t.TempDir()
 	os.WriteFile(filepath.Join(tempDir, "app.py"), []byte(minimalWSGIApp), 0644)
 
-	_, err := NewPythonWorkerGroup("wsgi", "app:app", tempDir, "", "", 1, "/nonexistent/python-not-found")
+	_, err := NewPythonWorkerGroup("wsgi", "app:app", tempDir, "", "", "sync", 1, "/nonexistent/python-not-found")
 	if err == nil {
 		t.Fatal("expected error when python path is invalid")
 	}
@@ -1541,7 +1573,7 @@ func TestPythonWorkerCleanup_Timeout(t *testing.T) {
 	tempDir := t.TempDir()
 	os.WriteFile(filepath.Join(tempDir, "app.py"), []byte(minimalWSGIAppIgnoringSIGTERM), 0644)
 
-	wg, err := NewPythonWorkerGroup("wsgi", "app:app", tempDir, "", "", 1, "python3")
+	wg, err := NewPythonWorkerGroup("wsgi", "app:app", tempDir, "", "", "sync", 1, "python3")
 	if err != nil {
 		t.Fatalf("NewPythonWorkerGroup: %v", err)
 	}
@@ -1673,6 +1705,14 @@ func skipIfNoPython(t *testing.T) {
 	}
 }
 
+func skipIfNoGevent(t *testing.T) {
+	t.Helper()
+	skipIfNoPython(t)
+	if err := exec.Command("python3", "-c", "import gevent").Run(); err != nil {
+		t.Skip("gevent not installed, skipping ESGI worker test")
+	}
+}
+
 const minimalWSGIApp = `def app(environ, start_response):
     start_response('200 OK', [('Content-Type', 'text/plain')])
     return [b'Hello from Python']
@@ -1695,7 +1735,7 @@ func TestPythonWorkerGroup_LoadsAndServesWSGI(t *testing.T) {
 		t.Fatalf("failed to write app.py: %v", err)
 	}
 
-	wg, err := NewPythonWorkerGroup("wsgi", "app:app", tempDir, "", "", 1, "python3")
+	wg, err := NewPythonWorkerGroup("wsgi", "app:app", tempDir, "", "", "sync", 1, "python3")
 	if err != nil {
 		t.Fatalf("NewPythonWorkerGroup failed: %v", err)
 	}
@@ -1747,7 +1787,7 @@ func TestPythonWorkerGroup_LoadsAndServesASGI(t *testing.T) {
 		t.Fatalf("failed to write app.py: %v", err)
 	}
 
-	wg, err := NewPythonWorkerGroup("asgi", "app:app", tempDir, "", "", 1, "python3")
+	wg, err := NewPythonWorkerGroup("asgi", "app:app", tempDir, "", "", "uvloop", 1, "python3")
 	if err != nil {
 		t.Fatalf("NewPythonWorkerGroup failed: %v", err)
 	}
@@ -1784,6 +1824,65 @@ func TestPythonWorkerGroup_LoadsAndServesASGI(t *testing.T) {
 	}
 	if !bytes.Contains(body, []byte("Hello from ASGI")) {
 		t.Errorf("expected body to contain 'Hello from ASGI', got: %s", body)
+	}
+}
+
+const minimalESGIApp = `def application(scope, protocol):
+    if scope["proto"] != "http":
+        protocol.response_bytes(500, [("Content-Type", "text/plain")], b"bad")
+        return
+    protocol.response_bytes(200, [("Content-Type", "text/plain")], b"Hello from ESGI")
+`
+
+func TestPythonWorkerGroup_LoadsAndServesESGI(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+	skipIfNoGevent(t)
+
+	tempDir := t.TempDir()
+	appPath := filepath.Join(tempDir, "app.py")
+	if err := os.WriteFile(appPath, []byte(minimalESGIApp), 0644); err != nil {
+		t.Fatalf("failed to write app.py: %v", err)
+	}
+
+	wg, err := NewPythonWorkerGroup("esgi", "app:application", tempDir, "", "", "gevent", 1, "python3")
+	if err != nil {
+		t.Fatalf("NewPythonWorkerGroup failed: %v", err)
+	}
+	defer wg.Cleanup()
+
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("failed to listen: %v", err)
+	}
+	defer listener.Close()
+
+	server := &http.Server{
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			_ = wg.HandleRequest(w, r)
+		}),
+		ReadHeaderTimeout: 5 * time.Second,
+	}
+	go server.Serve(listener)
+	defer server.Close()
+
+	baseURL := "http://" + listener.Addr().String()
+	resp, err := http.Get(baseURL + "/")
+	if err != nil {
+		t.Fatalf("GET request failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("failed to read response: %v", err)
+	}
+	if resp.StatusCode != 200 {
+		t.Errorf("expected status 200, got %d; body: %s", resp.StatusCode, body)
+	}
+	if !bytes.Contains(body, []byte("Hello from ESGI")) {
+		t.Errorf("expected body to contain 'Hello from ESGI', got: %s", body)
 	}
 }
 

@@ -1,7 +1,7 @@
 ---
 title: Apps as Standalone Binaries
 description: Package your Python app with Caddy Snake and Python into a single, self-contained executable
-sidebar_position: 6
+sidebar_position: 8
 ---
 
 # Apps as Standalone Binaries
