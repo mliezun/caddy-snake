@@ -1,22 +1,32 @@
 {
   "flask_gunicorn_caddy": {
-    "requests_per_sec": 1592.4431,
-    "avg_latency_ms": 63.81,
-    "p99_latency_ms": 89.18
+    "requests_per_sec": 1759.0812,
+    "avg_latency_ms": 56.68,
+    "p99_latency_ms": 72.67
   },
   "flask_caddysnake": {
-    "requests_per_sec": 3781.595,
-    "avg_latency_ms": 26.42,
-    "p99_latency_ms": 41.46
+    "requests_per_sec": 2904.8266,
+    "avg_latency_ms": 34.4,
+    "p99_latency_ms": 53.24
   },
   "fastapi_uvicorn_caddy": {
-    "requests_per_sec": 3536.8865,
-    "avg_latency_ms": 28.2,
-    "p99_latency_ms": 282.19
+    "requests_per_sec": 3381.7054,
+    "avg_latency_ms": 29.54,
+    "p99_latency_ms": 233.59
   },
   "fastapi_caddysnake": {
-    "requests_per_sec": 5729.7216,
-    "avg_latency_ms": 17.44,
-    "p99_latency_ms": 31.11
+    "requests_per_sec": 4854.2158,
+    "avg_latency_ms": 20.57,
+    "p99_latency_ms": 38.98
+  },
+  "esgi_gevent_caddy": {
+    "requests_per_sec": 5011.4564,
+    "avg_latency_ms": 19.92,
+    "p99_latency_ms": 50.45
+  },
+  "esgi_caddysnake": {
+    "requests_per_sec": 5145.6934,
+    "avg_latency_ms": 19.42,
+    "p99_latency_ms": 45.04
   }
 }

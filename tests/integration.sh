@@ -126,8 +126,13 @@ else
 fi
 
 if [[ "$TOOL_NAME" == "simple_cache" ]]; then
-  echo ">>> Installing Rust toolchain + local caddysnake package (cmd/cli)..."
-  apt-get install -yyqq rustc cargo
+  echo ">>> Installing Rust via rustup (Cargo.lock v4) + build deps for maturin..."
+  apt-get install -yyqq build-essential pkg-config "python${PY_PKG_VERSION}-dev"
+  curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain stable
+  # shellcheck disable=SC1091
+  source "$HOME/.cargo/env"
+  export PATH="$HOME/.cargo/bin:$PATH"
+  rustc --version
   pip install maturin
   pip install "/workspace/cmd/cli"
 fi
@@ -151,7 +156,7 @@ source venv/bin/activate
 if [[ "$IS_NOGIL" == "1" ]]; then
   python main_test.py || true
 else
-  python main_test.py
+  python main_test.py || { echo ">>> Caddy log (tail):"; tail -300 caddy.log; exit 1; }
 fi
 
 echo ""

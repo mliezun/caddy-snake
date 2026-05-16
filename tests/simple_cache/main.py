@@ -130,14 +130,17 @@ async def asgi_app(scope, receive, send):
 
 def application(scope, protocol):
     if scope["proto"] != "http":
-        protocol.response_bytes(500, [(b"content-type", b"text/plain")], b"bad proto")
+        protocol.response_bytes(500, [("Content-Type", "text/plain")], b"bad proto")
         return
     path = scope["path"]
     method = scope["method"].upper()
-    qs = parse_qs(scope.get("query_string", b"").decode())
+    raw_qs = scope.get("query_string", "") or ""
+    if isinstance(raw_qs, bytes):
+        raw_qs = raw_qs.decode()
+    qs = parse_qs(raw_qs)
 
-    def resp(status: int, body: bytes, ctype: bytes = b"text/plain"):
-        protocol.response_bytes(status, [(b"content-type", ctype)], body)
+    def resp(status: int, body: bytes, ctype: str = "text/plain"):
+        protocol.response_bytes(status, [("Content-Type", ctype)], body)
 
     if path == "/esgi/set" and method == "POST":
         key = (qs.get("k", ["ek"])[0]).encode()
@@ -153,10 +156,10 @@ def application(scope, protocol):
             resp(
                 200,
                 json.dumps([e.decode("latin1") for e in v]).encode(),
-                b"application/json",
+                "application/json",
             )
         else:
-            resp(200, v)
+            resp(200, v, "application/octet-stream")
         return
     if path == "/esgi/append" and method == "POST":
         key = (qs.get("k", ["eq"])[0]).encode()

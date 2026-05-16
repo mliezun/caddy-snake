@@ -176,6 +176,27 @@ run_benchmark "fastapi_caddysnake" \
      sleep 5' \
     'pkill -f "caddy-snake-bench" || true; sleep 2'
 
+# Benchmark 5: ESGI (gevent standalone worker from caddysnake.py) + Caddy reverse_proxy over Unix socket
+run_benchmark "esgi_gevent_caddy" \
+    'rm -f $BENCH_DIR/esgi_upstream.sock
+     cd $BENCH_DIR && source venv/bin/activate && python /workspace/caddysnake.py --interface esgi --app app_esgi:application --socket "$BENCH_DIR/esgi_upstream.sock" --working-dir "$BENCH_DIR" --venv "$BENCH_DIR/venv" --runtime gevent > /dev/null 2>&1 &
+     for i in $(seq 1 30); do
+       if [[ -S "$BENCH_DIR/esgi_upstream.sock" ]]; then break; fi
+       sleep 1
+     done
+     $CADDY run --config Caddyfile.esgi-reverseproxy > /dev/null 2>&1 &
+     sleep 3' \
+    'pkill -f "caddy-snake-bench" || true
+     pkill -f "caddysnake.py --interface esgi --app app_esgi:application" || true
+     rm -f $BENCH_DIR/esgi_upstream.sock
+     sleep 2'
+
+# Benchmark 6: ESGI + Caddy Snake (module_esgi)
+run_benchmark "esgi_caddysnake" \
+    'cd $BENCH_DIR && $CADDY run --config Caddyfile.esgi-caddysnake > /tmp/caddy-esgi.log 2>&1 &
+     sleep 5' \
+    'pkill -f "caddy-snake-bench" || true; sleep 2'
+
 echo ""
 echo "============================================"
 echo " Results Summary (avg of $NUM_RUNS runs)"

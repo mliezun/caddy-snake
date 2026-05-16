@@ -1,4 +1,4 @@
-"""TCP/RESP2 client for the Caddy in-process caddy-snake cache."""
+"""RESP2 client for the Caddy in-process caddy-snake cache (Unix socket or TCP)."""
 
 from __future__ import annotations
 
@@ -160,7 +160,12 @@ class Cache:
         addr = _require_addr()
         if addr.startswith("unix://"):
             path = addr[7:]
-            sock = mod.socket(mod.AF_UNIX, mod.SOCK_STREAM)
+            # ESGI uses gevent for the Go-facing server, but gevent's client
+            # AF_UNIX path has been unreliable; stdlib socket is fine here (short
+            # local IPC and does not block other greenlets' I/O meaningfully).
+            import socket as stdsocket
+
+            sock = stdsocket.socket(stdsocket.AF_UNIX, stdsocket.SOCK_STREAM)
             sock.settimeout(_timeout_sec())
             try:
                 sock.connect(path)

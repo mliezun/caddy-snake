@@ -235,6 +235,17 @@ Results:
 - `benchmarks/benchmark_chart.png`
 - `benchmarks/benchmark_chart.svg`
 
+### Run on Scaleway (POP2-2C-8G, linux/amd64)
+
+For stable, CI-like numbers on **linux/amd64** without local Docker noise, provision a short-lived **POP2-2C-8G** instance, run the harness, fetch artifacts, and terminate:
+
+```bash
+./benchmarks/scaleway_bench.sh
+# or: BENCH_RSYNC_LOCAL=1 ./benchmarks/scaleway_bench.sh   # rsync current tree
+```
+
+Requires [Scaleway CLI](https://github.com/scaleway/scaleway-cli) (`scw init`), `jq`, `tar`, and a **project SSH key** (see Scaleway console → SSH keys). See `benchmarks/scaleway_bench.sh` for env vars.
+
 ### After re-running benchmarks
 
 Always update the following with the new results:

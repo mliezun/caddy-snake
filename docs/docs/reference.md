@@ -340,6 +340,44 @@ That test requires **Python 3** on `PATH`.
 
 ---
 
+## Shared worker cache {#shared-worker-cache}
+
+When Caddy Snake runs **Python in process worker mode** (the default multi-process layout), it may start a small **in-process cache server** inside the **Go plugin**. Worker processes talk to it over a **stream socket** using a **RESP2**-shaped line protocol (Redis-compatible enough for simple clients):
+
+- **Linux and macOS:** the listener is a **Unix domain socket** in a private temporary directory. The **`CADDYSNAKE_CACHE_ADDR`** environment variable is set to **`unix:///absolute/path/to/cache.sock`** (three slashes after the scheme: `unix://` plus an absolute path).
+- **Windows:** the listener is **TCP on loopback**; **`CADDYSNAKE_CACHE_ADDR`** is **`127.0.0.1:<port>`**.
+
+Caddy sets these automatically for eligible workers:
+
+| Variable | Purpose |
+| --- | --- |
+| **`CADDYSNAKE_CACHE_ADDR`** | Socket path (`unix://…`) or `host:port` for the cache |
+| **`CADDYSNAKE_WORKER_INTERFACE`** | Worker kind (`wsgi`, `asgi`, `esgi`, …); selects compatible client socket APIs (e.g. gevent for ESGI) |
+| **`CADDYSNAKE_CACHE_TIMEOUT`** | Hint for client read/connect timeouts (seconds) |
+
+If **`CADDYSNAKE_CACHE_ADDR`** is unset, the cache client is not available (for example, thread workers or configurations that omit the shared cache).
+
+### Python API
+
+Install the **`caddysnake`** Python package (same as the CLI). Import the module-level singleton:
+
+```python
+from caddysnake import cache
+
+cache.set("k", b"v")
+val = cache.get("k")
+```
+
+`cache` is a thin façade; you can use the **`Cache`** class directly if you prefer. ESGI workers need **`gevent`** installed so the client can use **`gevent.socket`**.
+
+:::note
+
+This cache is **ephemeral** and **not** a substitute for Redis or a database: it is scoped to the Caddy process, subject to memory limits, and intended for small shared objects or coordination between workers. Prefer an external store for durability or large payloads.
+
+:::
+
+---
+
 ## Notes
 
 - You must specify exactly one of `module_wsgi`, `module_asgi`, or `module_esgi`

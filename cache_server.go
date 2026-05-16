@@ -22,7 +22,7 @@ const (
 	EnvCaddysnakeCacheTimeoutSeconds = "CADDYSNAKE_CACHE_TIMEOUT"
 )
 
-// DefaultCacheClientTimeoutSec is a TCP/read timeout hint for clients (seconds); client may ignore.
+// DefaultCacheClientTimeoutSec is a read/connect timeout hint for cache clients (seconds); client may ignore.
 const DefaultCacheClientTimeoutSec = 30
 
 // cacheAddrUnixScheme prefixes CADDYSNAKE_CACHE_ADDR when listening on a Unix domain socket.

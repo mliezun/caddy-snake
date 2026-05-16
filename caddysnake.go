@@ -536,7 +536,7 @@ type PythonWorker struct {
 	ScriptPath string
 	DialNet    string // "unix" or "tcp"
 	DialAddr   string // socket path or host:port
-	CacheAddr  string // Caddy in-process cache TCP addr (127.0.0.1:port); empty = omit env
+	CacheAddr  string // CADDYSNAKE_CACHE_ADDR: unix://path (Unix) or 127.0.0.1:port (Windows); empty = omit env
 
 	Cmd       *exec.Cmd
 	Transport *http.Transport

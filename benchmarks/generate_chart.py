@@ -13,22 +13,26 @@ results_file = os.path.join(script_dir, "results.json")
 with open(results_file) as f:
     data = json.load(f)
 
-groups = ["Flask (WSGI)", "FastAPI (ASGI)"]
-reverse_proxy_keys = ["flask_gunicorn_caddy", "fastapi_uvicorn_caddy"]
-caddysnake_keys = ["flask_caddysnake", "fastapi_caddysnake"]
+groups = ["Flask (WSGI)", "FastAPI (ASGI)", "ESGI (gevent)"]
+reverse_proxy_keys = [
+    "flask_gunicorn_caddy",
+    "fastapi_uvicorn_caddy",
+    "esgi_gevent_caddy",
+]
+caddysnake_keys = ["flask_caddysnake", "fastapi_caddysnake", "esgi_caddysnake"]
 
 rp_values = [data[k]["requests_per_sec"] for k in reverse_proxy_keys]
 cs_values = [data[k]["requests_per_sec"] for k in caddysnake_keys]
 
 x = np.arange(len(groups))
-width = 0.3
+width = 0.34
 
-fig, ax = plt.subplots(figsize=(10, 6))
+fig, ax = plt.subplots(figsize=(11, 6))
 bars1 = ax.bar(
     x - width / 2,
     rp_values,
     width,
-    label="Reverse Proxy (Gunicorn/Uvicorn + Caddy)",
+    label="Reverse proxy stack (Gunicorn/Uvicorn/ESGI worker + Caddy)",
     color="#4A90D9",
     edgecolor="white",
 )
@@ -36,16 +40,20 @@ bars2 = ax.bar(
     x + width / 2,
     cs_values,
     width,
-    label="Caddy Snake",
+    label="Caddy Snake (embedded)",
     color="#2ECC71",
     edgecolor="white",
 )
 
 ax.set_ylabel("Requests per second", fontsize=12)
-ax.set_title("Caddy Snake vs Traditional Reverse Proxy", fontsize=14, fontweight="bold")
+ax.set_title(
+    "Caddy Snake vs traditional reverse proxy (WSGI, ASGI, ESGI)",
+    fontsize=14,
+    fontweight="bold",
+)
 ax.set_xticks(x)
 ax.set_xticklabels(groups, fontsize=12)
-ax.legend(fontsize=11)
+ax.legend(fontsize=10)
 ax.grid(axis="y", alpha=0.3)
 ax.set_axisbelow(True)
 
@@ -58,7 +66,7 @@ for bar in list(bars1) + list(bars2):
         textcoords="offset points",
         ha="center",
         va="bottom",
-        fontsize=10,
+        fontsize=9,
         fontweight="bold",
     )
 
@@ -70,12 +78,15 @@ print("Charts saved!")
 print("\n## Benchmark Results\n")
 print("| Configuration | Requests/sec | Avg Latency (ms) | P99 Latency (ms) |")
 print("|---|---|---|---|")
-for name, key in [
+rows = [
     ("Flask + Gunicorn + Caddy", "flask_gunicorn_caddy"),
     ("Flask + Caddy Snake", "flask_caddysnake"),
     ("FastAPI + Uvicorn + Caddy", "fastapi_uvicorn_caddy"),
     ("FastAPI + Caddy Snake", "fastapi_caddysnake"),
-]:
+    ("ESGI (gevent) + Caddy reverse proxy", "esgi_gevent_caddy"),
+    ("ESGI + Caddy Snake", "esgi_caddysnake"),
+]
+for name, key in rows:
     d = data[key]
     print(
         f"| {name} | {d['requests_per_sec']:,.0f} "
