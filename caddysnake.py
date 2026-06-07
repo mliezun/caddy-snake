@@ -27,6 +27,19 @@ from http import HTTPStatus
 from urllib.parse import unquote
 
 
+class ClientDisconnected(Exception):
+    """Raised when the downstream client closes the connection mid-response."""
+
+
+_CLIENT_DISCONNECT_ERRORS = (
+    ConnectionError,
+    ConnectionResetError,
+    OSError,
+    RuntimeError,
+    BrokenPipeError,
+)
+
+
 def setup_paths(working_dir, venv):
     """Configure sys.path for working directory and virtualenv."""
     if working_dir:
@@ -740,10 +753,12 @@ def _encode_header(name, value):
     return name, value
 
 
-async def _handle_asgi_http(writer, app, scope, body_stream):
+async def _handle_asgi_http(writer, app, scope, body_stream, reader=None):
     """Handle an ASGI HTTP connection."""
     body_done = False
+    body_done_event = asyncio.Event()
     disconnect_event = asyncio.Event()
+    watch_task = None
 
     async def receive():
         nonlocal body_done
@@ -752,6 +767,7 @@ async def _handle_asgi_http(writer, app, scope, body_stream):
             if chunk:
                 return {"type": "http.request", "body": chunk, "more_body": True}
             body_done = True
+            body_done_event.set()
             return {"type": "http.request", "body": b"", "more_body": False}
         await disconnect_event.wait()
         return {"type": "http.disconnect"}
@@ -763,9 +779,50 @@ async def _handle_asgi_http(writer, app, scope, body_stream):
     has_cl = False
     has_te = False
 
+    def _mark_client_disconnected():
+        disconnect_event.set()
+
+    def _write_to_client(data):
+        try:
+            writer.write(data)
+        except _CLIENT_DISCONNECT_ERRORS:
+            _mark_client_disconnected()
+            raise ClientDisconnected
+
+    async def _drain_to_client():
+        try:
+            await writer.drain()
+        except _CLIENT_DISCONNECT_ERRORS:
+            _mark_client_disconnected()
+            raise ClientDisconnected
+
+    async def _watch_client_disconnect():
+        await body_done_event.wait()
+        if reader is None or disconnect_event.is_set() or response_complete:
+            return
+        try:
+            while not disconnect_event.is_set() and not response_complete:
+                data = await reader.read(4096)
+                if not data:
+                    break
+        except (
+            asyncio.IncompleteReadError,
+            ConnectionError,
+            ConnectionResetError,
+            OSError,
+        ):
+            pass
+        finally:
+            _mark_client_disconnected()
+
+    if reader is not None:
+        watch_task = asyncio.create_task(_watch_client_disconnect())
+
     async def send(message):
         nonlocal response_started, response_complete, use_chunked
         nonlocal pending_headers, has_cl, has_te
+        if disconnect_event.is_set():
+            raise ClientDisconnected
         msg_type = message["type"]
 
         if msg_type == "http.response.start":
@@ -815,47 +872,65 @@ async def _handle_asgi_http(writer, app, scope, body_stream):
                 else:
                     if body_data:
                         buf.extend(body_data)
-                writer.write(buf)
+                _write_to_client(buf)
             else:
                 if use_chunked:
                     if body_data:
-                        writer.write(
+                        _write_to_client(
                             f"{len(body_data):x}\r\n".encode("ascii")
                             + body_data
                             + b"\r\n"
                         )
                     if not more_body:
-                        writer.write(b"0\r\n\r\n")
+                        _write_to_client(b"0\r\n\r\n")
                 else:
                     if body_data:
-                        writer.write(body_data)
+                        _write_to_client(body_data)
 
             if not more_body:
-                await writer.drain()
+                await _drain_to_client()
                 response_complete = True
                 disconnect_event.set()
 
+    async def _send_error_response():
+        nonlocal pending_headers
+        if disconnect_event.is_set():
+            return
+        try:
+            if not response_started:
+                _write_to_client(
+                    b"HTTP/1.1 500 Internal Server Error\r\n"
+                    b"Content-Length: 21\r\n\r\n"
+                    b"Internal Server Error"
+                )
+                await _drain_to_client()
+            else:
+                if pending_headers is not None:
+                    pending_headers.extend(b"\r\n")
+                    _write_to_client(pending_headers)
+                    pending_headers = None
+                if use_chunked and not response_complete:
+                    _write_to_client(b"0\r\n\r\n")
+                await _drain_to_client()
+        except ClientDisconnected:
+            pass
+
     try:
         await app(scope, receive, send)
+    except ClientDisconnected:
+        pass
     except Exception:
-        traceback.print_exc(file=sys.stderr)
-        if not response_started:
-            writer.write(
-                b"HTTP/1.1 500 Internal Server Error\r\n"
-                b"Content-Length: 21\r\n\r\n"
-                b"Internal Server Error"
-            )
-            await writer.drain()
-        else:
-            if pending_headers is not None:
-                pending_headers.extend(b"\r\n")
-                writer.write(pending_headers)
-                pending_headers = None
-            if use_chunked and not response_complete:
-                writer.write(b"0\r\n\r\n")
-            await writer.drain()
+        if not disconnect_event.is_set():
+            traceback.print_exc(file=sys.stderr)
+            await _send_error_response()
     finally:
         disconnect_event.set()
+        if watch_task is not None:
+            watch_task.cancel()
+            try:
+                await watch_task
+            except asyncio.CancelledError:
+                pass
         await body_stream.discard()
 
 
@@ -1836,7 +1911,7 @@ async def _handle_asgi_connection(reader, writer, app, state):
                 await _handle_asgi_websocket(reader, writer, app, scope, raw_headers)
                 break
             else:
-                await _handle_asgi_http(writer, app, scope, body_stream)
+                await _handle_asgi_http(writer, app, scope, body_stream, reader)
 
             connection = raw_headers.get("connection", "")
             if "close" in connection.lower():

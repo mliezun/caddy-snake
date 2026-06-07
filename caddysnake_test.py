@@ -617,6 +617,52 @@ class TestHandleAsgiHttp:
         combined = b"".join(evt.get("body", b"") for evt in received)
         assert combined == b"abcdefghij"
 
+    async def test_client_disconnect_during_streaming_response(self):
+        write_calls = 0
+
+        async def app(scope, receive, send):
+            await send({"type": "http.response.start", "status": 200, "headers": []})
+            await send(
+                {
+                    "type": "http.response.body",
+                    "body": b"chunk1",
+                    "more_body": True,
+                }
+            )
+            await send(
+                {
+                    "type": "http.response.body",
+                    "body": b"chunk2",
+                    "more_body": True,
+                }
+            )
+
+        reader = asyncio.StreamReader()
+        reader.feed_eof()
+
+        written = []
+
+        def _write(data):
+            nonlocal write_calls
+            write_calls += 1
+            if write_calls > 1:
+                raise BrokenPipeError
+            written.append(data)
+
+        async def _drain():
+            pass
+
+        writer = mock.Mock()
+        writer.write = _write
+        writer.drain = _drain
+
+        scope = {"type": "http"}
+        body_stream = cs._HttpBodyStream(reader, content_length=0)
+        await cs._handle_asgi_http(writer, app, scope, body_stream, reader)
+
+        assert write_calls == 2
+        assert len(written) == 1
+
 
 # ==================== ASGI _handle_asgi_websocket ====================
 
