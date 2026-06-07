@@ -1,5 +1,6 @@
 import os
 import base64
+import socket
 import uuid
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -115,6 +116,78 @@ def find_and_terminate_process(process_name):
             pass
 
 
+def wait_for_stream_endpoint(timeout: float = 60.0) -> None:
+    """Wait until the /stream/slow route's Python worker is accepting connections."""
+    deadline = time.time() + timeout
+    last_error = None
+    while time.time() < deadline:
+        try:
+            with socket.create_connection(("localhost", 9080), timeout=2) as sock:
+                sock.sendall(
+                    b"GET /stream/slow HTTP/1.1\r\n"
+                    b"Host: localhost\r\n"
+                    b"Connection: close\r\n\r\n"
+                )
+                data = sock.recv(4096)
+            if b"HTTP/1.1 200" in data and b"chunk-" in data:
+                return
+            if data:
+                last_error = data.split(b"\r\n", 1)[0]
+        except OSError as exc:
+            last_error = exc
+        time.sleep(0.25)
+    raise TimeoutError(f"/stream/slow not ready after {timeout}s: {last_error!r}")
+
+
+def test_stream_client_disconnect(log_path: str = "caddy.log"):
+    """Client disconnect mid-stream must not leave worker tracebacks."""
+    wait_for_stream_endpoint()
+
+    with open(log_path, "rb") as fd:
+        fd.seek(0, os.SEEK_END)
+        log_offset = fd.tell()
+
+    sock = socket.create_connection(("localhost", 9080))
+    try:
+        sock.sendall(
+            b"GET /stream/slow HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n"
+        )
+        data = b""
+        while b"chunk-" not in data:
+            chunk = sock.recv(4096)
+            if not chunk:
+                break
+            data += chunk
+        assert b"chunk-" in data, (
+            f"expected at least one streamed chunk before disconnect, got: {data[:200]!r}"
+        )
+    finally:
+        sock.close()
+
+    time.sleep(1.5)
+
+    with open(log_path, "r", encoding="utf-8", errors="replace") as fd:
+        fd.seek(log_offset)
+        logs = fd.read()
+
+    disconnect_markers = (
+        "RuntimeError: unable to perform operation",
+        "Unhandled exception in client_connected_cb",
+        "BrokenPipeError",
+        "ConnectionResetError",
+        "socket.send() raised exception.",
+    )
+    for marker in disconnect_markers:
+        assert marker not in logs, f"worker logged {marker!r} after client disconnect"
+
+    assert "_handle_asgi_http" not in logs, (
+        "worker printed an ASGI handler traceback after client disconnect"
+    )
+
+    response = requests.get(f"{BASE_URL}/item/missing", timeout=5)
+    assert response.status_code == 200
+
+
 def check_lifespan_events_on_logs(logs: str):
     startup_count = 0
     with open(logs, "r") as fd:
@@ -130,6 +203,7 @@ if __name__ == "__main__":
     import sys
 
     count = int(sys.argv[1]) if len(sys.argv) > 1 else 2_500
+    test_stream_client_disconnect()
     make_objects(max_workers=4, count=count)
     find_and_terminate_process("caddy")
     time.sleep(5)

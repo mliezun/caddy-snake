@@ -27,6 +27,17 @@ from http import HTTPStatus
 from urllib.parse import unquote
 
 
+class ClientDisconnected(Exception):
+    """Raised when the downstream client closes the connection mid-response."""
+
+
+# Errors raised when writing to a transport whose peer has gone away.
+# OSError covers ConnectionError/ConnectionResetError/BrokenPipeError. RuntimeError
+# is included because uvloop raises it ("unable to perform operation ...; the
+# handler is closed") when the underlying socket has already been torn down.
+_CLIENT_DISCONNECT_ERRORS = (OSError, RuntimeError)
+
+
 def setup_paths(working_dir, venv):
     """Configure sys.path for working directory and virtualenv."""
     if working_dir:
@@ -763,9 +774,35 @@ async def _handle_asgi_http(writer, app, scope, body_stream):
     has_cl = False
     has_te = False
 
+    def _client_gone():
+        # On native asyncio a failed write does not raise; the transport is
+        # force-closed and is_closing() flips to True. uvloop raises directly
+        # (handled by _CLIENT_DISCONNECT_ERRORS), but is_closing() is a cheap
+        # check that stops a streaming app promptly on either runtime without
+        # consuming bytes from the socket (which would corrupt keep-alive).
+        is_closing = getattr(writer, "is_closing", None)
+        return bool(is_closing()) if callable(is_closing) else False
+
+    def _write_to_client(data):
+        try:
+            writer.write(data)
+        except _CLIENT_DISCONNECT_ERRORS:
+            disconnect_event.set()
+            raise ClientDisconnected
+
+    async def _drain_to_client():
+        try:
+            await writer.drain()
+        except _CLIENT_DISCONNECT_ERRORS:
+            disconnect_event.set()
+            raise ClientDisconnected
+
     async def send(message):
         nonlocal response_started, response_complete, use_chunked
         nonlocal pending_headers, has_cl, has_te
+        if disconnect_event.is_set() or _client_gone():
+            disconnect_event.set()
+            raise ClientDisconnected
         msg_type = message["type"]
 
         if msg_type == "http.response.start":
@@ -815,45 +852,57 @@ async def _handle_asgi_http(writer, app, scope, body_stream):
                 else:
                     if body_data:
                         buf.extend(body_data)
-                writer.write(buf)
+                _write_to_client(buf)
             else:
                 if use_chunked:
                     if body_data:
-                        writer.write(
+                        _write_to_client(
                             f"{len(body_data):x}\r\n".encode("ascii")
                             + body_data
                             + b"\r\n"
                         )
                     if not more_body:
-                        writer.write(b"0\r\n\r\n")
+                        _write_to_client(b"0\r\n\r\n")
                 else:
                     if body_data:
-                        writer.write(body_data)
+                        _write_to_client(body_data)
 
             if not more_body:
-                await writer.drain()
+                await _drain_to_client()
                 response_complete = True
                 disconnect_event.set()
 
+    async def _send_error_response():
+        nonlocal pending_headers
+        if disconnect_event.is_set():
+            return
+        try:
+            if not response_started:
+                _write_to_client(
+                    b"HTTP/1.1 500 Internal Server Error\r\n"
+                    b"Content-Length: 21\r\n\r\n"
+                    b"Internal Server Error"
+                )
+                await _drain_to_client()
+            else:
+                if pending_headers is not None:
+                    pending_headers.extend(b"\r\n")
+                    _write_to_client(pending_headers)
+                    pending_headers = None
+                if use_chunked and not response_complete:
+                    _write_to_client(b"0\r\n\r\n")
+                await _drain_to_client()
+        except ClientDisconnected:
+            pass
+
     try:
         await app(scope, receive, send)
+    except ClientDisconnected:
+        pass
     except Exception:
-        traceback.print_exc(file=sys.stderr)
-        if not response_started:
-            writer.write(
-                b"HTTP/1.1 500 Internal Server Error\r\n"
-                b"Content-Length: 21\r\n\r\n"
-                b"Internal Server Error"
-            )
-            await writer.drain()
-        else:
-            if pending_headers is not None:
-                pending_headers.extend(b"\r\n")
-                writer.write(pending_headers)
-                pending_headers = None
-            if use_chunked and not response_complete:
-                writer.write(b"0\r\n\r\n")
-            await writer.drain()
+        if not disconnect_event.is_set():
+            traceback.print_exc(file=sys.stderr)
+            await _send_error_response()
     finally:
         disconnect_event.set()
         await body_stream.discard()
