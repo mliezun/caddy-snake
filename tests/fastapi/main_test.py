@@ -116,8 +116,33 @@ def find_and_terminate_process(process_name):
             pass
 
 
+def wait_for_stream_endpoint(timeout: float = 60.0) -> None:
+    """Wait until the /stream/slow route's Python worker is accepting connections."""
+    deadline = time.time() + timeout
+    last_error = None
+    while time.time() < deadline:
+        try:
+            with socket.create_connection(("localhost", 9080), timeout=2) as sock:
+                sock.sendall(
+                    b"GET /stream/slow HTTP/1.1\r\n"
+                    b"Host: localhost\r\n"
+                    b"Connection: close\r\n\r\n"
+                )
+                data = sock.recv(4096)
+            if b"HTTP/1.1 200" in data and b"chunk-" in data:
+                return
+            if data:
+                last_error = data.split(b"\r\n", 1)[0]
+        except OSError as exc:
+            last_error = exc
+        time.sleep(0.25)
+    raise TimeoutError(f"/stream/slow not ready after {timeout}s: {last_error!r}")
+
+
 def test_stream_client_disconnect(log_path: str = "caddy.log"):
     """Client disconnect mid-stream must not leave worker tracebacks."""
+    wait_for_stream_endpoint()
+
     with open(log_path, "rb") as fd:
         fd.seek(0, os.SEEK_END)
         log_offset = fd.tell()
@@ -134,7 +159,7 @@ def test_stream_client_disconnect(log_path: str = "caddy.log"):
                 break
             data += chunk
         assert b"chunk-" in data, (
-            "expected at least one streamed chunk before disconnect"
+            f"expected at least one streamed chunk before disconnect, got: {data[:200]!r}"
         )
     finally:
         sock.close()
