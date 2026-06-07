@@ -1,5 +1,6 @@
 import os
 import base64
+import socket
 import uuid
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -115,6 +116,53 @@ def find_and_terminate_process(process_name):
             pass
 
 
+def test_stream_client_disconnect(log_path: str = "caddy.log"):
+    """Client disconnect mid-stream must not leave worker tracebacks."""
+    with open(log_path, "rb") as fd:
+        fd.seek(0, os.SEEK_END)
+        log_offset = fd.tell()
+
+    sock = socket.create_connection(("localhost", 9080))
+    try:
+        sock.sendall(
+            b"GET /stream/slow HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n"
+        )
+        data = b""
+        while b"chunk-" not in data:
+            chunk = sock.recv(4096)
+            if not chunk:
+                break
+            data += chunk
+        assert b"chunk-" in data, (
+            "expected at least one streamed chunk before disconnect"
+        )
+    finally:
+        sock.close()
+
+    time.sleep(1.5)
+
+    with open(log_path, "r", encoding="utf-8", errors="replace") as fd:
+        fd.seek(log_offset)
+        logs = fd.read()
+
+    disconnect_markers = (
+        "RuntimeError: unable to perform operation",
+        "Unhandled exception in client_connected_cb",
+        "BrokenPipeError",
+        "ConnectionResetError",
+        "socket.send() raised exception.",
+    )
+    for marker in disconnect_markers:
+        assert marker not in logs, f"worker logged {marker!r} after client disconnect"
+
+    assert "_handle_asgi_http" not in logs, (
+        "worker printed an ASGI handler traceback after client disconnect"
+    )
+
+    response = requests.get(f"{BASE_URL}/item/missing", timeout=5)
+    assert response.status_code == 200
+
+
 def check_lifespan_events_on_logs(logs: str):
     startup_count = 0
     with open(logs, "r") as fd:
@@ -130,6 +178,7 @@ if __name__ == "__main__":
     import sys
 
     count = int(sys.argv[1]) if len(sys.argv) > 1 else 2_500
+    test_stream_client_disconnect()
     make_objects(max_workers=4, count=count)
     find_and_terminate_process("caddy")
     time.sleep(5)

@@ -1,6 +1,7 @@
+import asyncio
 import os
 import sys
-from typing import Optional
+from typing import AsyncGenerator, Optional
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, UploadFile
@@ -55,6 +56,17 @@ def chunked_blob(blob: str):
 @app.get("/stream-item/{id}")
 async def item_stream(id: str) -> StreamingResponse:
     return StreamingResponse(chunked_blob(db[id].blob), media_type="text/event-stream")
+
+
+async def slow_stream() -> AsyncGenerator[bytes, None]:
+    for i in range(100):
+        yield f"chunk-{i}\n".encode()
+        await asyncio.sleep(0.05)
+
+
+@app.get("/stream/slow")
+async def stream_slow() -> StreamingResponse:
+    return StreamingResponse(slow_stream(), media_type="text/plain")
 
 
 @app.post("/item/upload-file/")
