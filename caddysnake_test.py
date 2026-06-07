@@ -489,6 +489,7 @@ class TestHandleAsgiHttp:
         written = []
         writer = mock.Mock()
         writer.write = lambda d: written.append(d)
+        writer.is_closing = lambda: False
 
         async def mock_drain():
             pass
@@ -541,6 +542,7 @@ class TestHandleAsgiHttp:
         writer = mock.Mock()
         writer.write = lambda d: written.append(d)
         writer.drain = _drain
+        writer.is_closing = lambda: False
 
         scope = {"type": "http"}
         body_stream = cs._HttpBodyStream(asyncio.StreamReader(), content_length=0)
@@ -563,6 +565,7 @@ class TestHandleAsgiHttp:
         writer = mock.Mock()
         writer.write = lambda d: written.append(d)
         writer.drain = _drain
+        writer.is_closing = lambda: False
 
         scope = {"type": "http"}
         body_stream = cs._HttpBodyStream(asyncio.StreamReader(), content_length=0)
@@ -591,6 +594,7 @@ class TestHandleAsgiHttp:
         writer = mock.Mock()
         writer.write = lambda d: None
         writer.drain = _drain
+        writer.is_closing = lambda: False
 
         req = (
             b"POST /upload HTTP/1.1\r\n"
@@ -617,25 +621,66 @@ class TestHandleAsgiHttp:
         combined = b"".join(evt.get("body", b"") for evt in received)
         assert combined == b"abcdefghij"
 
-    async def test_client_disconnect_during_streaming_response(self):
+    async def test_client_disconnect_during_streaming_response_native(self):
+        """Native asyncio: writes fail silently, is_closing() flips to True.
+
+        The next send() must raise ClientDisconnected so the app stops, and no
+        traceback should escape _handle_asgi_http.
+        """
+        sent_chunks = []
+        closing = {"value": False}
+
+        async def app(scope, receive, send):
+            await send({"type": "http.response.start", "status": 200, "headers": []})
+            for i in range(5):
+                await send(
+                    {
+                        "type": "http.response.body",
+                        "body": f"chunk{i}".encode(),
+                        "more_body": True,
+                    }
+                )
+                sent_chunks.append(i)
+                # Simulate the transport being force-closed after the first body
+                # write (peer went away); native asyncio does not raise on write.
+                closing["value"] = True
+
+        reader = asyncio.StreamReader()
+        reader.feed_eof()
+
+        written = []
+
+        async def _drain():
+            pass
+
+        writer = mock.Mock()
+        writer.write = lambda d: written.append(d)
+        writer.drain = _drain
+        writer.is_closing = lambda: closing["value"]
+
+        scope = {"type": "http"}
+        body_stream = cs._HttpBodyStream(reader, content_length=0)
+        await cs._handle_asgi_http(writer, app, scope, body_stream)
+
+        # First chunk goes out; the second send() observes is_closing() and aborts.
+        assert sent_chunks == [0]
+
+    async def test_client_disconnect_during_streaming_response_uvloop(self):
+        """uvloop: writer.write() raises synchronously on a closed transport."""
+        sent_chunks = []
         write_calls = 0
 
         async def app(scope, receive, send):
             await send({"type": "http.response.start", "status": 200, "headers": []})
-            await send(
-                {
-                    "type": "http.response.body",
-                    "body": b"chunk1",
-                    "more_body": True,
-                }
-            )
-            await send(
-                {
-                    "type": "http.response.body",
-                    "body": b"chunk2",
-                    "more_body": True,
-                }
-            )
+            for i in range(5):
+                await send(
+                    {
+                        "type": "http.response.body",
+                        "body": f"chunk{i}".encode(),
+                        "more_body": True,
+                    }
+                )
+                sent_chunks.append(i)
 
         reader = asyncio.StreamReader()
         reader.feed_eof()
@@ -646,7 +691,11 @@ class TestHandleAsgiHttp:
             nonlocal write_calls
             write_calls += 1
             if write_calls > 1:
-                raise BrokenPipeError
+                # uvloop raises this exact error when the handler is closed.
+                raise RuntimeError(
+                    "unable to perform operation on <UnixTransport ...>; "
+                    "the handler is closed"
+                )
             written.append(data)
 
         async def _drain():
@@ -655,13 +704,15 @@ class TestHandleAsgiHttp:
         writer = mock.Mock()
         writer.write = _write
         writer.drain = _drain
+        writer.is_closing = lambda: False
 
         scope = {"type": "http"}
         body_stream = cs._HttpBodyStream(reader, content_length=0)
-        await cs._handle_asgi_http(writer, app, scope, body_stream, reader)
+        await cs._handle_asgi_http(writer, app, scope, body_stream)
 
+        # Write #1 (headers + first chunk) succeeds; write #2 (next chunk) raises.
+        assert sent_chunks == [0]
         assert write_calls == 2
-        assert len(written) == 1
 
 
 # ==================== ASGI _handle_asgi_websocket ====================
@@ -747,6 +798,7 @@ class TestHandleAsgiConnection:
         writer.drain = _drain
         writer.close = lambda: None
         writer.wait_closed = _wait_closed
+        writer.is_closing = lambda: False
 
         async def app(scope, receive, send):
             assert scope["type"] == "http"

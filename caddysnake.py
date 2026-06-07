@@ -31,13 +31,11 @@ class ClientDisconnected(Exception):
     """Raised when the downstream client closes the connection mid-response."""
 
 
-_CLIENT_DISCONNECT_ERRORS = (
-    ConnectionError,
-    ConnectionResetError,
-    OSError,
-    RuntimeError,
-    BrokenPipeError,
-)
+# Errors raised when writing to a transport whose peer has gone away.
+# OSError covers ConnectionError/ConnectionResetError/BrokenPipeError. RuntimeError
+# is included because uvloop raises it ("unable to perform operation ...; the
+# handler is closed") when the underlying socket has already been torn down.
+_CLIENT_DISCONNECT_ERRORS = (OSError, RuntimeError)
 
 
 def setup_paths(working_dir, venv):
@@ -753,12 +751,10 @@ def _encode_header(name, value):
     return name, value
 
 
-async def _handle_asgi_http(writer, app, scope, body_stream, reader=None):
+async def _handle_asgi_http(writer, app, scope, body_stream):
     """Handle an ASGI HTTP connection."""
     body_done = False
-    body_done_event = asyncio.Event()
     disconnect_event = asyncio.Event()
-    watch_task = None
 
     async def receive():
         nonlocal body_done
@@ -767,7 +763,6 @@ async def _handle_asgi_http(writer, app, scope, body_stream, reader=None):
             if chunk:
                 return {"type": "http.request", "body": chunk, "more_body": True}
             body_done = True
-            body_done_event.set()
             return {"type": "http.request", "body": b"", "more_body": False}
         await disconnect_event.wait()
         return {"type": "http.disconnect"}
@@ -779,49 +774,34 @@ async def _handle_asgi_http(writer, app, scope, body_stream, reader=None):
     has_cl = False
     has_te = False
 
-    def _mark_client_disconnected():
-        disconnect_event.set()
+    def _client_gone():
+        # On native asyncio a failed write does not raise; the transport is
+        # force-closed and is_closing() flips to True. uvloop raises directly
+        # (handled by _CLIENT_DISCONNECT_ERRORS), but is_closing() is a cheap
+        # check that stops a streaming app promptly on either runtime without
+        # consuming bytes from the socket (which would corrupt keep-alive).
+        is_closing = getattr(writer, "is_closing", None)
+        return bool(is_closing()) if callable(is_closing) else False
 
     def _write_to_client(data):
         try:
             writer.write(data)
         except _CLIENT_DISCONNECT_ERRORS:
-            _mark_client_disconnected()
+            disconnect_event.set()
             raise ClientDisconnected
 
     async def _drain_to_client():
         try:
             await writer.drain()
         except _CLIENT_DISCONNECT_ERRORS:
-            _mark_client_disconnected()
+            disconnect_event.set()
             raise ClientDisconnected
-
-    async def _watch_client_disconnect():
-        await body_done_event.wait()
-        if reader is None or disconnect_event.is_set() or response_complete:
-            return
-        try:
-            while not disconnect_event.is_set() and not response_complete:
-                data = await reader.read(4096)
-                if not data:
-                    break
-        except (
-            asyncio.IncompleteReadError,
-            ConnectionError,
-            ConnectionResetError,
-            OSError,
-        ):
-            pass
-        finally:
-            _mark_client_disconnected()
-
-    if reader is not None:
-        watch_task = asyncio.create_task(_watch_client_disconnect())
 
     async def send(message):
         nonlocal response_started, response_complete, use_chunked
         nonlocal pending_headers, has_cl, has_te
-        if disconnect_event.is_set():
+        if disconnect_event.is_set() or _client_gone():
+            disconnect_event.set()
             raise ClientDisconnected
         msg_type = message["type"]
 
@@ -925,12 +905,6 @@ async def _handle_asgi_http(writer, app, scope, body_stream, reader=None):
             await _send_error_response()
     finally:
         disconnect_event.set()
-        if watch_task is not None:
-            watch_task.cancel()
-            try:
-                await watch_task
-            except asyncio.CancelledError:
-                pass
         await body_stream.discard()
 
 
@@ -1911,7 +1885,7 @@ async def _handle_asgi_connection(reader, writer, app, state):
                 await _handle_asgi_websocket(reader, writer, app, scope, raw_headers)
                 break
             else:
-                await _handle_asgi_http(writer, app, scope, body_stream, reader)
+                await _handle_asgi_http(writer, app, scope, body_stream)
 
             connection = raw_headers.get("connection", "")
             if "close" in connection.lower():
