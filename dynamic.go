@@ -18,26 +18,40 @@ import (
 
 var validModulePattern = regexp.MustCompile(`^[a-zA-Z_][\w.]*:[a-zA-Z_]\w*$`)
 
+// hasDotDotSegment reports whether the raw (pre-normalization) path contains
+// a ".." segment. Checking before filepath.Abs/Clean is important: those
+// normalize traversal sequences away (e.g. "/srv/apps/../../etc" becomes
+// "/etc"), which would let placeholder-injected values escape the intended
+// directory while passing a check on the normalized result.
+func hasDotDotSegment(path string) bool {
+	for _, seg := range strings.FieldsFunc(path, func(r rune) bool {
+		return r == '/' || r == '\\'
+	}) {
+		if seg == ".." {
+			return true
+		}
+	}
+	return false
+}
+
 func validateResolvedValues(module, dir, venv string) error {
 	if !validModulePattern.MatchString(module) {
 		return fmt.Errorf("invalid module name: %q", module)
 	}
 	if dir != "" {
-		absDir, err := filepath.Abs(dir)
-		if err != nil {
-			return fmt.Errorf("invalid working directory: %w", err)
-		}
-		if strings.Contains(absDir, "..") {
+		if hasDotDotSegment(dir) {
 			return fmt.Errorf("working directory contains path traversal: %q", dir)
+		}
+		if _, err := filepath.Abs(dir); err != nil {
+			return fmt.Errorf("invalid working directory: %w", err)
 		}
 	}
 	if venv != "" {
-		absVenv, err := filepath.Abs(venv)
-		if err != nil {
-			return fmt.Errorf("invalid venv path: %w", err)
-		}
-		if strings.Contains(absVenv, "..") {
+		if hasDotDotSegment(venv) {
 			return fmt.Errorf("venv path contains path traversal: %q", venv)
+		}
+		if _, err := filepath.Abs(venv); err != nil {
+			return fmt.Errorf("invalid venv path: %w", err)
 		}
 	}
 	return nil

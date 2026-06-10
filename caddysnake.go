@@ -687,8 +687,9 @@ func (w *PythonWorker) dialWithRetry(ctx context.Context) (net.Conn, error) {
 	const maxRetries = 5
 	const baseDelay = 100 * time.Millisecond
 
+	var dialer net.Dialer
 	for attempt := 0; attempt < maxRetries; attempt++ {
-		conn, err := net.Dial(w.DialNet, w.DialAddr)
+		conn, err := dialer.DialContext(ctx, w.DialNet, w.DialAddr)
 		if err == nil {
 			return conn, nil
 		}

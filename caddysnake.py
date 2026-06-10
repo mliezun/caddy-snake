@@ -140,6 +140,18 @@ def _split_path(path):
     return path, ""
 
 
+def _forwarded_scheme(raw_headers):
+    """Original request scheme from X-Forwarded-Proto.
+
+    The Go side always sets X-Forwarded-Proto on the hop to the worker
+    (stripping any client-supplied value), so this value is trusted.
+    """
+    xfp = raw_headers.get("x-forwarded-proto", "").lower().strip()
+    if xfp in ("https", "http"):
+        return xfp
+    return "http"
+
+
 _wsgi_executor = concurrent.futures.ThreadPoolExecutor(
     max_workers=min(128, (os.cpu_count() or 1) * 8 + 16)
 )
@@ -414,7 +426,7 @@ def _build_wsgi_environ(method, path, version, headers_list, raw_headers, wsgi_i
         "REMOTE_HOST": remote_ip,
         "X_FROM": "caddy-snake",
         "wsgi.version": (1, 0),
-        "wsgi.url_scheme": "http",
+        "wsgi.url_scheme": _forwarded_scheme(raw_headers),
         "wsgi.input": wsgi_input,
         "wsgi.errors": sys.stderr,
         "wsgi.multithread": True,
@@ -1324,10 +1336,7 @@ def _esgi_http_version(req_version: str) -> str:
 
 
 def _esgi_scheme_from_headers(raw_headers: dict) -> str:
-    xfp = raw_headers.get("x-forwarded-proto", "").lower().strip()
-    if xfp in ("https", "http"):
-        return xfp
-    return "http"
+    return _forwarded_scheme(raw_headers)
 
 
 def _esgi_ws_scheme_from_headers(raw_headers: dict) -> str:
@@ -1851,12 +1860,12 @@ async def _handle_asgi_connection(reader, writer, app, state):
             else:
                 client_tp = ("127.0.0.1", 0)
 
+            scheme = _forwarded_scheme(raw_headers)
             if is_websocket:
                 conn_type = "websocket"
-                scheme = "ws"
+                scheme = "wss" if scheme == "https" else "ws"
             else:
                 conn_type = "http"
-                scheme = "http"
 
             scope = {
                 "type": conn_type,

@@ -105,6 +105,38 @@ func TestContainsPlaceholder(t *testing.T) {
 	}
 }
 
+func TestValidateResolvedValues(t *testing.T) {
+	tests := []struct {
+		name    string
+		module  string
+		dir     string
+		venv    string
+		wantErr bool
+	}{
+		{"valid module only", "main:app", "", "", false},
+		{"valid absolute dir and venv", "main:app", "/srv/apps/site", "/srv/venvs/site", false},
+		{"valid relative dir", "main:app", "apps/site", "", false},
+		{"valid dotted module", "pkg.sub:app", "/srv/apps", "", false},
+		{"invalid module shell injection", "main:app; rm -rf /", "", "", true},
+		{"invalid module missing attr", "main", "", "", true},
+		{"dir traversal", "main:app", "/srv/apps/../../etc", "", true},
+		{"dir traversal relative", "main:app", "../secrets", "", true},
+		{"dir traversal backslash", "main:app", `apps\..\..\secrets`, "", true},
+		{"venv traversal", "main:app", "/srv/apps", "/srv/venvs/../../etc", true},
+		{"dot-prefixed dir allowed", "main:app", "/srv/apps/.hidden", "", false},
+		{"double-dot in name allowed", "main:app", "/srv/apps/my..app", "", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateResolvedValues(tt.module, tt.dir, tt.venv)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("validateResolvedValues(%q, %q, %q) error = %v, wantErr %v",
+					tt.module, tt.dir, tt.venv, err, tt.wantErr)
+			}
+		})
+	}
+}
+
 func TestDynamicAppResolveWithoutReplacer(t *testing.T) {
 	d, _ := NewDynamicApp("main:app", "/home/{host.labels.0}", "/venvs/{host.labels.0}",
 		func(module, dir, venv string) (AppServer, error) {
