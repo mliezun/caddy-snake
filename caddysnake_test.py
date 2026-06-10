@@ -843,9 +843,7 @@ class TestHandleAsgiConnection:
 
         async def app(scope, receive, send):
             seen_schemes.append(scope["scheme"])
-            await send(
-                {"type": "http.response.start", "status": 200, "headers": []}
-            )
+            await send({"type": "http.response.start", "status": 200, "headers": []})
             await send({"type": "http.response.body", "body": b""})
 
         await cs._handle_asgi_connection(reader, writer, app, {})
