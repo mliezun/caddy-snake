@@ -1103,6 +1103,40 @@ class TestForwardedScheme:
         assert cs._forwarded_scheme({"x-forwarded-proto": "gopher"}) == "http"
 
 
+# ==================== Hot-path parsing caches ====================
+
+
+class TestParsingCaches:
+    def test_header_name_str_lowercases(self):
+        assert cs._header_name_str(b"host") == "host"
+        assert cs._header_name_str(b"X-Custom") == "x-custom"
+
+    def test_header_name_str_memoized(self):
+        first = cs._header_name_str(b"x-memo-check")
+        second = cs._header_name_str(b"x-memo-check")
+        assert first is second
+
+    def test_parse_host_header_cached_matches_uncached(self):
+        for host in ("example.com:8080", "example.com", "[::1]:9443", ""):
+            assert cs._parse_host_header_cached(host) == cs._parse_host_header(host)
+
+    def test_parse_host_header_cached_non_default_port(self):
+        assert cs._parse_host_header_cached("example.com", 443) == ("example.com", 443)
+
+    def test_validate_client_ip(self):
+        assert cs._validate_client_ip("198.51.100.2") == "198.51.100.2"
+        assert cs._validate_client_ip("[::1]") == "::1"
+        assert cs._validate_client_ip("not-an-ip") is None
+        # Memoized negative result stays None
+        assert cs._validate_client_ip("not-an-ip") is None
+
+    def test_http_version_str(self):
+        assert cs._http_version_str("HTTP/1.1") == "1.1"
+        assert cs._http_version_str("HTTP/1.0") == "1.0"
+        assert cs._http_version_str("HTTP/2") == "2"
+        assert cs._http_version_str("1.0") == "1.1"  # no slash: fallback
+
+
 # ==================== ESGI scope building ====================
 
 
