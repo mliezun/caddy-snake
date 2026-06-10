@@ -4,7 +4,7 @@ sidebar_position: 7
 
 # Benchmarks
 
-Caddy Snake embeds Python directly inside Caddy, eliminating the overhead of a separate upstream process where the design allows. The harness compares **Flask (WSGI)**, **FastAPI (ASGI)**, and **ESGI (gevent)** on a minimal JSON `GET /hello` endpoint. The table below matches the committed [`benchmarks/results.json`](https://github.com/mliezun/caddy-snake/blob/main/benchmarks/results.json), produced on **Scaleway POP2-2C-8G (linux/amd64)** via [`benchmarks/scaleway_bench.sh`](https://github.com/mliezun/caddy-snake/blob/main/benchmarks/scaleway_bench.sh).
+Caddy Snake embeds Python directly inside Caddy, eliminating the overhead of a separate upstream process where the design allows. The harness compares **Flask (WSGI)**, **FastAPI (ASGI)**, and **ESGI (gevent)** on a minimal JSON `GET /hello` endpoint. The table below matches the committed [`benchmarks/results.json`](https://github.com/mliezun/caddy-snake/blob/main/benchmarks/results.json), produced on a **4 vCPU / 16 GB cloud VM (linux/amd64)** via the Docker harness (`benchmarks/Dockerfile`).
 
 ## Test configurations
 
@@ -25,14 +25,18 @@ All configurations return the same JSON body: `{"message":"Hello, World!"}`.
 
 | Configuration | Requests/sec | Avg Latency (ms) | P99 Latency (ms) |
 |---|---|---|---|
-| Flask + Gunicorn + Caddy | 1,759 | 56.68 | 72.67 |
-| **Flask + Caddy Snake** | **2,905** | **34.40** | **53.24** |
-| FastAPI + Uvicorn + Caddy | 3,382 | 29.54 | 233.59 |
-| **FastAPI + Caddy Snake** | **4,854** | **20.57** | **38.98** |
-| ESGI (gevent) + Caddy reverse proxy | 5,011 | 19.92 | 50.45 |
-| **ESGI + Caddy Snake** | **5,146** | **19.42** | **45.04** |
+| Flask + Gunicorn + Caddy | 3,052 | 32.70 | 37.68 |
+| **Flask + Caddy Snake** | **4,878** | **20.49** | **28.25** |
+| FastAPI + Uvicorn + Caddy | 11,502 | 8.70 | 91.46 |
+| **FastAPI + Caddy Snake** | **17,423** | **5.72** | **8.85** |
+| ESGI (gevent) + Caddy reverse proxy | 29,193 | 3.43 | 9.97 |
+| **ESGI + Caddy Snake** | **34,077** | **2.95** | **8.10** |
 
-On this hardware, Flask and FastAPI see a clear gain from embedding; the ESGI pair is closer because both rows already use the same gevent gateway code path (reverse proxy vs embedded Go hop).
+Highlights on this hardware:
+
+- **Flask:** Caddy Snake serves ~60% more requests/sec than Gunicorn behind Caddy, with ~25% lower P99 latency.
+- **FastAPI:** Caddy Snake serves ~51% more requests/sec than Uvicorn behind Caddy. The P99 gap is the most striking: **8.85 ms vs 91.46 ms** — the embedded path avoids the upstream TCP hop and Uvicorn's accept-queue jitter under 100-connection load.
+- **ESGI:** the pair is closest because both rows run the same gevent gateway code from `caddysnake.py`; the embedded wiring is still ~17% faster than proxying HTTP over a Unix socket.
 
 ## Methodology
 
@@ -41,16 +45,16 @@ On this hardware, Flask and FastAPI see a clear gain from embedding; the ESGI pa
 - **Duration:** 10 seconds per test run
 - **Warmup:** 200 requests at 10 concurrency before each configuration
 - **Repeats:** 10 runs per configuration, averages reported
-- **Platform (published numbers):** Scaleway **POP2-2C-8G**, **linux/amd64**
+- **Platform (published numbers):** 4 vCPU / 16 GB cloud VM, **linux/amd64**
 - **Python:** 3.13 (inside Docker Ubuntu 22.04 image from `benchmarks/Dockerfile`)
 - **Go:** 1.26
 - **Workers:** Caddy Snake uses one process worker in the benchmark Caddyfiles; Gunicorn uses 1 worker with 4 threads; Uvicorn uses 1 worker; the standalone ESGI line uses one `caddysnake.py` ESGI server process
 
 ## Reproduce
 
-### Public numbers (Scaleway POP2-2C-8G)
+### Dedicated instance (Scaleway POP2-2C-8G)
 
-See [`benchmarks/scaleway_bench.sh`](https://github.com/mliezun/caddy-snake/blob/main/benchmarks/scaleway_bench.sh) (Scaleway CLI + SSH). Example:
+For stable numbers on a clean dedicated instance, see [`benchmarks/scaleway_bench.sh`](https://github.com/mliezun/caddy-snake/blob/main/benchmarks/scaleway_bench.sh) (Scaleway CLI + SSH). Example:
 
 ```bash
 BENCH_RSYNC_LOCAL=1 BENCH_SSH_IDENTITY="$HOME/.ssh/id_ed25519_scw" ./benchmarks/scaleway_bench.sh
