@@ -50,7 +50,7 @@ jobs:
         with:
           python-version: "3.13"
       - name: Retrieve python build standalone
-        if: ${{ !contains(matrix.python-version, '-nogil') }}
+        if: ${{ !endsWith(matrix.python-version, '-nogil') }}
         working-directory: cmd/embed
         run: | # zizmor: ignore[template-injection]
           python3 pybs.py latest --python-version ${{ matrix.python-version }} --architecture ${{ steps.choose-arch.outputs.PYBS_ARCH }} --build-config pgo+lto --content-type install_only_stripped
@@ -58,7 +58,7 @@ jobs:
           go build main.go
           mv main caddy
       - name: Retrieve python build standalone (nogil)
-        if: ${{ contains(matrix.python-version, '-nogil') }}
+        if: ${{ endsWith(matrix.python-version, '-nogil') }}
         working-directory: cmd/embed
         run: | # zizmor: ignore[template-injection]
           PY_VERSION_BASE="${{ matrix.python-version }}"

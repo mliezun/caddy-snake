@@ -97,7 +97,7 @@ jobs:
           path: tests/${{ matrix.tool-name }}/
       - name: Run integration tests
         working-directory: tests/${{ matrix.tool-name }}/
-        if: ${{ !contains(matrix.python-version, 't') }}
+        if: ${{ !endsWith(matrix.python-version, 't') }}
         run: |
           chmod +x caddy
           ./caddy run --config Caddyfile > caddy.log 2>&1 &
@@ -106,7 +106,7 @@ jobs:
           python main_test.py
       - name: Run integration tests (nogil)
         working-directory: tests/${{ matrix.tool-name }}/
-        if: ${{ contains(matrix.python-version, 't') && matrix.tool-name != 'flask' && matrix.tool-name != 'simple_esgi' && matrix.tool-name != 'simple_cache' }}
+        if: ${{ endsWith(matrix.python-version, 't') && matrix.tool-name != 'flask' && matrix.tool-name != 'simple_esgi' && matrix.tool-name != 'simple_cache' }}
         continue-on-error: true
         run: |
           ./caddy run --config Caddyfile > caddy.log 2>&1 &

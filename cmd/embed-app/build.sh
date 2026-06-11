@@ -89,6 +89,17 @@ if [[ -z "$APP_ZIP_PATH" ]] || [[ -z "$PY_VERSION" ]]; then
     usage
 fi
 
+VALID_PY_VERSIONS=("3.12" "3.13" "3.13-nogil" "3.14" "3.14-nogil")
+match=0
+for v in "${VALID_PY_VERSIONS[@]}"; do
+    [[ "$v" == "$PY_VERSION" ]] && match=1 && break
+done
+if [[ $match -eq 0 ]]; then
+    echo "Error: unsupported PYTHON_VERSION '$PY_VERSION'"
+    echo "Valid versions: ${VALID_PY_VERSIONS[*]}"
+    usage
+fi
+
 if [[ ! -f "$APP_ZIP_PATH" ]]; then
     echo "Error: App zip not found: $APP_ZIP_PATH"
     exit 1
