@@ -488,7 +488,7 @@ Caddy Snake serves **~60% more requests/sec than Gunicorn** for Flask, **~51% mo
 | macOS          | process, thread   | Full support                             |
 | Windows        | thread only       | Process workers not supported on Windows |
 
-**Python versions:** 3.12, 3.13, 3.13-nogil (free-threaded), 3.14
+**Python versions:** 3.12, 3.13, 3.13-nogil (free-threaded), 3.14, 3.14-nogil (free-threaded)
 
 ---
 

@@ -79,7 +79,7 @@ tar -xzf caddy-standalone-3.13-x86_64_v2-unknown-linux-gnu.tar.gz
 ./caddy python-server --server-type wsgi --app main:app
 ```
 
-Pre-built binaries are available for Python 3.12 through 3.14 (including 3.13-nogil) on Linux x86_64 and ARM64. See the [Pre-built Binaries](installation.md#pre-built-standalone-binaries) page for details on how they work.
+Pre-built binaries are available for Python 3.12 through 3.14 (including 3.13-nogil and 3.14-nogil) on Linux x86_64 and ARM64. See the [Pre-built Binaries](installation.md#pre-built-standalone-binaries) page for details on how they work.
 
 ---
 
@@ -246,7 +246,7 @@ The venv packages are added to the global `sys.path`, which means all Python app
 | Linux (arm64)  | Full support             |
 | macOS          | Full support             |
 
-**Python versions:** 3.12, 3.13, 3.13-nogil (free-threaded), 3.14
+**Python versions:** 3.12, 3.13, 3.13-nogil (free-threaded), 3.14, 3.14-nogil (free-threaded)
 
 ---
 

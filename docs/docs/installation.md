@@ -100,6 +100,7 @@ For example:
 - `caddy-standalone-3.13-x86_64_v2-unknown-linux-gnu.tar.gz` — Python 3.13, Linux x86_64
 - `caddy-standalone-3.13-aarch64-unknown-linux-gnu.tar.gz` — Python 3.13, Linux ARM64
 - `caddy-standalone-3.13-nogil-x86_64_v2-unknown-linux-gnu.tar.gz` — Python 3.13 free-threaded
+- `caddy-standalone-3.14-nogil-x86_64_v2-unknown-linux-gnu.tar.gz` — Python 3.14 free-threaded
 
 ### Available versions
 
@@ -109,6 +110,7 @@ For example:
 | 3.13 | x86_64, ARM64 | |
 | 3.13-nogil | x86_64, ARM64 | Free-threaded (PEP 703) |
 | 3.14 | x86_64, ARM64 | |
+| 3.14-nogil | x86_64, ARM64 | Free-threaded (PEP 703) |
 
 ### Usage
 
@@ -198,7 +200,7 @@ The standalone binaries are built by the [`build-standalone.yml`](https://github
 4. `go build main.go` compiles the Go wrapper, which embeds both the Caddy binary and the Python distribution
 5. The resulting self-contained binary is uploaded as a release artifact
 
-For the `3.13-nogil` variant, a freethreaded python-build-standalone distribution is used instead.
+For the `3.13-nogil` and `3.14-nogil` variants, a freethreaded python-build-standalone distribution is used instead.
 
 ---
 
