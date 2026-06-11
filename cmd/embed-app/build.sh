@@ -21,6 +21,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 EMBED_DIR="$(dirname "$SCRIPT_DIR")/embed"
 ROOT_DIR="$(dirname "$(dirname "$SCRIPT_DIR")")"
 
+VALID_PYVERSIONS=("3.12" "3.13" "3.13-nogil" "3.14" "3.14-nogil")
+
 usage() {
     echo "Usage: $0 APP_ZIP PYTHON_VERSION [OPTIONS]"
     echo ""
@@ -91,6 +93,16 @@ fi
 
 if [[ ! -f "$APP_ZIP_PATH" ]]; then
     echo "Error: App zip not found: $APP_ZIP_PATH"
+    exit 1
+fi
+
+match=0
+for v in "${VALID_PYVERSIONS[@]}"; do
+    [[ "$v" == "$PY_VERSION" ]] && match=1 && break
+done
+if [[ $match -eq 0 ]]; then
+    echo "Error: invalid PYTHON_VERSION '$PY_VERSION'"
+    echo "Valid options: ${VALID_PYVERSIONS[*]}"
     exit 1
 fi
 
