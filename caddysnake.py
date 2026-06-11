@@ -140,6 +140,87 @@ def _split_path(path):
     return path, ""
 
 
+def _forwarded_scheme(raw_headers):
+    """Original request scheme from X-Forwarded-Proto.
+
+    The Go side always sets X-Forwarded-Proto on the hop to the worker
+    (stripping any client-supplied value), so this value is trusted.
+    """
+    xfp = raw_headers.get("x-forwarded-proto", "").lower().strip()
+    if xfp in ("https", "http"):
+        return xfp
+    return "http"
+
+
+# Bounded memo caches for per-request parsing. Header names, Host values, and
+# client addresses repeat across requests, so decode/validate work is cached.
+# Size caps stop adversarial unique values from growing the dicts unboundedly;
+# benign dict races under threads/greenlets only cause a redundant computation.
+_HEADER_NAME_CACHE = {}
+_HEADER_NAME_CACHE_MAX = 512
+
+_HOST_HEADER_CACHE = {}
+_HOST_HEADER_CACHE_MAX = 256
+
+_CLIENT_IP_CACHE = {}
+_CLIENT_IP_CACHE_MAX = 1024
+
+_HTTP_VERSION_MAP = {
+    "HTTP/1.1": "1.1",
+    "HTTP/1.0": "1.0",
+    "HTTP/2": "2",
+    "HTTP/2.0": "2.0",
+}
+
+
+def _header_name_str(name_bytes):
+    """Decode a header name to a lowercase str with memoization."""
+    s = _HEADER_NAME_CACHE.get(name_bytes)
+    if s is None:
+        s = name_bytes.decode("latin-1")
+        if not s.islower():
+            s = s.lower()
+        if len(_HEADER_NAME_CACHE) < _HEADER_NAME_CACHE_MAX:
+            _HEADER_NAME_CACHE[bytes(name_bytes)] = s
+    return s
+
+
+def _parse_host_header_cached(host_str, default_port=80):
+    """Memoized _parse_host_header for the default-port hot path."""
+    if default_port != 80:
+        return _parse_host_header(host_str, default_port)
+    cached = _HOST_HEADER_CACHE.get(host_str)
+    if cached is None:
+        cached = _parse_host_header(host_str, default_port)
+        if len(_HOST_HEADER_CACHE) < _HOST_HEADER_CACHE_MAX:
+            _HOST_HEADER_CACHE[host_str] = cached
+    return cached
+
+
+def _validate_client_ip(addr):
+    """Validate/normalize a client IP string with memoization. Returns str or None."""
+    cached = _CLIENT_IP_CACHE.get(addr)
+    if cached is None:
+        host = addr.strip()
+        if host.startswith("[") and host.endswith("]"):
+            host = host[1:-1]
+        try:
+            cached = str(ipaddress.ip_address(host))
+        except ValueError:
+            cached = False
+        if len(_CLIENT_IP_CACHE) < _CLIENT_IP_CACHE_MAX:
+            _CLIENT_IP_CACHE[addr] = cached
+    return cached or None
+
+
+def _http_version_str(version):
+    """Map a request-line HTTP version (e.g. "HTTP/1.1") to its ASGI/ESGI form."""
+    v = _HTTP_VERSION_MAP.get(version)
+    if v is not None:
+        return v
+    return version.split("/", 1)[1] if "/" in version else "1.1"
+
+
 _wsgi_executor = concurrent.futures.ThreadPoolExecutor(
     max_workers=min(128, (os.cpu_count() or 1) * 8 + 16)
 )
@@ -381,14 +462,10 @@ def _client_from_caddy_snake_headers(raw_headers):
             return None
     except ValueError:
         return None
-    host = addr.strip()
-    if host.startswith("[") and host.endswith("]"):
-        host = host[1:-1]
-    try:
-        ip = ipaddress.ip_address(host)
-    except ValueError:
+    ip = _validate_client_ip(addr)
+    if ip is None:
         return None
-    return (str(ip), port)
+    return (ip, port)
 
 
 def _build_wsgi_environ(method, path, version, headers_list, raw_headers, wsgi_input):
@@ -414,7 +491,7 @@ def _build_wsgi_environ(method, path, version, headers_list, raw_headers, wsgi_i
         "REMOTE_HOST": remote_ip,
         "X_FROM": "caddy-snake",
         "wsgi.version": (1, 0),
-        "wsgi.url_scheme": "http",
+        "wsgi.url_scheme": _forwarded_scheme(raw_headers),
         "wsgi.input": wsgi_input,
         "wsgi.errors": sys.stderr,
         "wsgi.multithread": True,
@@ -718,7 +795,7 @@ async def _read_http_request(reader):
         name = line[:colon].strip().lower()
         value = line[colon + 1 :].strip()
         headers.append((name, value))
-        raw_headers[name.decode("latin-1")] = value.decode("latin-1")
+        raw_headers[_header_name_str(name)] = value.decode("latin-1")
 
     body_stream = _HttpBodyStream(reader, content_length=0)
     content_length = raw_headers.get("content-length")
@@ -797,6 +874,17 @@ async def _handle_asgi_http(writer, app, scope, body_stream):
             disconnect_event.set()
             raise ClientDisconnected
 
+    async def _drain_if_needed():
+        # Drain only above the high-water mark (same policy as the WSGI
+        # handler): a no-op drain still costs a coroutine round per request,
+        # and below the mark the transport buffer is bounded anyway.
+        try:
+            if writer.transport.get_write_buffer_size() <= _DRAIN_HIGH_WATER:
+                return
+        except (AttributeError, TypeError):
+            pass
+        await _drain_to_client()
+
     async def send(message):
         nonlocal response_started, response_complete, use_chunked
         nonlocal pending_headers, has_cl, has_te
@@ -813,7 +901,10 @@ async def _handle_asgi_http(writer, app, scope, body_stream):
             buf = bytearray()
             buf.extend(_get_status_line(status))
             for h_name, h_value in resp_headers:
-                h_name, h_value = _encode_header(h_name, h_value)
+                if isinstance(h_name, str):
+                    h_name = h_name.encode("latin-1")
+                if isinstance(h_value, str):
+                    h_value = h_value.encode("latin-1")
                 h_lower = h_name.lower()
                 if h_lower == b"content-length":
                     has_cl = True
@@ -867,8 +958,13 @@ async def _handle_asgi_http(writer, app, scope, body_stream):
                     if body_data:
                         _write_to_client(body_data)
 
-            if not more_body:
-                await _drain_to_client()
+            if more_body:
+                # Backpressure for streaming responses: bound the transport
+                # buffer instead of letting a fast producer outrun a slow
+                # client indefinitely.
+                await _drain_if_needed()
+            else:
+                await _drain_if_needed()
                 response_complete = True
                 disconnect_event.set()
 
@@ -905,7 +1001,8 @@ async def _handle_asgi_http(writer, app, scope, body_stream):
             await _send_error_response()
     finally:
         disconnect_event.set()
-        await body_stream.discard()
+        if not body_stream._done:
+            await body_stream.discard()
 
 
 async def _ws_close_with_code(writer, code):
@@ -1150,20 +1247,22 @@ def _recv_exact_sock(sock, n: int) -> bytes:
 def _read_http_request_sync(sock):
     """Blocking HTTP/1.x request parser; returns None on EOF/parse error."""
     buf = bytearray()
+    search_from = 0
     while True:
         if len(buf) > MAX_HEADERS_SIZE:
             return None
-        sep = buf.find(b"\r\n\r\n")
+        sep = buf.find(b"\r\n\r\n", search_from)
         if sep >= 0:
-            header_blob = bytes(buf[: sep + 4])
+            lines = bytes(buf[:sep]).split(b"\r\n")
             leftover = bytes(buf[sep + 4 :])
             break
+        # The separator can straddle a recv boundary; back up 3 bytes.
+        search_from = max(0, len(buf) - 3)
         chunk = sock.recv(16384)
         if not chunk:
             return None
         buf.extend(chunk)
 
-    lines = header_blob[:-4].split(b"\r\n")
     if not lines or len(lines[0]) > MAX_REQUEST_LINE:
         return None
     request_line = lines[0].decode("latin-1")
@@ -1184,7 +1283,7 @@ def _read_http_request_sync(sock):
         name = line[:colon].strip().lower()
         value = line[colon + 1 :].strip()
         headers.append((name, value))
-        raw_headers[name.decode("latin-1")] = value.decode("latin-1")
+        raw_headers[_header_name_str(name)] = value.decode("latin-1")
 
     content_length = raw_headers.get("content-length")
     transfer_encoding = raw_headers.get("transfer-encoding", "")
@@ -1318,16 +1417,11 @@ class _SyncHttpBodyStream:
 
 
 def _esgi_http_version(req_version: str) -> str:
-    if "/" in req_version:
-        return req_version.split("/", 1)[1]
-    return "1.1"
+    return _http_version_str(req_version)
 
 
 def _esgi_scheme_from_headers(raw_headers: dict) -> str:
-    xfp = raw_headers.get("x-forwarded-proto", "").lower().strip()
-    if xfp in ("https", "http"):
-        return xfp
-    return "http"
+    return _forwarded_scheme(raw_headers)
 
 
 def _esgi_ws_scheme_from_headers(raw_headers: dict) -> str:
@@ -1337,12 +1431,13 @@ def _esgi_ws_scheme_from_headers(raw_headers: dict) -> str:
 def _esgi_headers_mapping(headers_list, raw_headers: dict) -> dict:
     headers_map = {}
     for n, v in headers_list:
-        k = n.decode("latin-1").lower()
+        k = _header_name_str(n)
         if k in ("caddy-snake-remote-addr", "caddy-snake-remote-port"):
             continue
         val = v.decode("latin-1")
-        if k in headers_map:
-            headers_map[k] = headers_map[k] + ", " + val
+        existing = headers_map.get(k)
+        if existing is not None:
+            headers_map[k] = existing + ", " + val
         else:
             headers_map[k] = val
     return headers_map
@@ -1358,7 +1453,7 @@ def _build_esgi_http_scope(method, path, version, headers_list, raw_headers: dic
     path_part, query_string = _split_path(path)
     path_decoded = _esgi_decode_path(path_part)
     host_str = raw_headers.get("host", "localhost")
-    server_host, server_port = _parse_host_header(host_str)
+    server_host, server_port = _parse_host_header_cached(host_str)
     trusted = _client_from_caddy_snake_headers(raw_headers)
     if trusted:
         client_host, client_port = trusted
@@ -1384,7 +1479,7 @@ def _build_esgi_ws_scope(method, path, version, headers_list, raw_headers: dict)
     path_part, query_string = _split_path(path)
     path_decoded = _esgi_decode_path(path_part)
     host_str = raw_headers.get("host", "localhost")
-    server_host, server_port = _parse_host_header(host_str)
+    server_host, server_port = _parse_host_header_cached(host_str)
     trusted = _client_from_caddy_snake_headers(raw_headers)
     if trusted:
         client_host, client_port = trusted
@@ -1605,19 +1700,25 @@ class _EsgiHttpProtocolSync:
         return gen()
 
     def _write_response(self, status, headers, body: bytes):
-        buf = bytearray(_get_status_line(status))
         cl_present = False
+        parts = []
         for name, value in headers:
-            buf.extend(f"{name}: {value}\r\n".encode("latin-1"))
+            parts.append(name)
+            parts.append(": ")
+            parts.append(value)
+            parts.append("\r\n")
             if name.lower() == "content-length":
                 cl_present = True
+        buf = bytearray(_get_status_line(status))
+        buf.extend("".join(parts).encode("latin-1"))
         if not cl_present:
             buf.extend(b"Content-Length: ")
             buf.extend(str(len(body)).encode("ascii"))
             buf.extend(b"\r\n")
         buf.extend(b"\r\n")
         buf.extend(body)
-        self._sock.sendall(bytes(buf))
+        # sendall accepts any buffer; avoid copying the full response again.
+        self._sock.sendall(buf)
 
     def response_empty(self, status: int, headers: list) -> None:
         self.response_bytes(status, headers, b"")
@@ -1710,9 +1811,11 @@ def _esgi_connection_loop(sock, app):
             if result is None:
                 return
             method, path, version, headers_list, raw_headers, body_stream = result
+            upgrade = raw_headers.get("upgrade")
             is_websocket = (
-                method.upper() == "GET"
-                and raw_headers.get("upgrade", "").lower() == "websocket"
+                upgrade is not None
+                and method.upper() == "GET"
+                and upgrade.lower() == "websocket"
                 and "upgrade" in raw_headers.get("connection", "").lower()
             )
             if is_websocket:
@@ -1754,6 +1857,13 @@ def run_esgi_server(app, socket_path: str, runtime: str):
             sys.exit(1)
 
     def handle(sock, _addr):
+        if _USE_TCP:
+            import socket as _stdsocket
+
+            try:
+                sock.setsockopt(_stdsocket.IPPROTO_TCP, _stdsocket.TCP_NODELAY, 1)
+            except OSError:
+                pass
         try:
             _esgi_connection_loop(sock, app)
         finally:
@@ -1830,14 +1940,16 @@ async def _handle_asgi_connection(reader, writer, app, state):
             method, path, version, headers, raw_headers, body_stream = result
             path_part, query_string = _split_path(path)
 
+            upgrade = raw_headers.get("upgrade")
             is_websocket = (
-                method == "GET"
-                and raw_headers.get("upgrade", "").lower() == "websocket"
+                upgrade is not None
+                and method == "GET"
+                and upgrade.lower() == "websocket"
                 and "upgrade" in raw_headers.get("connection", "").lower()
             )
 
             host_str = raw_headers.get("host", "localhost")
-            server_host, server_port = _parse_host_header(host_str)
+            server_host, server_port = _parse_host_header_cached(host_str)
 
             headers_for_scope = [
                 (n, v)
@@ -1851,17 +1963,17 @@ async def _handle_asgi_connection(reader, writer, app, state):
             else:
                 client_tp = ("127.0.0.1", 0)
 
+            scheme = _forwarded_scheme(raw_headers)
             if is_websocket:
                 conn_type = "websocket"
-                scheme = "ws"
+                scheme = "wss" if scheme == "https" else "ws"
             else:
                 conn_type = "http"
-                scheme = "http"
 
             scope = {
                 "type": conn_type,
                 "asgi": _ASGI_VERSION,
-                "http_version": version.split("/")[-1] if "/" in version else "1.1",
+                "http_version": _http_version_str(version),
                 "method": method,
                 "path": unquote(path_part) if "%" in path_part else path_part,
                 "raw_path": path_part.encode("latin-1"),
@@ -1881,7 +1993,8 @@ async def _handle_asgi_connection(reader, writer, app, state):
                 scope["subprotocols"] = [
                     s.strip() for s in subprotocols_str.split(",") if s.strip()
                 ]
-                await body_stream.discard()
+                if not body_stream._done:
+                    await body_stream.discard()
                 await _handle_asgi_websocket(reader, writer, app, scope, raw_headers)
                 break
             else:

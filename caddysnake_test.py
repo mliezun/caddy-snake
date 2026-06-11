@@ -817,6 +817,38 @@ class TestHandleAsgiConnection:
         assert b"HTTP/1.1 200" in out
         assert b"hi" in out
 
+    async def test_scheme_from_forwarded_proto(self):
+        req = (
+            b"GET / HTTP/1.1\r\nHost: localhost\r\n"
+            b"X-Forwarded-Proto: https\r\nConnection: close\r\n\r\n"
+        )
+        reader = asyncio.StreamReader()
+        reader.feed_data(req)
+        reader.feed_eof()
+
+        async def _drain():
+            pass
+
+        async def _wait_closed():
+            pass
+
+        writer = mock.Mock()
+        writer.write = lambda d: None
+        writer.drain = _drain
+        writer.close = lambda: None
+        writer.wait_closed = _wait_closed
+        writer.is_closing = lambda: False
+
+        seen_schemes = []
+
+        async def app(scope, receive, send):
+            seen_schemes.append(scope["scheme"])
+            await send({"type": "http.response.start", "status": 200, "headers": []})
+            await send({"type": "http.response.body", "body": b""})
+
+        await cs._handle_asgi_connection(reader, writer, app, {})
+        assert seen_schemes == ["https"]
+
 
 # ==================== ASGI _handle_asgi_lifespan ====================
 
@@ -937,6 +969,26 @@ class TestBuildWsgiEnviron:
         )
         assert env["PATH_INFO"] == "hello world" or env["PATH_INFO"] == "/hello world"
 
+    def test_url_scheme_default_http(self):
+        env = cs._build_wsgi_environ(
+            "GET", "/", "HTTP/1.1", [(b"host", b"x")], {"host": "x"}, io.BytesIO(b"")
+        )
+        assert env["wsgi.url_scheme"] == "http"
+
+    def test_url_scheme_from_forwarded_proto(self):
+        raw_headers = {"host": "x", "x-forwarded-proto": "https"}
+        env = cs._build_wsgi_environ(
+            "GET", "/", "HTTP/1.1", [(b"host", b"x")], raw_headers, io.BytesIO(b"")
+        )
+        assert env["wsgi.url_scheme"] == "https"
+
+    def test_url_scheme_invalid_forwarded_proto_falls_back(self):
+        raw_headers = {"host": "x", "x-forwarded-proto": "gopher"}
+        env = cs._build_wsgi_environ(
+            "GET", "/", "HTTP/1.1", [(b"host", b"x")], raw_headers, io.BytesIO(b"")
+        )
+        assert env["wsgi.url_scheme"] == "http"
+
     def test_content_type_and_length(self):
         headers_list = [
             (b"content-type", b"application/json"),
@@ -1032,6 +1084,57 @@ class TestBuildWsgiEnviron:
             io.BytesIO(b""),
         )
         assert env["REMOTE_ADDR"] == "::1"
+
+
+# ==================== Forwarded scheme helper ====================
+
+
+class TestForwardedScheme:
+    def test_default_http(self):
+        assert cs._forwarded_scheme({}) == "http"
+
+    def test_https(self):
+        assert cs._forwarded_scheme({"x-forwarded-proto": "https"}) == "https"
+
+    def test_case_and_whitespace(self):
+        assert cs._forwarded_scheme({"x-forwarded-proto": " HTTPS "}) == "https"
+
+    def test_invalid_value_falls_back(self):
+        assert cs._forwarded_scheme({"x-forwarded-proto": "gopher"}) == "http"
+
+
+# ==================== Hot-path parsing caches ====================
+
+
+class TestParsingCaches:
+    def test_header_name_str_lowercases(self):
+        assert cs._header_name_str(b"host") == "host"
+        assert cs._header_name_str(b"X-Custom") == "x-custom"
+
+    def test_header_name_str_memoized(self):
+        first = cs._header_name_str(b"x-memo-check")
+        second = cs._header_name_str(b"x-memo-check")
+        assert first is second
+
+    def test_parse_host_header_cached_matches_uncached(self):
+        for host in ("example.com:8080", "example.com", "[::1]:9443", ""):
+            assert cs._parse_host_header_cached(host) == cs._parse_host_header(host)
+
+    def test_parse_host_header_cached_non_default_port(self):
+        assert cs._parse_host_header_cached("example.com", 443) == ("example.com", 443)
+
+    def test_validate_client_ip(self):
+        assert cs._validate_client_ip("198.51.100.2") == "198.51.100.2"
+        assert cs._validate_client_ip("[::1]") == "::1"
+        assert cs._validate_client_ip("not-an-ip") is None
+        # Memoized negative result stays None
+        assert cs._validate_client_ip("not-an-ip") is None
+
+    def test_http_version_str(self):
+        assert cs._http_version_str("HTTP/1.1") == "1.1"
+        assert cs._http_version_str("HTTP/1.0") == "1.0"
+        assert cs._http_version_str("HTTP/2") == "2"
+        assert cs._http_version_str("1.0") == "1.1"  # no slash: fallback
 
 
 # ==================== ESGI scope building ====================

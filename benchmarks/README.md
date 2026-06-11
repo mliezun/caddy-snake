@@ -64,15 +64,15 @@ cp benchmarks/benchmark_chart.svg docs/static/img/benchmark_chart.svg
 - Python 3.13, Go 1.26
 - Caddy Snake Caddyfiles use `workers 1`; Gunicorn uses 1 worker with 4 threads; Uvicorn uses 1 worker
 
-## Results (Scaleway POP2-2C-8G, linux/amd64 — from `results.json`)
+## Results (4 vCPU / 16 GB cloud VM, linux/amd64 — from `results.json`)
 
 | Configuration | Requests/sec | Avg Latency (ms) | P99 Latency (ms) |
 |---|---|---|---|
-| Flask + Gunicorn + Caddy | 1,759 | 56.68 | 72.67 |
-| **Flask + Caddy Snake** | **2,905** | **34.40** | **53.24** |
-| FastAPI + Uvicorn + Caddy | 3,382 | 29.54 | 233.59 |
-| **FastAPI + Caddy Snake** | **4,854** | **20.57** | **38.98** |
-| ESGI (gevent) + Caddy reverse proxy | 5,011 | 19.92 | 50.45 |
-| **ESGI + Caddy Snake** | **5,146** | **19.42** | **45.04** |
+| Flask + Gunicorn + Caddy | 3,052 | 32.70 | 37.68 |
+| **Flask + Caddy Snake** | **4,878** | **20.49** | **28.25** |
+| FastAPI + Uvicorn + Caddy | 11,502 | 8.70 | 91.46 |
+| **FastAPI + Caddy Snake** | **17,423** | **5.72** | **8.85** |
+| ESGI (gevent) + Caddy reverse proxy | 29,193 | 3.43 | 9.97 |
+| **ESGI + Caddy Snake** | **34,077** | **2.95** | **8.10** |
 
-Re-run `./benchmarks/scaleway_bench.sh` or Docker to refresh. Other CPUs will differ.
+Re-run the Docker harness or `./benchmarks/scaleway_bench.sh` to refresh. Other CPUs will differ.

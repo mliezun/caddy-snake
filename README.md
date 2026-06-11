@@ -460,20 +460,22 @@ Make sure to match the Python version with your target environment.
 
 ## Benchmarks
 
-Caddy Snake compares favorably to **separate reverse-proxy stacks** for **Flask (WSGI)**, **FastAPI (ASGI)**, and **ESGI (gevent)** on the JSON `/hello` workload below. Figures are the averages committed in [`benchmarks/results.json`](benchmarks/results.json) from a **Scaleway POP2-2C-8G (linux/amd64)** run; use [`benchmarks/scaleway_bench.sh`](benchmarks/scaleway_bench.sh) or local Docker to reproduce on other hardware.
+Caddy Snake compares favorably to **separate reverse-proxy stacks** for **Flask (WSGI)**, **FastAPI (ASGI)**, and **ESGI (gevent)** on the JSON `/hello` workload below. Figures are the averages committed in [`benchmarks/results.json`](benchmarks/results.json) from a **4 vCPU / 16 GB cloud VM (linux/amd64)** run of the Docker harness; use local Docker or [`benchmarks/scaleway_bench.sh`](benchmarks/scaleway_bench.sh) to reproduce on other hardware.
 
 ![Benchmark Chart](benchmarks/benchmark_chart.svg)
 
 | Configuration | Requests/sec | Avg Latency (ms) | P99 Latency (ms) |
 |---|---|---|---|
-| Flask + Gunicorn + Caddy | 1,759 | 56.68 | 72.67 |
-| **Flask + Caddy Snake** | **2,905** | **34.40** | **53.24** |
-| FastAPI + Uvicorn + Caddy | 3,382 | 29.54 | 233.59 |
-| **FastAPI + Caddy Snake** | **4,854** | **20.57** | **38.98** |
-| ESGI (gevent) + Caddy reverse proxy | 5,011 | 19.92 | 50.45 |
-| **ESGI + Caddy Snake** | **5,146** | **19.42** | **45.04** |
+| Flask + Gunicorn + Caddy | 3,052 | 32.70 | 37.68 |
+| **Flask + Caddy Snake** | **4,878** | **20.49** | **28.25** |
+| FastAPI + Uvicorn + Caddy | 11,502 | 8.70 | 91.46 |
+| **FastAPI + Caddy Snake** | **17,423** | **5.72** | **8.85** |
+| ESGI (gevent) + Caddy reverse proxy | 29,193 | 3.43 | 9.97 |
+| **ESGI + Caddy Snake** | **34,077** | **2.95** | **8.10** |
 
-> Benchmarked with [hey](https://github.com/rakyll/hey) on **Scaleway POP2-2C-8G (linux/amd64)**: 100 concurrent connections, 10 s per run, 10 runs averaged, Python 3.13, Go 1.26 (see [`benchmarks/scaleway_bench.sh`](benchmarks/scaleway_bench.sh)). Throughput varies by machine.
+Caddy Snake serves **~60% more requests/sec than Gunicorn** for Flask, **~51% more than Uvicorn** for FastAPI (with **10× lower P99 latency**), and **~17% more** than proxying to the same ESGI gateway over a Unix socket.
+
+> Benchmarked with [hey](https://github.com/rakyll/hey) on a **4 vCPU / 16 GB cloud VM (linux/amd64)**: 100 concurrent connections, 10 s per run, 10 runs averaged, Python 3.13, Go 1.26 (Docker harness in [`benchmarks/`](benchmarks/)). Absolute throughput varies by machine; relative ordering has been stable across environments.
 
 ---
 

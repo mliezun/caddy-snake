@@ -29,6 +29,7 @@ func extractTarGz(data []byte, targetDir string) error {
 	defer zsr.Close()
 
 	tr := tar.NewReader(zsr)
+	cleanTarget := filepath.Clean(targetDir)
 
 	for {
 		header, err := tr.Next()
@@ -40,6 +41,11 @@ func extractTarGz(data []byte, targetDir string) error {
 		}
 
 		path := filepath.Join(targetDir, header.Name)
+
+		// Guard against tar slip
+		if path != cleanTarget && !strings.HasPrefix(path, cleanTarget+string(os.PathSeparator)) {
+			return fmt.Errorf("invalid path in archive: %s", header.Name)
+		}
 
 		switch header.Typeflag {
 		case tar.TypeDir:
@@ -65,6 +71,15 @@ func extractTarGz(data []byte, targetDir string) error {
 			outFile.Close()
 			
 		case tar.TypeSymlink:
+			// Guard against symlinks escaping the target directory
+			linkDest := header.Linkname
+			if !filepath.IsAbs(linkDest) {
+				linkDest = filepath.Join(filepath.Dir(path), linkDest)
+			}
+			linkDest = filepath.Clean(linkDest)
+			if linkDest != cleanTarget && !strings.HasPrefix(linkDest, cleanTarget+string(os.PathSeparator)) {
+				return fmt.Errorf("invalid symlink target in archive: %s -> %s", header.Name, header.Linkname)
+			}
 			if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 				return err
 			}
