@@ -25,7 +25,7 @@ usage() {
     echo "Usage: $0 APP_ZIP PYTHON_VERSION [OPTIONS]"
     echo ""
     echo "  APP_ZIP        Path to your app .zip (Lambda-style, see docs)"
-    echo "  PYTHON_VERSION Python version: 3.12, 3.13, 3.13-nogil, 3.14"
+    echo "  PYTHON_VERSION Python version: 3.12, 3.13, 3.13-nogil, 3.14, 3.14-nogil"
     echo ""
     echo "Options:"
     echo "  --app MODULE:VAR      App entry point (default: main:app)"
@@ -140,9 +140,10 @@ if [[ "$APP_ZIP_PATH" != "$DEST_APP_ZIP" ]]; then
 fi
 
 # 2. Retrieve Python standalone
-if [[ "$PY_VERSION" == "3.13-nogil" ]]; then
-    echo "Fetching Python 3.13 freethreaded (nogil)..."
-    python3 "$EMBED_DIR/pybs.py" latest --python-version 3.13 --architecture "$ARCH" \
+if [[ "$PY_VERSION" == *"-nogil" ]]; then
+    PY_VERSION_BASE="${PY_VERSION%-nogil}"
+    echo "Fetching Python ${PY_VERSION_BASE} freethreaded (nogil)..."
+    python3 "$EMBED_DIR/pybs.py" latest --python-version "$PY_VERSION_BASE" --architecture "$ARCH" \
         --build-config freethreaded+pgo+lto --content-type full --dest .
     tar -xf cpython-*.tar.zst
     mv python/install .

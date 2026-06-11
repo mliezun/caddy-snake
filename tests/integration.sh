@@ -11,16 +11,17 @@ set -euo pipefail
 #   ./integration_test.sh fastapi 3.13
 #   ./integration_test.sh django 3.12
 #   ./integration_test.sh simple 3.13-nogil
+#   ./integration_test.sh simple 3.14-nogil
 #
 # Valid tool names:
 #   django, django_channels, flask, fastapi, simple_autoreload, simple_async, simple_esgi, simple_cache, socketio, dynamic
 #
 # Valid python versions:
-#   3.12, 3.13, 3.13-nogil, 3.14
+#   3.12, 3.13, 3.13-nogil, 3.14, 3.14-nogil
 # ---------------------------------------------------------------------------
 
 VALID_TOOLS=("django" "django_channels" "flask" "fastapi" "simple_autoreload" "simple_async" "simple_esgi" "simple_cache" "socketio" "dynamic")
-VALID_PYVERSIONS=("3.12" "3.13" "3.13-nogil" "3.14")
+VALID_PYVERSIONS=("3.12" "3.13" "3.13-nogil" "3.14" "3.14-nogil")
 
 usage() {
   echo "Usage: $0 <tool-name> <python-version>"
@@ -72,10 +73,12 @@ echo ""
 
 # Build the inner script that will run inside the container
 IS_NOGIL=0
-[[ "$PYTHON_VERSION" == "3.13-nogil" ]] && IS_NOGIL=1
-
-# For nogil the actual python package version is still 3.13
 PY_PKG_VERSION="$PYTHON_VERSION"
+if [[ "$PYTHON_VERSION" == *"-nogil" ]]; then
+  IS_NOGIL=1
+  # Deadsnakes free-threaded package naming uses a "t" suffix (e.g. 3.13t, 3.14t)
+  PY_PKG_VERSION="${PYTHON_VERSION%-nogil}t"
+fi
 
 read -r -d '' INNER_SCRIPT <<'INNEREOF' || true
 #!/usr/bin/env bash
