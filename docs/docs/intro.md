@@ -120,11 +120,9 @@ def hello():
 
 ```Caddyfile
 http://localhost:9080 {
-    route {
-        python {
-            module_asgi "main:app"
-            lifespan on
-        }
+    python /* {
+        module_asgi "main:app"
+        lifespan on
     }
 }
 ```
@@ -163,10 +161,8 @@ def hello():
 
 ```Caddyfile
 http://localhost:9080 {
-    route {
-        python {
-            module_wsgi "main:app"
-        }
+    python /* {
+        module_wsgi "main:app"
     }
 }
 ```

@@ -6,7 +6,31 @@ sidebar_position: 2
 
 # Configuration Reference
 
-The `python` directive allows you to serve Python WSGI, ASGI, or ESGI applications through Caddy. It supports both a simple form and a block form with various configuration options.
+The `python` directive allows you to serve Python WSGI, ASGI, or ESGI applications through Caddy. It supports a simple form, a block form, and path-prefixed route blocks.
+
+---
+
+## Route Form (recommended)
+
+Mount a Python app on a URL path directly, without wrapping it in a `route` block:
+
+```caddyfile
+python "/api" {
+    module_asgi "main:app"
+}
+```
+
+The optional matcher can be a path (`/api`, `/api/*`), a named matcher (`@api`), or a catch-all (`*`). Requests are forwarded to Python with the **full request path** unchanged.
+
+For a catch-all site:
+
+```caddyfile
+python /* {
+    module_asgi "main:app"
+}
+```
+
+The older `route { python { ... } }` form remains supported but is no longer recommended.
 
 ---
 
@@ -191,11 +215,9 @@ This is useful for multi-tenant setups where each subdomain or route serves a di
 
 ```caddyfile
 *.example.com:9080 {
-    route /* {
-        python {
-            module_asgi "{http.request.host.labels.2}:app"
-            working_dir "{http.request.host.labels.2}/"
-        }
+    python /* {
+        module_asgi "{http.request.host.labels.2}:app"
+        working_dir "{http.request.host.labels.2}/"
     }
 }
 ```
@@ -221,12 +243,10 @@ Dynamic module loading works with `autoreload`. When enabled, each resolved work
 
 ```caddyfile
 *.example.com:9080 {
-    route /* {
-        python {
-            module_asgi "{http.request.host.labels.2}:app"
-            working_dir "{http.request.host.labels.2}/"
-            autoreload
-        }
+    python /* {
+        module_asgi "{http.request.host.labels.2}:app"
+        working_dir "{http.request.host.labels.2}/"
+        autoreload
     }
 }
 ```
@@ -257,11 +277,9 @@ https://*.project.example {
 	tls {
 		on_demand
 	}
-	route /* {
-		python {
-			module_asgi "{http.request.host.labels.2}:app"
-			working_dir "/srv/branches/{http.request.host.labels.2}/"
-		}
+	python /* {
+		module_asgi "{http.request.host.labels.2}:app"
+		working_dir "/srv/branches/{http.request.host.labels.2}/"
 	}
 }
 ```
@@ -298,12 +316,10 @@ https://*.203.0.113.43.nip.io {
 		on_demand
 	}
 
-	route /* {
-		python {
-			module_wsgi "app:application"
-			working_dir "/srv/apps/{http.request.host.labels.6}/"
-			workers 2
-		}
+	python /* {
+		module_wsgi "app:application"
+		working_dir "/srv/apps/{http.request.host.labels.6}/"
+		workers 2
 	}
 }
 ```

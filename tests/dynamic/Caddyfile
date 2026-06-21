@@ -6,11 +6,9 @@
 	}
 }
 *.127.0.0.1.nip.io:9080 {
-	route /* {
-		python {
-			module_asgi "{http.request.host.labels.6}:app"
-			working_dir "{http.request.host.labels.6}/"
-			workers 1
-		}
+	python /* {
+		module_asgi "{http.request.host.labels.6}:app"
+		working_dir "{http.request.host.labels.6}/"
+		workers 1
 	}
 }

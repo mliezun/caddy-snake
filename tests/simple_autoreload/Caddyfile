@@ -6,12 +6,10 @@
 	}
 }
 localhost:9080 {
-	route {
-		python {
-			module_wsgi "main:app"
-			workers 1
-			venv "./venv"
-			autoreload
-		}
+	python {
+		module_wsgi "main:app"
+		workers 1
+		venv "./venv"
+		autoreload
 	}
 }

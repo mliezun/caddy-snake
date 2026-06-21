@@ -6,29 +6,23 @@
 	}
 }
 localhost:9080 {
-	route /share/* {
-		python {
-			module_wsgi "main:wsgi_app"
-			workers 2
-			venv "./venv"
-		}
+	python /share/* {
+		module_wsgi "main:wsgi_app"
+		workers 2
+		venv "./venv"
 	}
 
-	route /asgi/* {
-		python {
-			module_asgi "main:asgi_app"
-			workers 1
-			venv "./venv"
-		}
+	python /asgi/* {
+		module_asgi "main:asgi_app"
+		workers 1
+		venv "./venv"
 	}
 
-	route /esgi/* {
-		python {
-			module_esgi "main:application"
-			runtime gevent
-			workers 1
-			venv "./venv"
-		}
+	python /esgi/* {
+		module_esgi "main:application"
+		runtime gevent
+		workers 1
+		venv "./venv"
 	}
 
 	route / {
