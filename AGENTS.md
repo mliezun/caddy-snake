@@ -268,3 +268,29 @@ Start Caddy with your app (e.g. Flask or FastAPI), then:
 ```bash
 hey -c 100 -z 10s http://localhost:9080/hello
 ```
+
+---
+
+## Releases
+
+Patch releases use semantic tags `v0.x.y` on `main`. Publishing a release triggers CI to build and attach Linux binaries (see `.github/workflows/build-binary.yml`, `build-standalone.yml`, `python-build.yml`, `docker-publish.yml`).
+
+### Checklist
+
+1. **Ensure `main` is green** — wait until all CI workflows on the latest `main` commit pass (`gh run list --branch main`, or watch in GitHub Actions).
+2. **Choose the next patch tag** — inspect the latest release: `gh release list --limit 1` (e.g. after `v0.5.4`, tag `v0.5.5`).
+3. **Create the GitHub release** (creates the tag on `main` and starts asset builds):
+
+```bash
+gh release create v0.5.5 --target main --title "v0.5.5" --notes "$(cat <<'EOF'
+## What's Changed
+* Short description by @author in https://github.com/mliezun/caddy-snake/pull/NNN
+
+**Full Changelog**: https://github.com/mliezun/caddy-snake/compare/v0.5.4...v0.5.5
+EOF
+)"
+```
+
+4. **Wait for release workflows** — confirm `Caddy Binary Linux`, `Caddy Standalone Linux`, `Python Build Package`, and `Docker Publish` jobs succeed and assets appear on the release page (`gh release view v0.5.5`).
+
+Do **not** bump `cmd/cli/pyproject.toml` manually for plugin-only releases unless you are also publishing a new PyPI wheel; standalone/binary artifacts are built from the tagged commit in CI.
