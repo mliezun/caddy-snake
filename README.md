@@ -153,11 +153,9 @@ def application(scope, protocol):
 
 ```caddyfile
 http://localhost:9080 {
-    route {
-        python {
-            module_esgi "main:application"
-            runtime gevent
-        }
+    python /* {
+        module_esgi "main:application"
+        runtime gevent
     }
 }
 ```
@@ -182,10 +180,8 @@ def hello():
 
 ```Caddyfile
 http://localhost:9080 {
-    route {
-        python {
-            module_wsgi "main:app"
-        }
+    python /* {
+        module_wsgi "main:app"
     }
 }
 ```
@@ -218,11 +214,9 @@ def hello():
 
 ```Caddyfile
 http://localhost:9080 {
-    route {
-        python {
-            module_asgi "main:app"
-            lifespan on
-        }
+    python /* {
+        module_asgi "main:app"
+        lifespan on
     }
 }
 ```
@@ -358,11 +352,9 @@ This is useful for multi-tenant setups where each subdomain or route serves a di
 
 ```Caddyfile
 *.example.com:9080 {
-    route /* {
-        python {
-            module_asgi "{http.request.host.labels.2}:app"
-            working_dir "{http.request.host.labels.2}/"
-        }
+    python /* {
+        module_asgi "{http.request.host.labels.2}:app"
+        working_dir "{http.request.host.labels.2}/"
     }
 }
 ```
@@ -396,11 +388,9 @@ https://*.project.example {
         on_demand
     }
 
-    route /* {
-        python {
-            module_asgi "{http.request.host.labels.2}:app"
-            working_dir "/srv/apps/{http.request.host.labels.2}/"
-        }
+    python /* {
+        module_asgi "{http.request.host.labels.2}:app"
+        working_dir "/srv/apps/{http.request.host.labels.2}/"
     }
 }
 ```

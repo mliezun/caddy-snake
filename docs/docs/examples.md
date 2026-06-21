@@ -43,13 +43,11 @@ def create_item(item: Item):
 ```caddyfile
 # Caddyfile
 http://localhost:9080 {
-    route {
-        python {
-            module_asgi "main:app"
-            lifespan on
-            workers 1
-            venv "./venv"
-        }
+    python /* {
+        module_asgi "main:app"
+        lifespan on
+        workers 1
+        venv "./venv"
     }
 }
 ```
@@ -102,12 +100,10 @@ def create_item():
 ```caddyfile
 # Caddyfile
 http://localhost:9080 {
-    route {
-        python {
-            module_wsgi "main:app"
-            workers 4
-            venv "./venv"
-        }
+    python /* {
+        module_wsgi "main:app"
+        workers 4
+        venv "./venv"
     }
 }
 ```
@@ -170,12 +166,10 @@ def item_list(request):
 ```caddyfile
 # Caddyfile
 http://localhost:9080 {
-    route {
-        python {
-            module_wsgi "mysite.wsgi:application"
-            workers 1
-            venv "./venv"
-        }
+    python /* {
+        module_wsgi "mysite.wsgi:application"
+        workers 1
+        venv "./venv"
     }
 }
 ```
@@ -215,12 +209,10 @@ application = get_asgi_application()
 ```caddyfile
 # Caddyfile
 http://localhost:9080 {
-    route {
-        python {
-            module_asgi "mysite.asgi:application"
-            workers 1
-            venv "./venv"
-        }
+    python /* {
+        module_asgi "mysite.asgi:application"
+        workers 1
+        venv "./venv"
     }
 }
 ```
@@ -268,13 +260,11 @@ app.mount('/', socket_app)
 ```caddyfile
 # Caddyfile
 http://localhost:9080 {
-    route {
-        python {
-            module_asgi "main:app"
-            lifespan on
-            workers 1
-            venv "./venv"
-        }
+    python /* {
+        module_asgi "main:app"
+        lifespan on
+        workers 1
+        venv "./venv"
     }
 }
 ```
@@ -321,12 +311,10 @@ def hello():
 ```caddyfile
 # Caddyfile
 http://localhost:9080 {
-    route {
-        python {
-            module_wsgi "main:app"
-            venv "./venv"
-            autoreload
-        }
+    python /* {
+        module_wsgi "main:app"
+        venv "./venv"
+        autoreload
     }
 }
 ```
@@ -393,12 +381,10 @@ def index():
 ```caddyfile
 # Caddyfile
 *.127.0.0.1.nip.io:9080 {
-    route /* {
-        python {
-            module_asgi "{http.request.host.labels.6}:app"
-            working_dir "{http.request.host.labels.6}/"
-            workers 1
-        }
+    python /* {
+        module_asgi "{http.request.host.labels.6}:app"
+        working_dir "{http.request.host.labels.6}/"
+        workers 1
     }
 }
 ```
@@ -428,13 +414,11 @@ Add `autoreload` to automatically reload individual apps when their Python files
 
 ```caddyfile
 *.127.0.0.1.nip.io:9080 {
-    route /* {
-        python {
-            module_asgi "{http.request.host.labels.6}:app"
-            working_dir "{http.request.host.labels.6}/"
-            workers 1
-            autoreload
-        }
+    python /* {
+        module_asgi "{http.request.host.labels.6}:app"
+        working_dir "{http.request.host.labels.6}/"
+        workers 1
+        autoreload
     }
 }
 ```

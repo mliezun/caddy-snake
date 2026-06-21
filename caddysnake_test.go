@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -1705,6 +1706,88 @@ func TestParsePythonDirective_InvalidCaddyfile(t *testing.T) {
 	_, err := parsePythonDirective(h)
 	if err == nil {
 		t.Fatal("expected error for invalid caddyfile (missing module_wsgi arg)")
+	}
+}
+
+func TestPythonDirectiveCaddyfileAdaptation(t *testing.T) {
+	adapter := caddyfile.Adapter{
+		ServerType: httpcaddyfile.ServerType{},
+	}
+
+	for _, tc := range []struct {
+		name        string
+		input       string
+		expectError bool
+		contains    []string
+	}{
+		{
+			name: "path prefixed site level",
+			input: `:9080 {
+				python /api/* {
+					module_asgi "main:app"
+				}
+			}`,
+			contains: []string{`"handler":"python"`, `"/api/*"`, `"module_asgi":"main:app"`},
+		},
+		{
+			name: "site level block without matcher",
+			input: `:9080 {
+				python {
+					module_wsgi "main:app"
+				}
+			}`,
+			contains: []string{`"handler":"python"`, `"module_wsgi":"main:app"`},
+		},
+		{
+			name: "shorthand wsgi module",
+			input: `:9080 {
+				python main:app
+			}`,
+			contains: []string{`"handler":"python"`, `"module_wsgi":"main:app"`},
+		},
+		{
+			name: "route block backwards compat",
+			input: `:9080 {
+				route /api {
+					python {
+						module_asgi "main:app"
+					}
+				}
+			}`,
+			contains: []string{`"handler":"python"`, `"/api"`, `"module_asgi":"main:app"`},
+		},
+		{
+			name: "path prefixed with fallback respond",
+			input: `:9080 {
+				python /item/* {
+					module_wsgi "main:app"
+				}
+				respond 404
+			}`,
+			contains: []string{`"handler":"python"`, `"/item/*"`, `"handler":"static_response"`},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			out, _, err := adapter.Adapt([]byte(tc.input), nil)
+			if tc.expectError {
+				if err == nil {
+					t.Fatal("expected adaptation error")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected adaptation error: %v", err)
+			}
+			outStr := string(out)
+			for _, want := range tc.contains {
+				if !strings.Contains(outStr, want) {
+					t.Errorf("adapted JSON missing %q\n%s", want, outStr)
+				}
+			}
+			if !json.Valid(out) {
+				t.Fatalf("adapted output is not valid JSON: %s", outStr)
+			}
+		})
 	}
 }
 

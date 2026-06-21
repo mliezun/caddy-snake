@@ -6,40 +6,32 @@
 	}
 }
 localhost:9080 {
-	route /item/* {
-		python {
-			module_asgi "main:app"
-			lifespan on
-			workers 1
-			venv "./venv"
-		}
+	python /item/* {
+		module_asgi "main:app"
+		lifespan on
+		workers 1
+		venv "./venv"
 	}
 
-	route /other/ {
-		python {
-			module_asgi "main:app"
-			lifespan on
-			workers 1
-			venv "./venv"
-		}
+	python /other/ {
+		module_asgi "main:app"
+		lifespan on
+		workers 1
+		venv "./venv"
 	}
 
-	route /stream-item/* {
-		python {
-			module_asgi "main:app"
-			lifespan on
-			workers 1
-			venv "./venv"
-		}
+	python /stream-item/* {
+		module_asgi "main:app"
+		lifespan on
+		workers 1
+		venv "./venv"
 	}
 
-	route /stream/* {
-		python {
-			module_asgi "main:app"
-			lifespan on
-			workers 1
-			venv "./venv"
-		}
+	python /stream/* {
+		module_asgi "main:app"
+		lifespan on
+		workers 1
+		venv "./venv"
 	}
 
 	route / {

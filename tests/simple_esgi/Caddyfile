@@ -6,12 +6,10 @@
 	}
 }
 localhost:9080 {
-	route /* {
-		python {
-			module_esgi "main:application"
-			runtime gevent
-			workers 1
-			venv "./venv"
-		}
+	python /* {
+		module_esgi "main:application"
+		runtime gevent
+		workers 1
+		venv "./venv"
 	}
 }
