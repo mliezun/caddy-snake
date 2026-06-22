@@ -15,24 +15,56 @@ permissions:
   contents: write
 
 jobs:
-  build:
+  build-linux:
     strategy:
       fail-fast: false
       matrix:
         include:
           - os: ubuntu-22.04
             artifact: caddy-linux-amd64
-            run_on_pr: true
           - os: ubuntu-22.04-arm
             artifact: caddy-linux-arm64
-            run_on_pr: true
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version: "1.26"
+          cache: false
+      - name: Install Xcaddy
+        run: go install github.com/caddyserver/xcaddy/cmd/xcaddy@latest
+      - name: Build the server
+        run: CGO_ENABLED=0 xcaddy build --with github.com/mliezun/caddy-snake=.
+      - name: Rename binary
+        run: mv caddy ${{ matrix.artifact }} # zizmor: ignore[template-injection]
+      - name: Upload caddy binary
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.artifact }}
+      - name: Package caddy binary
+        if: github.event_name == 'release'
+        run: | # zizmor: ignore[template-injection]
+          tar -czf ${{ matrix.artifact }}.tar.gz ${{ matrix.artifact }}
+      - name: Upload to release
+        if: github.event_name == 'release'
+        run: | # zizmor: ignore[template-injection]
+          gh release upload ${{ github.event.release.tag_name }} ${{ matrix.artifact }}.tar.gz --repo ${{ github.repository }} --clobber
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  build-macos:
+    if: github.event_name != 'pull_request'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
           - os: macos-15
             artifact: caddy-darwin-arm64
-            run_on_pr: false
           - os: macos-15-intel
             artifact: caddy-darwin-amd64
-            run_on_pr: false
-    if: matrix.run_on_pr || github.event_name != 'pull_request'
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1

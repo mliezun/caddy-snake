@@ -15,7 +15,7 @@ permissions:
   contents: write
 
 jobs:
-  build:
+  build-linux:
     env:
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     strategy:
@@ -25,17 +25,77 @@ jobs:
         include:
           - os: ubuntu-22.04
             pybs_arch: x86_64_v2-unknown-linux-gnu
-            run_on_pr: true
           - os: ubuntu-22.04-arm
             pybs_arch: aarch64-unknown-linux-gnu
-            run_on_pr: true
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version: "1.26"
+          cache: false
+      - name: Install Xcaddy
+        run: go install github.com/caddyserver/xcaddy/cmd/xcaddy@latest
+      - name: Build the server
+        working-directory: cmd/embed
+        run: CGO_ENABLED=0 xcaddy build --with github.com/mliezun/caddy-snake=../..
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.13"
+      - name: Retrieve python build standalone
+        if: ${{ !endsWith(matrix.python-version, '-nogil') }}
+        working-directory: cmd/embed
+        run: | # zizmor: ignore[template-injection]
+          python3 pybs.py latest --python-version ${{ matrix.python-version }} --architecture ${{ matrix.pybs_arch }} --build-config pgo+lto --content-type install_only_stripped
+          mv cpython-*.tar.gz python-standalone.tar.gz
+          go build main.go
+          mv main caddy
+      - name: Retrieve python build standalone (nogil)
+        if: ${{ endsWith(matrix.python-version, '-nogil') }}
+        working-directory: cmd/embed
+        run: | # zizmor: ignore[template-injection]
+          PY_VERSION_BASE="${{ matrix.python-version }}"
+          PY_VERSION_BASE="${PY_VERSION_BASE%-nogil}"
+          python3 pybs.py latest --python-version "${PY_VERSION_BASE}" --architecture ${{ matrix.pybs_arch }} --build-config freethreaded+pgo+lto --content-type full
+          tar -xf cpython-*.tar.zst
+          mv python/install .
+          rm -rf python
+          mv install python
+          tar -czf python-standalone.tar.gz python
+          go build main.go
+          mv main caddy
+      - name: Upload caddy standalone
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: caddy-standalone-${{ matrix.python-version }}-${{ matrix.pybs_arch }}
+          path: |
+            cmd/embed/caddy
+      - name: Package caddy standalone
+        if: github.event_name == 'release'
+        run: | # zizmor: ignore[template-injection]
+          tar -czf caddy-standalone-${{ matrix.python-version }}-${{ matrix.pybs_arch }}.tar.gz cmd/embed/caddy
+      - name: Upload to release
+        if: github.event_name == 'release'
+        run: | # zizmor: ignore[template-injection]
+          gh release upload ${{ github.event.release.tag_name }} caddy-standalone-${{ matrix.python-version }}-${{ matrix.pybs_arch }}.tar.gz --repo ${{ github.repository }} --clobber
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  build-macos:
+    if: github.event_name != 'pull_request'
+    env:
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.12", "3.13", "3.13-nogil", "3.14", "3.14-nogil"]
+        include:
           - os: macos-15
             pybs_arch: aarch64-apple-darwin
-            run_on_pr: false
           - os: macos-15-intel
             pybs_arch: x86_64-apple-darwin
-            run_on_pr: false
-    if: matrix.run_on_pr || github.event_name != 'pull_request'
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
