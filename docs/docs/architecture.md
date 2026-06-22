@@ -6,7 +6,7 @@ sidebar_position: 5
 
 # Architecture
 
-Caddy-Snake is a Caddy plugin that bridges the gap between Caddy's HTTP server and Python web applications. It translates HTTP requests into Python objects and communicates with WSGI or ASGI applications using their respective protocols.
+Caddy-Snake is a Caddy plugin that bridges the gap between Caddy's HTTP server and Python web applications. The Go plugin forwards HTTP requests to Python worker subprocesses, which speak WSGI, ASGI, or ESGI to your application.
 
 ---
 
@@ -16,25 +16,24 @@ Caddy-Snake is a Caddy plugin that bridges the gap between Caddy's HTTP server a
 
 1. Caddy receives an HTTP request
 2. The request is routed to the Caddy-Snake plugin based on the Caddyfile configuration
-3. The plugin translates the request into Python objects:
-   - For WSGI: Creates a WSGI environment dictionary
-   - For ASGI: Creates an ASGI scope dictionary
-4. The request is dispatched to a worker process running the Python application
-5. The Python application processes the request and returns a response
-6. The plugin translates the response back to HTTP
-7. Caddy sends the response to the client
+3. The plugin selects a Python worker (round-robin across the worker pool)
+4. The plugin forwards the HTTP request to the worker over a Unix domain socket (loopback TCP on Windows) using an internal reverse proxy
+5. The worker ([`caddysnake.py`](https://github.com/mliezun/caddy-snake/blob/main/caddysnake.py)) translates the HTTP request into WSGI, ASGI, or ESGI protocol calls
+6. The Python application processes the request and returns a response
+7. The worker sends the HTTP response back to the plugin
+8. Caddy sends the response to the client
 
 ---
 
 ## Python Integration
 
-The plugin uses Python's C API to embed a Python interpreter within the Caddy process. This integration is achieved through CGO, which allows Go code to call C functions and vice versa.
+The plugin does not embed Python in the Caddy process. Instead, it spawns one or more **Python worker subprocesses** that run the bundled [`caddysnake.py`](https://github.com/mliezun/caddy-snake/blob/main/caddysnake.py) script. Each worker listens on a private Unix domain socket (or loopback TCP on Windows) and serves your WSGI, ASGI, or ESGI application.
 
 Key aspects of the integration:
-- Python objects are created and managed via the C API (`PyObject`, `PyDict`, `PyList`, etc.)
-- Reference counting is carefully managed to prevent memory leaks
-- The GIL (Global Interpreter Lock) is properly acquired/released when crossing the Go/Python boundary
-- Resources are cleaned up after each request
+- **No CGO or Python C API** — the Go plugin and Python workers communicate over stream sockets using HTTP
+- **Embedded worker script** — `caddysnake.py` is bundled into the plugin and written to a temporary directory at startup
+- **Configurable Python binary** — workers use `python_path`, the venv interpreter, or `python3` from `PATH`
+- **Pre-built standalone binaries** bundle a full Python distribution and pass its interpreter via `--python-path`
 
 ---
 
@@ -59,10 +58,9 @@ The autoreload feature provides hot-reloading during development without restart
 2. Only `.py` file events are considered (write, create, remove, rename)
 3. Rapid changes are debounced with a 500ms window (e.g. when an editor saves and auto-formats)
 4. When the debounce fires:
-   - The Python module cache (`sys.modules`) is invalidated for all modules under the working directory
-   - The old application is cleaned up
-   - The Python module is re-imported and a new application is created
-   - The new app replaces the old one atomically
+   - New worker subprocesses are started via the factory function
+   - The new worker group replaces the old one atomically
+   - Old worker processes are terminated after the swap
 5. A read/write lock ensures in-flight requests complete before the swap
 6. If the reload fails (e.g. syntax error in Python code), all subsequent requests return HTTP 500 until the next successful reload
 7. If the app cannot be recreated at all (e.g. the working directory was deleted), the process terminates with exit code 1 to avoid silently serving errors indefinitely
@@ -120,18 +118,19 @@ When `autoreload` is enabled on a dynamic app, each resolved working directory g
 
 ## WSGI Implementation
 
-The WSGI implementation follows the [PEP 3333](https://peps.python.org/pep-3333/) specification:
+The WSGI implementation in [`caddysnake.py`](https://github.com/mliezun/caddy-snake/blob/main/caddysnake.py) follows the [PEP 3333](https://peps.python.org/pep-3333/) specification:
 
-1. Creates a WSGI environment dictionary with all required keys (`REQUEST_METHOD`, `PATH_INFO`, `QUERY_STRING`, headers, etc.)
-2. Calls the WSGI application callable with the environment and a `start_response` callback
-3. Collects the response status, headers, and body
-4. Writes the response back to the HTTP client via Caddy
+1. Parses the proxied HTTP request into WSGI components
+2. Builds a WSGI environment dictionary with all required keys (`REQUEST_METHOD`, `PATH_INFO`, `QUERY_STRING`, headers, etc.)
+3. Calls the WSGI application callable with the environment and a `start_response` callback
+4. Collects the response status, headers, and body
+5. Writes the HTTP response back to the Go plugin
 
 ## ASGI Implementation
 
-The ASGI implementation follows the [ASGI specification](https://asgi.readthedocs.io/en/latest/):
+The ASGI implementation in [`caddysnake.py`](https://github.com/mliezun/caddy-snake/blob/main/caddysnake.py) follows the [ASGI specification](https://asgi.readthedocs.io/en/latest/):
 
-1. Creates an ASGI scope dictionary with connection details
+1. Parses the proxied HTTP request into an ASGI scope dictionary with connection details
 2. Manages the ASGI protocol lifecycle via `receive` and `send` callables
 3. Supports HTTP and WebSocket connections
 4. Optionally handles the lifespan protocol for application startup/shutdown events
@@ -146,12 +145,11 @@ When a `venv` is specified, the packages are added to the global `sys.path`. Thi
 
 ---
 
-## Memory Management
+## Worker Lifecycle
 
-The plugin carefully manages memory between Go and Python:
+The plugin manages Python worker subprocesses from the Go side:
 
-- Uses CGO to safely pass data between Go and Python
-- Properly handles Python object reference counting (`Py_INCREF`/`Py_DECREF`)
-- Cleans up resources after each request
-- Manages WebSocket connections and their lifecycle
-- Old app instances are properly cleaned up during autoreload and dynamic module eviction
+- Workers are started with `exec.Command` and the bundled `caddysnake.py` script
+- Idle HTTP connections to workers are pooled via Go's `http.Transport`
+- Workers receive SIGTERM on Unix for graceful shutdown (ASGI lifespan); Windows uses process kill
+- Old worker groups are cleaned up during autoreload and dynamic module eviction

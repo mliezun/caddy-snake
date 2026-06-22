@@ -7,7 +7,7 @@ tags: [python, docs, caddy-snake, go, web]
 
 Releasing docs for caddy-snake a plugin provides native support for Python apps.
 
-It uses the Python C API to run applications directly inside Caddy, avoiding the need for an extra layer of HTTP proxy.
+It spawns Python worker subprocesses managed by the Caddy plugin and talks to them over a Unix domain socket, avoiding a separately configured Gunicorn or Uvicorn server.
 
 Supports both WSGI and ASGI, which means you can run all types of frameworks like Flask, Django and FastAPI.
 

@@ -11,7 +11,7 @@ import {themes as prismThemes} from 'prism-react-renderer';
 /** @type {import('@docusaurus/types').Config} */
 const config = {
   title: 'Caddy Snake',
-  tagline: 'Embed Python WSGI/ASGI applications into Caddy',
+  tagline: 'Run Python WSGI/ASGI apps with Caddy',
   favicon: 'img/favicon.ico',
 
   // Set the production url of your site here

@@ -69,7 +69,7 @@ When you run `caddysnake --server-type wsgi --app main:app`, the wrapper:
 2. Builds the equivalent `caddy python-server` command with all the flags
 3. Uses `os.execv` to replace the current process with the Caddy binary
 
-The package uses the system Python at runtime — the `caddysnake-cli` binary is linked against your installed Python version. This is different from the [pre-built standalone binaries](#pre-built-standalone-binaries), which embed a full Python distribution.
+At runtime, the bundled Caddy binary spawns Python worker subprocesses using your system Python (or a venv interpreter). This is different from the [pre-built standalone binaries](#pre-built-standalone-binaries), which bundle a full Python distribution and pass it via `--python-path`.
 
 ### Build pipeline
 
@@ -246,20 +246,19 @@ For maximum control, you can build Caddy with the caddy-snake plugin from source
 
 ### Requirements
 
-- Python >= 3.12 + dev files (`python3-dev`)
-- C compiler and build tools (`build-essential`, `pkg-config`)
-- Go >= 1.25
+- Python >= 3.12 (runtime — used by worker subprocesses)
+- Go >= 1.26
 - [xcaddy](https://github.com/caddyserver/xcaddy)
 
 ### Build
 
 ```bash
 # Install dependencies (Ubuntu 24.04)
-sudo apt-get install python3-dev build-essential pkg-config golang
+sudo apt-get install python3 golang
 go install github.com/caddyserver/xcaddy/cmd/xcaddy@latest
 
 # Build Caddy with caddy-snake
-CGO_ENABLED=1 xcaddy build --with github.com/mliezun/caddy-snake
+CGO_ENABLED=0 xcaddy build --with github.com/mliezun/caddy-snake
 ```
 
 The resulting `caddy` binary uses your system Python and requires it at runtime.

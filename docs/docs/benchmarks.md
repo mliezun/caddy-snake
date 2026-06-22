@@ -4,7 +4,7 @@ sidebar_position: 7
 
 # Benchmarks
 
-Caddy Snake embeds Python directly inside Caddy, eliminating the overhead of a separate upstream process where the design allows. The harness compares **Flask (WSGI)**, **FastAPI (ASGI)**, and **ESGI (gevent)** on a minimal JSON `GET /hello` endpoint. The table below matches the committed [`benchmarks/results.json`](https://github.com/mliezun/caddy-snake/blob/main/benchmarks/results.json), produced on a **4 vCPU / 16 GB cloud VM (linux/amd64)** via the Docker harness (`benchmarks/Dockerfile`).
+Caddy Snake runs Python in worker subprocesses managed by the plugin over a Unix domain socket, avoiding a separately configured Gunicorn or Uvicorn server and the extra HTTP hop of a traditional reverse-proxy setup. The harness compares **Flask (WSGI)**, **FastAPI (ASGI)**, and **ESGI (gevent)** on a minimal JSON `GET /hello` endpoint. The table below matches the committed [`benchmarks/results.json`](https://github.com/mliezun/caddy-snake/blob/main/benchmarks/results.json), produced on a **4 vCPU / 16 GB cloud VM (linux/amd64)** via the Docker harness (`benchmarks/Dockerfile`).
 
 ## Test configurations
 

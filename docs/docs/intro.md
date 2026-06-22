@@ -6,7 +6,7 @@ sidebar_position: 1
 
 Let's discover **Caddy Snake in less than 5 minutes**.
 
-Caddy Snake is a Caddy plugin that lets you run Python web apps directly inside Caddy — no reverse proxy needed. It embeds Python via the C API, so your WSGI or ASGI application runs in the same process as Caddy.
+Caddy Snake is a Caddy plugin that lets you run Python web apps directly inside Caddy — no reverse proxy needed. The plugin spawns Python worker subprocesses and forwards requests over a Unix domain socket (loopback TCP on Windows), so you do not need a separate Gunicorn or Uvicorn process.
 
 **Works with Flask, Django, FastAPI, and any other WSGI/ASGI framework.**
 
@@ -20,7 +20,7 @@ The fastest way to get started. Install with `pip` and you're ready to go:
 pip install caddysnake
 ```
 
-This installs the `caddysnake` command, which is a thin wrapper around a pre-compiled Caddy binary with the caddy-snake plugin and Python embedded. No system Python or C compiler required.
+This installs the `caddysnake` command, which is a thin wrapper around a pre-compiled Caddy binary with the caddy-snake plugin. No C compiler or manual build step required — workers use the Python interpreter from your environment.
 
 Available on [PyPI](https://pypi.org/project/caddysnake/) for Python 3.12 through 3.14 on Linux (x86_64 and ARM64).
 
@@ -86,19 +86,18 @@ Pre-built binaries are available for Python 3.12 through 3.14 (including 3.13-no
 ## Option 3: Build from source
 
 ```bash
-CGO_ENABLED=1 xcaddy build --with github.com/mliezun/caddy-snake
+CGO_ENABLED=0 xcaddy build --with github.com/mliezun/caddy-snake
 ```
 
 ### Requirements
 
-- Python >= 3.12 + dev files
-- C compiler and build tools
-- Go >= 1.25 and [xcaddy](https://github.com/caddyserver/xcaddy)
+- Python >= 3.12 (runtime — used by worker subprocesses)
+- Go >= 1.26 and [xcaddy](https://github.com/caddyserver/xcaddy)
 
 Install on Ubuntu 24.04:
 
 ```bash
-sudo apt-get install python3-dev build-essential pkg-config golang
+sudo apt-get install python3 golang
 go install github.com/caddyserver/xcaddy/cmd/xcaddy@latest
 ```
 

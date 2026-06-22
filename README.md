@@ -12,7 +12,7 @@
 
 Caddy Snake is a Caddy plugin that lets you **run Python web apps directly inside Caddy** — no reverse proxy needed.
 
-It embeds Python via the C API, so your WSGI or ASGI application runs in the same process as Caddy. This means less overhead, simpler deployments, and automatic HTTPS out of the box.
+The Caddy plugin spawns Python worker subprocesses and forwards requests over a Unix domain socket (loopback TCP on Windows) — no separate Gunicorn or Uvicorn process, and no reverse-proxy configuration. This means less overhead, simpler deployments, and automatic HTTPS out of the box.
 
 To make it easier to get started you can also grab one of the precompiled binaries that come with Caddy and Python, or one of the Docker images.
 
@@ -76,19 +76,18 @@ This starts a server on port `9080` serving your app. See `./caddy python-server
 ### Option 2: Build from source
 
 ```bash
-CGO_ENABLED=1 xcaddy build --with github.com/mliezun/caddy-snake
+CGO_ENABLED=0 xcaddy build --with github.com/mliezun/caddy-snake
 ```
 
 #### Requirements
 
-- Python >= 3.12 + dev files
-- C compiler and build tools
+- Python >= 3.12 (runtime — used by worker subprocesses)
 - Go >= 1.26 and [xcaddy](https://github.com/caddyserver/xcaddy)
 
 Install on Ubuntu 24.04:
 
 ```bash
-sudo apt-get install python3-dev build-essential pkg-config golang
+sudo apt-get install python3 golang
 go install github.com/caddyserver/xcaddy/cmd/xcaddy@latest
 ```
 
