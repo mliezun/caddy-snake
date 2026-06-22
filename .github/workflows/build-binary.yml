@@ -1,4 +1,4 @@
-name: Caddy Binary Linux
+name: Caddy Binary
 
 on:
   pull_request:
@@ -19,7 +19,20 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-22.04, ubuntu-22.04-arm]
+        include:
+          - os: ubuntu-22.04
+            artifact: caddy-linux-amd64
+            run_on_pr: true
+          - os: ubuntu-22.04-arm
+            artifact: caddy-linux-arm64
+            run_on_pr: true
+          - os: macos-15
+            artifact: caddy-darwin-arm64
+            run_on_pr: false
+          - os: macos-15-intel
+            artifact: caddy-darwin-amd64
+            run_on_pr: false
+    if: matrix.run_on_pr || github.event_name != 'pull_request'
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
@@ -33,29 +46,20 @@ jobs:
         run: go install github.com/caddyserver/xcaddy/cmd/xcaddy@latest
       - name: Build the server
         run: CGO_ENABLED=0 xcaddy build --with github.com/mliezun/caddy-snake=.
-      - name: Choose architecture
-        id: choose-arch
-        run: |
-          if [ "${{ matrix.os }}" == "ubuntu-22.04-arm" ]; then
-            ARCH=arm64
-          else
-            ARCH=amd64
-          fi
-          echo "ARCH=${ARCH}" >> $GITHUB_OUTPUT
       - name: Rename binary
-        run: mv caddy caddy-linux-${{ steps.choose-arch.outputs.ARCH }} # zizmor: ignore[template-injection]
+        run: mv caddy ${{ matrix.artifact }} # zizmor: ignore[template-injection]
       - name: Upload caddy binary
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: caddy-linux-${{ steps.choose-arch.outputs.ARCH }}
-          path: caddy-linux-${{ steps.choose-arch.outputs.ARCH }}
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.artifact }}
       - name: Package caddy binary
         if: github.event_name == 'release'
         run: | # zizmor: ignore[template-injection]
-          tar -czf caddy-linux-${{ steps.choose-arch.outputs.ARCH }}.tar.gz caddy-linux-${{ steps.choose-arch.outputs.ARCH }}
+          tar -czf ${{ matrix.artifact }}.tar.gz ${{ matrix.artifact }}
       - name: Upload to release
         if: github.event_name == 'release'
         run: | # zizmor: ignore[template-injection]
-          gh release upload ${{ github.event.release.tag_name }} caddy-linux-${{ steps.choose-arch.outputs.ARCH }}.tar.gz --repo ${{ github.repository }} --clobber
+          gh release upload ${{ github.event.release.tag_name }} ${{ matrix.artifact }}.tar.gz --repo ${{ github.repository }} --clobber
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
