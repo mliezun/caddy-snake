@@ -273,7 +273,7 @@ hey -c 100 -z 10s http://localhost:9080/hello
 
 ## Releases
 
-Patch releases use semantic tags `v0.x.y` on `main`. Publishing a release triggers CI to build and attach Linux binaries (see `.github/workflows/build-binary.yml`, `build-standalone.yml`, `python-build.yml`, `docker-publish.yml`).
+Patch releases use semantic tags `v0.x.y` on `main`. Publishing a release triggers CI to build and attach Linux and macOS binaries (see `.github/workflows/build-binary.yml`, `build-standalone.yml`, `python-build.yml`, `docker-publish.yml`).
 
 ### Checklist
 

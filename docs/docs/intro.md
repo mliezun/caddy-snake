@@ -22,7 +22,7 @@ pip install caddysnake
 
 This installs the `caddysnake` command, which is a thin wrapper around a pre-compiled Caddy binary with the caddy-snake plugin. No C compiler or manual build step required — workers use the Python interpreter from your environment.
 
-Available on [PyPI](https://pypi.org/project/caddysnake/) for Python 3.12 through 3.14 on Linux (x86_64 and ARM64).
+Available on [PyPI](https://pypi.org/project/caddysnake/) for Python 3.12 through 3.14 on Linux and macOS (x86_64 and ARM64).
 
 ### Usage
 
@@ -79,7 +79,7 @@ tar -xzf caddy-standalone-3.13-x86_64_v2-unknown-linux-gnu.tar.gz
 ./caddy python-server --server-type wsgi --app main:app
 ```
 
-Pre-built binaries are available for Python 3.12 through 3.14 (including 3.13-nogil and 3.14-nogil) on Linux x86_64 and ARM64. See the [Pre-built Binaries](installation.md#pre-built-standalone-binaries) page for details on how they work.
+Pre-built binaries are available for Python 3.12 through 3.14 (including 3.13-nogil and 3.14-nogil) on Linux and macOS (x86_64 and ARM64). See the [Pre-built Binaries](installation.md#pre-built-standalone-binaries) page for details on how they work.
 
 ---
 

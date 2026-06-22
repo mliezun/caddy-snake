@@ -20,7 +20,7 @@ The [`caddysnake`](https://pypi.org/project/caddysnake/) package on PyPI is the 
 pip install caddysnake
 ```
 
-**Requirements:** Python >= 3.12, Linux (x86_64 or ARM64)
+**Requirements:** Python >= 3.12, Linux (x86_64 or ARM64) or macOS (x86_64 or ARM64)
 
 Available Python versions: 3.12, 3.13, 3.14
 
@@ -99,6 +99,8 @@ caddy-standalone-{python-version}-{architecture}.tar.gz
 For example:
 - `caddy-standalone-3.13-x86_64_v2-unknown-linux-gnu.tar.gz` — Python 3.13, Linux x86_64
 - `caddy-standalone-3.13-aarch64-unknown-linux-gnu.tar.gz` — Python 3.13, Linux ARM64
+- `caddy-standalone-3.13-x86_64-apple-darwin.tar.gz` — Python 3.13, macOS Intel
+- `caddy-standalone-3.13-aarch64-apple-darwin.tar.gz` — Python 3.13, macOS Apple Silicon
 - `caddy-standalone-3.13-nogil-x86_64_v2-unknown-linux-gnu.tar.gz` — Python 3.13 free-threaded
 - `caddy-standalone-3.14-nogil-x86_64_v2-unknown-linux-gnu.tar.gz` — Python 3.14 free-threaded
 
@@ -106,11 +108,11 @@ For example:
 
 | Python | Architectures | Notes |
 |--------|--------------|-------|
-| 3.12 | x86_64, ARM64 | |
-| 3.13 | x86_64, ARM64 | |
-| 3.13-nogil | x86_64, ARM64 | Free-threaded (PEP 703) |
-| 3.14 | x86_64, ARM64 | |
-| 3.14-nogil | x86_64, ARM64 | Free-threaded (PEP 703) |
+| 3.12 | Linux x86_64, Linux ARM64, macOS x86_64, macOS ARM64 | |
+| 3.13 | Linux x86_64, Linux ARM64, macOS x86_64, macOS ARM64 | |
+| 3.13-nogil | Linux x86_64, Linux ARM64, macOS x86_64, macOS ARM64 | Free-threaded (PEP 703) |
+| 3.14 | Linux x86_64, Linux ARM64, macOS x86_64, macOS ARM64 | |
+| 3.14-nogil | Linux x86_64, Linux ARM64, macOS x86_64, macOS ARM64 | Free-threaded (PEP 703) |
 
 ### Usage
 
