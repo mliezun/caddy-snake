@@ -291,6 +291,8 @@ EOF
 )"
 ```
 
-4. **Wait for release workflows** — confirm `Caddy Binary Linux`, `Caddy Standalone Linux`, `Python Build Package`, and `Docker Publish` jobs succeed and assets appear on the release page (`gh release view v0.5.5`).
+4. **Wait for release workflows** — confirm `Caddy Binary`, `Caddy Standalone`, `Python Build Package`, and `Docker Publish` jobs succeed and assets appear on the release page (`gh release view v0.5.5`). The PyPI workflow sets the wheel version from the git tag (`v0.5.5` → `0.5.5`) in CI; you do not need to bump `cmd/cli/pyproject.toml` before tagging.
 
-Do **not** bump `cmd/cli/pyproject.toml` manually for plugin-only releases unless you are also publishing a new PyPI wheel; standalone/binary artifacts are built from the tagged commit in CI.
+To republish a tag to PyPI manually (e.g. after fixing the publish workflow), run **Python Build Package** via workflow dispatch on `main` with the tag name (e.g. `v0.5.7`).
+
+Do **not** bump `cmd/cli/pyproject.toml` manually for plugin-only GitHub releases when you are **not** publishing a PyPI wheel; standalone/binary artifacts are built from the tagged commit in CI.

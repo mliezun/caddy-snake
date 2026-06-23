@@ -4,6 +4,11 @@ on:
   push:
     tags: ["v*.*.*"]
   workflow_dispatch:
+    inputs:
+      tag:
+        description: "Git tag to build and publish (e.g. v0.5.7). Uses workflow from main; checks out this tag."
+        required: true
+        type: string
 
 permissions: {}
 
@@ -29,6 +34,19 @@ jobs:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           persist-credentials: false
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
+      - name: Set package version from tag
+        run: | # zizmor: ignore[template-injection]
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            TAG="${{ inputs.tag }}"
+          else
+            TAG="${GITHUB_REF_NAME}"
+          fi
+          VERSION="${TAG#v}"
+          echo "Publishing caddysnake ${VERSION} from ${TAG}"
+          sed -i.bak "s/^version = \".*\"/version = \"${VERSION}\"/" cmd/cli/pyproject.toml
+          rm -f cmd/cli/pyproject.toml.bak
+          grep '^version' cmd/cli/pyproject.toml
       - name: Set up Docker Buildx
         if: matrix.use_docker
         uses: docker/setup-buildx-action@f95db51fddba0c2d1ec667646a06c2ce06100226
@@ -68,7 +86,9 @@ jobs:
 
   publish:
     needs: build
-    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    if: |
+      (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) ||
+      (github.event_name == 'workflow_dispatch' && inputs.tag != '')
     # The pypa/gh-action-pypi-publish action ships only a linux/amd64 image,
     # so the publish job must run on an amd64 runner regardless of where the
     # wheels were built.
