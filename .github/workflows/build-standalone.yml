@@ -22,20 +22,22 @@ jobs:
       fail-fast: false
       matrix:
         python-version: ["3.12", "3.13", "3.13-nogil", "3.14", "3.14-nogil"]
-        include:
-          - os: ubuntu-22.04
-            pybs_arch: x86_64_v2-unknown-linux-gnu
-          - os: ubuntu-22.04-arm
-            pybs_arch: aarch64-unknown-linux-gnu
-          - os: macos-15
-            pybs_arch: aarch64-apple-darwin
-          - os: macos-15-intel
-            pybs_arch: x86_64-apple-darwin
+        os: [ubuntu-22.04, ubuntu-22.04-arm, macos-15, macos-15-intel]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           persist-credentials: false
+      - name: Choose architecture
+        id: choose-arch
+        run: |
+          case "${{ matrix.os }}" in
+            ubuntu-22.04) PYBS_ARCH=x86_64_v2-unknown-linux-gnu ;;
+            ubuntu-22.04-arm) PYBS_ARCH=aarch64-unknown-linux-gnu ;;
+            macos-15) PYBS_ARCH=aarch64-apple-darwin ;;
+            macos-15-intel) PYBS_ARCH=x86_64-apple-darwin ;;
+          esac
+          echo "PYBS_ARCH=${PYBS_ARCH}" >> $GITHUB_OUTPUT
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version: "1.26"
@@ -52,7 +54,7 @@ jobs:
         if: ${{ !endsWith(matrix.python-version, '-nogil') }}
         working-directory: cmd/embed
         run: | # zizmor: ignore[template-injection]
-          python3 pybs.py latest --python-version ${{ matrix.python-version }} --architecture ${{ matrix.pybs_arch }} --build-config pgo+lto --content-type install_only_stripped
+          python3 pybs.py latest --python-version ${{ matrix.python-version }} --architecture ${{ steps.choose-arch.outputs.PYBS_ARCH }} --build-config pgo+lto --content-type install_only_stripped
           mv cpython-*.tar.gz python-standalone.tar.gz
           go build main.go
           mv main caddy
@@ -62,7 +64,7 @@ jobs:
         run: | # zizmor: ignore[template-injection]
           PY_VERSION_BASE="${{ matrix.python-version }}"
           PY_VERSION_BASE="${PY_VERSION_BASE%-nogil}"
-          python3 pybs.py latest --python-version "${PY_VERSION_BASE}" --architecture ${{ matrix.pybs_arch }} --build-config freethreaded+pgo+lto --content-type full
+          python3 pybs.py latest --python-version "${PY_VERSION_BASE}" --architecture ${{ steps.choose-arch.outputs.PYBS_ARCH }} --build-config freethreaded+pgo+lto --content-type full
           tar -xf cpython-*.tar.zst
           mv python/install .
           rm -rf python
@@ -73,16 +75,16 @@ jobs:
       - name: Upload caddy standalone
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: caddy-standalone-${{ matrix.python-version }}-${{ matrix.pybs_arch }}
+          name: caddy-standalone-${{ matrix.python-version }}-${{ steps.choose-arch.outputs.PYBS_ARCH }}
           path: |
             cmd/embed/caddy
       - name: Package caddy standalone
         if: github.event_name == 'release'
         run: | # zizmor: ignore[template-injection]
-          tar -czf caddy-standalone-${{ matrix.python-version }}-${{ matrix.pybs_arch }}.tar.gz cmd/embed/caddy
+          tar -czf caddy-standalone-${{ matrix.python-version }}-${{ steps.choose-arch.outputs.PYBS_ARCH }}.tar.gz cmd/embed/caddy
       - name: Upload to release
         if: github.event_name == 'release'
         run: | # zizmor: ignore[template-injection]
-          gh release upload ${{ github.event.release.tag_name }} caddy-standalone-${{ matrix.python-version }}-${{ matrix.pybs_arch }}.tar.gz --repo ${{ github.repository }} --clobber
+          gh release upload ${{ github.event.release.tag_name }} caddy-standalone-${{ matrix.python-version }}-${{ steps.choose-arch.outputs.PYBS_ARCH }}.tar.gz --repo ${{ github.repository }} --clobber
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
