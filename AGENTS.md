@@ -279,7 +279,19 @@ Patch releases use semantic tags `v0.x.y` on `main`. Publishing a release trigge
 
 1. **Ensure `main` is green** — wait until all CI workflows on the latest `main` commit pass (`gh run list --branch main`, or watch in GitHub Actions).
 2. **Choose the next patch tag** — inspect the latest release: `gh release list --limit 1` (e.g. after `v0.5.4`, tag `v0.5.5`).
-3. **Create the GitHub release** (creates the tag on `main` and starts asset builds):
+3. **Bump the PyPI package version** in `cmd/cli/pyproject.toml` so it matches the tag you are about to create (without the `v` prefix). Commit and push to `main` before tagging:
+
+```bash
+# Example: preparing v0.5.5
+# Set version = "0.5.5" in cmd/cli/pyproject.toml, then:
+git add cmd/cli/pyproject.toml
+git commit -m "Bump caddysnake PyPI version to 0.5.5."
+git push origin main
+```
+
+The Python build workflow also sets the wheel version from the git tag in CI, but keeping `pyproject.toml` in sync avoids confusion and ensures local/`pip install` builds report the correct version.
+
+4. **Create the GitHub release** (creates the tag on `main` and starts asset builds):
 
 ```bash
 gh release create v0.5.5 --target main --title "v0.5.5" --notes "$(cat <<'EOF'
@@ -291,8 +303,6 @@ EOF
 )"
 ```
 
-4. **Wait for release workflows** — confirm `Caddy Binary`, `Caddy Standalone`, `Python Build Package`, and `Docker Publish` jobs succeed and assets appear on the release page (`gh release view v0.5.5`). The PyPI workflow sets the wheel version from the git tag (`v0.5.5` → `0.5.5`) in CI; you do not need to bump `cmd/cli/pyproject.toml` before tagging.
+5. **Wait for release workflows** — confirm `Caddy Binary`, `Caddy Standalone`, `Python Build Package`, and `Docker Publish` jobs succeed and assets appear on the release page (`gh release view v0.5.5`). Confirm the new version appears on [PyPI](https://pypi.org/project/caddysnake/).
 
 To republish a tag to PyPI manually (e.g. after fixing the publish workflow), run **Python Build Package** via workflow dispatch on `main` with the tag name (e.g. `v0.5.7`).
-
-Do **not** bump `cmd/cli/pyproject.toml` manually for plugin-only GitHub releases when you are **not** publishing a PyPI wheel; standalone/binary artifacts are built from the tagged commit in CI.
