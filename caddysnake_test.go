@@ -1839,26 +1839,46 @@ func TestPythonDirectiveCaddyfileRouteOrder(t *testing.T) {
 		t.Fatal("expected at least one route")
 	}
 
-	firstPython := -1
-	firstFileServer := -1
+	var pythonIdxs []int
+	lastFileServer := -1
 	for i, routeRaw := range routes {
 		routeStr := string(routeRaw)
-		if firstPython < 0 && strings.Contains(routeStr, `"handler":"python"`) {
-			firstPython = i
+		if strings.Contains(routeStr, `"handler":"python"`) {
+			pythonIdxs = append(pythonIdxs, i)
 		}
-		if firstFileServer < 0 && strings.Contains(routeStr, `"handler":"file_server"`) {
-			firstFileServer = i
+		if strings.Contains(routeStr, `"handler":"file_server"`) {
+			lastFileServer = i
 		}
 	}
-	if firstPython < 0 {
-		t.Fatalf("no python route found in adapted config:\n%s", string(out))
+
+	// All three path-prefixed python blocks must be present.
+	if len(pythonIdxs) != 3 {
+		t.Fatalf("expected 3 python routes, found %d:\n%s", len(pythonIdxs), string(out))
 	}
-	if firstFileServer < 0 {
+	if lastFileServer < 0 {
 		t.Fatalf("no file_server route found in adapted config:\n%s", string(out))
 	}
-	if firstPython > firstFileServer {
-		t.Fatalf("python route at index %d should come before file_server at index %d\n%s",
-			firstPython, firstFileServer, string(out))
+
+	// Every python route must come before the catch-all file_server route.
+	for _, idx := range pythonIdxs {
+		if idx > lastFileServer {
+			t.Fatalf("python route at index %d should come before file_server at index %d\n%s",
+				idx, lastFileServer, string(out))
+		}
+	}
+
+	// Sanity check: each expected path is routed to python.
+	for _, path := range []string{"/docs", "/openapi.json", "/api/v1/*"} {
+		found := false
+		for _, idx := range pythonIdxs {
+			if strings.Contains(string(routes[idx]), path) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("expected a python route matching %q\n%s", path, string(out))
+		}
 	}
 }
 
