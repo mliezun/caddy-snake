@@ -1791,6 +1791,97 @@ func TestPythonDirectiveCaddyfileAdaptation(t *testing.T) {
 	}
 }
 
+func TestPythonDirectiveCaddyfileRouteOrder(t *testing.T) {
+	// Regression for #179: path-prefixed python blocks must be evaluated before
+	// a catch-all route block (e.g. SPA file_server), not after it.
+	input := `:9000 {
+		encode
+		python /docs {
+			module_asgi "__init__:app"
+		}
+		python /openapi.json {
+			module_asgi "__init__:app"
+		}
+		python /api/v1/* {
+			module_asgi "__init__:app"
+		}
+		route {
+			root * /web/dist
+			try_files {path} /index.html
+			file_server
+		}
+	}`
+	adapter := caddyfile.Adapter{ServerType: httpcaddyfile.ServerType{}}
+	out, _, err := adapter.Adapt([]byte(input), nil)
+	if err != nil {
+		t.Fatalf("unexpected adaptation error: %v", err)
+	}
+
+	var cfg struct {
+		Apps struct {
+			HTTP struct {
+				Servers map[string]struct {
+					Routes []json.RawMessage `json:"routes"`
+				} `json:"servers"`
+			} `json:"http"`
+		} `json:"apps"`
+	}
+	if err := json.Unmarshal(out, &cfg); err != nil {
+		t.Fatalf("unmarshal adapted config: %v", err)
+	}
+
+	var routes []json.RawMessage
+	for _, srv := range cfg.Apps.HTTP.Servers {
+		routes = srv.Routes
+		break
+	}
+	if len(routes) == 0 {
+		t.Fatal("expected at least one route")
+	}
+
+	var pythonIdxs []int
+	lastFileServer := -1
+	for i, routeRaw := range routes {
+		routeStr := string(routeRaw)
+		if strings.Contains(routeStr, `"handler":"python"`) {
+			pythonIdxs = append(pythonIdxs, i)
+		}
+		if strings.Contains(routeStr, `"handler":"file_server"`) {
+			lastFileServer = i
+		}
+	}
+
+	// All three path-prefixed python blocks must be present.
+	if len(pythonIdxs) != 3 {
+		t.Fatalf("expected 3 python routes, found %d:\n%s", len(pythonIdxs), string(out))
+	}
+	if lastFileServer < 0 {
+		t.Fatalf("no file_server route found in adapted config:\n%s", string(out))
+	}
+
+	// Every python route must come before the catch-all file_server route.
+	for _, idx := range pythonIdxs {
+		if idx > lastFileServer {
+			t.Fatalf("python route at index %d should come before file_server at index %d\n%s",
+				idx, lastFileServer, string(out))
+		}
+	}
+
+	// Sanity check: each expected path is routed to python.
+	for _, path := range []string{"/docs", "/openapi.json", "/api/v1/*"} {
+		found := false
+		for _, idx := range pythonIdxs {
+			if strings.Contains(string(routes[idx]), path) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("expected a python route matching %q\n%s", path, string(out))
+		}
+	}
+}
+
 func TestDynamicAppResolveWithNilReplacer(t *testing.T) {
 	d, _ := NewDynamicApp("main:app", "/home/static", "",
 		func(module, dir, venv string) (AppServer, error) {
