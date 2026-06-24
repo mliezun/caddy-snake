@@ -1791,6 +1791,77 @@ func TestPythonDirectiveCaddyfileAdaptation(t *testing.T) {
 	}
 }
 
+func TestPythonDirectiveCaddyfileRouteOrder(t *testing.T) {
+	// Regression for #179: path-prefixed python blocks must be evaluated before
+	// a catch-all route block (e.g. SPA file_server), not after it.
+	input := `:9000 {
+		encode
+		python /docs {
+			module_asgi "__init__:app"
+		}
+		python /openapi.json {
+			module_asgi "__init__:app"
+		}
+		python /api/v1/* {
+			module_asgi "__init__:app"
+		}
+		route {
+			root * /web/dist
+			try_files {path} /index.html
+			file_server
+		}
+	}`
+	adapter := caddyfile.Adapter{ServerType: httpcaddyfile.ServerType{}}
+	out, _, err := adapter.Adapt([]byte(input), nil)
+	if err != nil {
+		t.Fatalf("unexpected adaptation error: %v", err)
+	}
+
+	var cfg struct {
+		Apps struct {
+			HTTP struct {
+				Servers map[string]struct {
+					Routes []json.RawMessage `json:"routes"`
+				} `json:"servers"`
+			} `json:"http"`
+		} `json:"apps"`
+	}
+	if err := json.Unmarshal(out, &cfg); err != nil {
+		t.Fatalf("unmarshal adapted config: %v", err)
+	}
+
+	var routes []json.RawMessage
+	for _, srv := range cfg.Apps.HTTP.Servers {
+		routes = srv.Routes
+		break
+	}
+	if len(routes) == 0 {
+		t.Fatal("expected at least one route")
+	}
+
+	firstPython := -1
+	firstFileServer := -1
+	for i, routeRaw := range routes {
+		routeStr := string(routeRaw)
+		if firstPython < 0 && strings.Contains(routeStr, `"handler":"python"`) {
+			firstPython = i
+		}
+		if firstFileServer < 0 && strings.Contains(routeStr, `"handler":"file_server"`) {
+			firstFileServer = i
+		}
+	}
+	if firstPython < 0 {
+		t.Fatalf("no python route found in adapted config:\n%s", string(out))
+	}
+	if firstFileServer < 0 {
+		t.Fatalf("no file_server route found in adapted config:\n%s", string(out))
+	}
+	if firstPython > firstFileServer {
+		t.Fatalf("python route at index %d should come before file_server at index %d\n%s",
+			firstPython, firstFileServer, string(out))
+	}
+}
+
 func TestDynamicAppResolveWithNilReplacer(t *testing.T) {
 	d, _ := NewDynamicApp("main:app", "/home/static", "",
 		func(module, dir, venv string) (AppServer, error) {

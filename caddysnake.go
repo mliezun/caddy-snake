@@ -807,7 +807,7 @@ func (wg *PythonWorkerGroup) HandleRequest(rw http.ResponseWriter, req *http.Req
 func init() {
 	caddy.RegisterModule(CaddySnake{})
 	httpcaddyfile.RegisterHandlerDirective("python", parsePythonDirective)
-	httpcaddyfile.RegisterDirectiveOrder("python", httpcaddyfile.Before, "respond")
+	httpcaddyfile.RegisterDirectiveOrder("python", httpcaddyfile.Before, "route")
 	caddycmd.RegisterCommand(caddycmd.Command{
 		Name: "python-server",
 		Usage: "--server-type wsgi|asgi|esgi --app <module> " +
