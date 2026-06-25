@@ -129,6 +129,45 @@ curl -X POST http://localhost:9080/items \
 
 ---
 
+## Per-app environment variables
+
+Load configuration from a dotenv file and override individual keys inline. Each `python` block gets its own worker environment.
+
+```caddyfile
+route /shop/* {
+    python {
+        module_asgi "shop:app"
+        working_dir "/apps/shop"
+        env_file "/apps/shop/.env"
+        env_var APP_NAME "shop"
+    }
+}
+
+route /blog/* {
+    python {
+        module_wsgi "blog:app"
+        working_dir "/apps/blog"
+        env_file "/apps/blog/.env"
+        env_var APP_NAME "blog"
+    }
+}
+```
+
+For multi-tenant dynamic apps, use placeholders in `env_var` values and place `.env` in each tenant directory:
+
+```caddyfile
+*.example.com:9080 {
+    python /* {
+        module_asgi "{http.request.host.labels.2}:app"
+        working_dir "{http.request.host.labels.2}/"
+        env_file ".env"
+        env_var TENANT "{http.request.host.labels.2}"
+    }
+}
+```
+
+---
+
 ## Django (WSGI)
 
 Django is a full-featured web framework with a built-in admin interface and ORM.

@@ -233,6 +233,23 @@ The venv packages are added to the global `sys.path`, which means all Python app
 
 ---
 
+## Per-app environment variables
+
+Use `env_file` and `env_var` inside a `python` block to configure worker environment variables without setting them globally on the Caddy process. Inline `env_var` entries override values from `env_file` when both set the same name.
+
+```Caddyfile
+python {
+    module_wsgi "main:app"
+    working_dir "/var/www/myapp"
+    env_file "/var/www/myapp/.env"
+    env_var DEBUG "1"
+}
+```
+
+See the [configuration reference](reference#env_file) for precedence, dynamic placeholders, and reserved variable names.
+
+---
+
 ## Platform support
 
 | Platform       | Notes                    |

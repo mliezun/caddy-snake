@@ -9,6 +9,9 @@
 	python /* {
 		module_asgi "{http.request.host.labels.6}:app"
 		working_dir "{http.request.host.labels.6}/"
+		env_file ".env"
+		env_var APP_TEST_INLINE "{http.request.host.labels.6}_inline"
+		env_var APP_TEST_OVERRIDE "override_{http.request.host.labels.6}"
 		workers 1
 	}
 }

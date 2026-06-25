@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -62,9 +63,54 @@ func containsPlaceholder(s string) bool {
 	return strings.Contains(s, "{") && strings.Contains(s, "}")
 }
 
+func validateResolvedEnvConfig(dir string, envFiles []string) error {
+	for _, p := range envFiles {
+		if p == "" {
+			continue
+		}
+		if containsPlaceholder(p) {
+			return fmt.Errorf("env_file path contains unresolved placeholder: %q", p)
+		}
+		if hasDotDotSegment(p) {
+			return fmt.Errorf("env_file path contains path traversal: %q", p)
+		}
+		abs, err := resolveEnvFilePath(dir, p)
+		if err != nil {
+			return err
+		}
+		info, err := os.Stat(abs)
+		if err != nil {
+			return fmt.Errorf("env_file %q: %w", abs, err)
+		}
+		if info.IsDir() {
+			return fmt.Errorf("env_file %q is a directory", abs)
+		}
+	}
+	return nil
+}
+
+func envVarsCacheKey(m map[string]string) string {
+	if len(m) == 0 {
+		return ""
+	}
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	var b strings.Builder
+	for _, k := range keys {
+		b.WriteString(k)
+		b.WriteByte('=')
+		b.WriteString(m[k])
+		b.WriteByte(';')
+	}
+	return b.String()
+}
+
 // appFactory is a function that creates a new AppServer for a resolved
-// module, working directory and venv path combination.
-type appFactory func(resolvedModule, resolvedDir, resolvedVenv string) (AppServer, error)
+// module, working directory, venv path, and env configuration.
+type appFactory func(resolvedModule, resolvedDir, resolvedVenv string, envFiles []string, envVars map[string]string) (AppServer, error)
 
 // DynamicApp implements AppServer by lazily importing Python apps based on
 // Caddy placeholders resolved at request time. For example, when working_dir
@@ -73,10 +119,12 @@ type appFactory func(resolvedModule, resolvedDir, resolvedVenv string) (AppServe
 type DynamicApp struct {
 	mu            sync.RWMutex
 	apps          map[string]AppServer
-	modulePattern string
-	workingDir    string
-	venvPath      string
-	factory       appFactory
+	modulePattern   string
+	workingDir      string
+	venvPath        string
+	envFilePatterns []string
+	envVarPatterns  map[string]string
+	factory         appFactory
 	logger        *zap.Logger
 
 	// Autoreload fields
@@ -88,16 +136,18 @@ type DynamicApp struct {
 }
 
 // NewDynamicApp creates a DynamicApp that resolves placeholders from
-// modulePattern, workingDir, and venvPath at request time and lazily creates
-// Python app instances via the supplied factory function.
+// modulePattern, workingDir, venvPath, env_file paths, and env_var values at
+// request time and lazily creates Python app instances via the supplied factory.
 // When autoreload is true, if exitOnReloadFailure is non-nil it is called with
 // code 1 when app creation fails (e.g. app deleted), so the process can terminate.
-func NewDynamicApp(modulePattern, workingDir, venvPath string, factory appFactory, logger *zap.Logger, autoreload bool, exitOnReloadFailure func(code int)) (*DynamicApp, error) {
+func NewDynamicApp(modulePattern, workingDir, venvPath string, envFilePatterns []string, envVarPatterns map[string]string, factory appFactory, logger *zap.Logger, autoreload bool, exitOnReloadFailure func(code int)) (*DynamicApp, error) {
 	d := &DynamicApp{
 		apps:                 make(map[string]AppServer),
 		modulePattern:        modulePattern,
 		workingDir:           workingDir,
 		venvPath:             venvPath,
+		envFilePatterns:      cloneEnvFiles(envFilePatterns),
+		envVarPatterns:       cloneEnvVars(envVarPatterns),
 		factory:              factory,
 		logger:               logger,
 		autoreload:           autoreload,
@@ -120,27 +170,44 @@ func NewDynamicApp(modulePattern, workingDir, venvPath string, factory appFactor
 }
 
 // resolve uses the Caddy replacer from the request context to substitute
-// placeholders in the module pattern, working directory, and venv path.
-func (d *DynamicApp) resolve(r *http.Request) (key, module, dir, venv string) {
+// placeholders in the module pattern, working directory, venv path, env files,
+// and env_var values.
+func (d *DynamicApp) resolve(r *http.Request) (key, module, dir, venv string, envFiles []string, envVars map[string]string) {
 	module = d.modulePattern
 	dir = d.workingDir
 	venv = d.venvPath
+	envFiles = cloneEnvFiles(d.envFilePatterns)
+	envVars = cloneEnvVars(d.envVarPatterns)
 
 	if repl, ok := r.Context().Value(caddy.ReplacerCtxKey).(*caddy.Replacer); ok && repl != nil {
 		module = repl.ReplaceAll(module, "")
 		dir = repl.ReplaceAll(dir, "")
 		venv = repl.ReplaceAll(venv, "")
+		for i, p := range envFiles {
+			envFiles[i] = repl.ReplaceAll(p, "")
+		}
+		for name, value := range envVars {
+			envVars[name] = repl.ReplaceAll(value, "")
+		}
 	}
 
-	key = module + "|" + dir + "|" + venv
+	key = module + "|" + dir + "|" + venv + "|" + strings.Join(envFiles, ",") + "|" + envVarsCacheKey(envVars)
 	return
 }
 
 // getOrCreateApp returns an existing app for the given key, or creates one
 // using the factory if it doesn't exist yet.
-func (d *DynamicApp) getOrCreateApp(key, module, dir, venv string) (AppServer, error) {
+func (d *DynamicApp) getOrCreateApp(key, module, dir, venv string, envFiles []string, envVars map[string]string) (AppServer, error) {
 	if err := validateResolvedValues(module, dir, venv); err != nil {
 		return nil, err
+	}
+	if err := validateResolvedEnvConfig(dir, envFiles); err != nil {
+		return nil, err
+	}
+	for name, value := range envVars {
+		if containsPlaceholder(value) {
+			return nil, fmt.Errorf("env_var %q contains unresolved placeholder", name)
+		}
 	}
 
 	d.mu.RLock()
@@ -164,7 +231,7 @@ func (d *DynamicApp) getOrCreateApp(key, module, dir, venv string) (AppServer, e
 		zap.String("venv", venv),
 	)
 
-	app, err := d.factory(module, dir, venv)
+	app, err := d.factory(module, dir, venv, cloneEnvFiles(envFiles), cloneEnvVars(envVars))
 	if err != nil {
 		return nil, err
 	}
@@ -315,8 +382,8 @@ func (d *DynamicApp) reloadDir(absDir string) {
 // HandleRequest resolves placeholders from the request, gets or creates the
 // appropriate app, and forwards the request.
 func (d *DynamicApp) HandleRequest(w http.ResponseWriter, r *http.Request) error {
-	key, module, dir, venv := d.resolve(r)
-	app, err := d.getOrCreateApp(key, module, dir, venv)
+	key, module, dir, venv, envFiles, envVars := d.resolve(r)
+	app, err := d.getOrCreateApp(key, module, dir, venv, envFiles, envVars)
 	if err != nil {
 		if d.autoreload && d.exitOnReloadFailure != nil {
 			d.logger.Error("failed to load python app (autoreload); terminating",

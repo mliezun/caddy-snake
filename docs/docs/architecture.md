@@ -81,8 +81,8 @@ Dynamic module loading allows a single Caddy configuration to serve multiple dif
 
 The `DynamicApp` struct manages a cache of Python app instances keyed by their resolved configuration:
 
-1. **Placeholder resolution** — on each request, Caddy placeholders in `module_wsgi`/`module_asgi`, `working_dir`, and `venv` are resolved using the request context (e.g. hostname, path, headers)
-2. **Cache lookup** — a composite key (`module|dir|venv`) is used to look up an existing app
+1. **Placeholder resolution** — on each request, Caddy placeholders in `module_wsgi`/`module_asgi`, `working_dir`, `venv`, `env_file`, and `env_var` values are resolved using the request context (e.g. hostname, path, headers)
+2. **Cache lookup** — a composite key (`module|dir|venv|envFiles|envVars`) is used to look up an existing app
 3. **Lazy creation** — if no app exists for the key, one is created via the factory function and cached
 4. **Double-check locking** — a fast-path read lock allows concurrent access, with a write lock only for app creation
 
