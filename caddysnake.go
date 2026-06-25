@@ -691,6 +691,10 @@ func (w *PythonWorker) Start() error {
 			return fmt.Errorf("waiting for Python worker port file: %w", err)
 		}
 		w.DialAddr = "127.0.0.1:" + strconv.Itoa(port)
+	} else if err := waitForUnixSocket(w.Socket.Name(), 10*time.Second); err != nil {
+		w.Cmd.Process.Kill()
+		_ = w.Cmd.Wait()
+		return fmt.Errorf("waiting for Python worker socket: %w", err)
 	}
 	return nil
 }
@@ -709,6 +713,20 @@ func waitForPortFile(path string, timeout time.Duration) (int, error) {
 		time.Sleep(50 * time.Millisecond)
 	}
 	return 0, fmt.Errorf("port file %s not ready within %v", path, timeout)
+}
+
+func waitForUnixSocket(path string, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	var dialer net.Dialer
+	for time.Now().Before(deadline) {
+		conn, err := dialer.DialContext(context.Background(), "unix", path)
+		if err == nil {
+			conn.Close()
+			return nil
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	return fmt.Errorf("unix socket %s not ready within %v", path, timeout)
 }
 
 // dialWithRetry attempts to establish a connection with retry logic

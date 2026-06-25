@@ -15,6 +15,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -1483,6 +1484,37 @@ func TestWaitForPortFile_EventuallyValidAfterTransientData(t *testing.T) {
 	}
 	if port != 8123 {
 		t.Fatalf("expected port 8123, got %d", port)
+	}
+}
+
+func TestWaitForUnixSocket_Success(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("unix socket test")
+	}
+	path := filepath.Join(os.TempDir(), fmt.Sprintf("csw-%d.sock", os.Getpid()))
+	os.Remove(path)
+	t.Cleanup(func() { os.Remove(path) })
+
+	ln, err := net.Listen("unix", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+
+	if err := waitForUnixSocket(path, 2*time.Second); err != nil {
+		t.Fatalf("waitForUnixSocket: %v", err)
+	}
+}
+
+func TestWaitForUnixSocket_Timeout(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("unix socket test")
+	}
+	path := filepath.Join(t.TempDir(), "missing.sock")
+	if err := waitForUnixSocket(path, 100*time.Millisecond); err == nil {
+		t.Fatal("expected timeout error")
+	} else if !strings.Contains(err.Error(), "not ready within") {
+		t.Fatalf("expected 'not ready within' in error, got: %v", err)
 	}
 }
 
