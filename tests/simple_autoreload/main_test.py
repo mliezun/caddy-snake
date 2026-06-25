@@ -171,6 +171,17 @@ def count_python_workers() -> int:
     return count
 
 
+def wait_for_worker_count(expected: int, timeout: float = 10.0) -> int:
+    """Poll until the expected number of caddysnake workers is running."""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        workers = count_python_workers()
+        if workers == expected:
+            return workers
+        time.sleep(0.1)
+    return count_python_workers()
+
+
 def rewrite_version(content: str, old_version: str, new_version: str) -> str:
     """Replace the APP_VERSION line in the file content."""
     marker_old = f'APP_VERSION = "{old_version}"'
@@ -216,9 +227,8 @@ def test_autoreload():
             elapsed = wait_for_version(new_ver, retouch_path=MAIN_PY_PATH)
 
             # Verify old Python process was terminated: only 1 worker should remain.
-            # reload() calls Cleanup() synchronously before starting the new worker,
-            # so by the time the new version is served the old process must be gone.
-            workers = count_python_workers()
+            # reload() swaps in the new worker before cleanup finishes, so poll briefly.
+            workers = wait_for_worker_count(1)
             print(
                 f"  Reload {i}: {old_ver} -> {new_ver}  ({elapsed:.2f}s)  "
                 f"[workers: {workers}]"
@@ -229,7 +239,7 @@ def test_autoreload():
             )
 
         # 3. Final sanity check: exactly 1 worker after all reload cycles
-        final_workers = count_python_workers()
+        final_workers = wait_for_worker_count(1)
         print(f"  Final Python workers: {final_workers}")
         assert final_workers == 1, (
             f"Expected 1 Python worker at end of test, found {final_workers}"
