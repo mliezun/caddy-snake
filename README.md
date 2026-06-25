@@ -245,6 +245,8 @@ python {
     runtime sync|gevent|native|uvloop   # See table; ESGI allows gevent only
     venv "/path/to/venv"                # Virtual environment path
     working_dir "/path/to/app"          # Working directory for module resolution
+    env_file "/path/to/.env"            # Dotenv file loaded into worker env (repeatable)
+    env_var VARNAME value               # Inline env var; overrides env_file (repeatable)
     workers 4                           # Number of worker processes (default: CPU count)
     lifespan on|off                     # ASGI lifespan events (default: off)
     autoreload                          # Watch .py files and reload on changes
@@ -297,6 +299,36 @@ python {
 }
 ```
 
+### `env_file`
+
+Path to a dotenv-style file whose variables are loaded into each Python worker process for this `python` block. You may specify `env_file` more than once; later files override earlier ones for duplicate keys.
+
+Relative paths are resolved against `working_dir` when set, otherwise against the Caddy process working directory.
+
+```Caddyfile
+python {
+    module_wsgi "main:app"
+    working_dir "/var/www/myapp"
+    env_file "/var/www/myapp/.env"
+}
+```
+
+### `env_var`
+
+Set a single environment variable inline. Repeat to set multiple variables. **`env_var` values apply after `env_file`**, so they override variables from files when the name matches.
+
+```Caddyfile
+python {
+    module_asgi "main:app"
+    working_dir "/var/www/myapp"
+    env_file "/var/www/myapp/.env"
+    env_var DEBUG "1"
+    env_var DATABASE_URL "postgres://localhost/myapp_dev"
+}
+```
+
+**Precedence:** Caddy process environment → `env_file` → `env_var` → internal worker vars (`PYTHONUNBUFFERED`, `CADDYSNAKE_*`). Reserved names (`PYTHONUNBUFFERED`, `CADDYSNAKE_*`) cannot be set from the Caddyfile.
+
 ### `workers`
 
 Number of worker processes to spawn. Defaults to the number of CPUs (`GOMAXPROCS`).
@@ -346,7 +378,7 @@ Thread workers and single-worker setups do not need this path. See the docs for 
 
 ## Dynamic module loading
 
-You can use [Caddy placeholders](https://caddyserver.com/docs/caddyfile/concepts#placeholders) in `module_wsgi`, `module_asgi`, `working_dir`, and `venv` to dynamically load different Python apps based on the request.
+You can use [Caddy placeholders](https://caddyserver.com/docs/caddyfile/concepts#placeholders) in `module_wsgi`, `module_asgi`, `working_dir`, `venv`, `env_file`, and `env_var` **values** to dynamically load different Python apps based on the request.
 
 This is useful for multi-tenant setups where each subdomain or route serves a different application:
 

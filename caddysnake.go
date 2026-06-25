@@ -86,7 +86,9 @@ type CaddySnake struct {
 	VenvPath   string `json:"venv_path,omitempty"`
 	Workers    string `json:"workers,omitempty"`
 	Autoreload string `json:"autoreload,omitempty"`
-	PythonPath string `json:"python_path,omitempty"`
+	PythonPath string            `json:"python_path,omitempty"`
+	EnvFiles   []string          `json:"env_files,omitempty"`
+	EnvVars    map[string]string `json:"env_vars,omitempty"`
 	logger     *zap.Logger
 	app        AppServer
 	cacheSrv   *cacheServer
@@ -178,6 +180,24 @@ func (f *CaddySnake) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 					if !d.Args(&f.PythonPath) {
 						return d.Errf("expected exactly one argument for python_path")
 					}
+				case "env_file":
+					var path string
+					if !d.Args(&path) {
+						return d.Errf("expected exactly one argument for env_file")
+					}
+					f.EnvFiles = append(f.EnvFiles, path)
+				case "env_var":
+					var name, value string
+					if !d.Args(&name, &value) {
+						return d.Errf("expected exactly two arguments for env_var: VARNAME value")
+					}
+					if err := validateEnvVarName(name); err != nil {
+						return d.Errf("invalid env_var name %q: %v", name, err)
+					}
+					if f.EnvVars == nil {
+						f.EnvVars = make(map[string]string)
+					}
+					f.EnvVars[name] = value
 				default:
 					return d.Errf("unknown subdirective: %s", d.Val())
 				}
@@ -223,7 +243,8 @@ func (f *CaddySnake) Provision(ctx caddy.Context) error {
 
 	isDynamic := containsPlaceholder(f.ModuleWsgi) || containsPlaceholder(f.ModuleAsgi) ||
 		containsPlaceholder(f.ModuleEsgi) ||
-		containsPlaceholder(f.WorkingDir) || containsPlaceholder(f.VenvPath)
+		containsPlaceholder(f.WorkingDir) || containsPlaceholder(f.VenvPath) ||
+		envFilesContainPlaceholder(f.EnvFiles) || envMapContainsPlaceholder(f.EnvVars)
 
 	if isDynamic {
 		if err = f.provisionDynamic(workers, cacheAddr); err != nil {
@@ -235,9 +256,12 @@ func (f *CaddySnake) Provision(ctx caddy.Context) error {
 
 	pythonBin := resolvePythonInterpreter(f.PythonPath, f.VenvPath)
 
+	envFiles := cloneEnvFiles(f.EnvFiles)
+	envVars := cloneEnvVars(f.EnvVars)
+
 	if f.ModuleWsgi != "" {
 		rt := effectivePythonRuntime("wsgi", f.Runtime)
-		f.app, err = NewPythonWorkerGroup("wsgi", f.ModuleWsgi, f.WorkingDir, f.VenvPath, f.Lifespan, rt, workers, pythonBin, cacheAddr)
+		f.app, err = NewPythonWorkerGroup("wsgi", f.ModuleWsgi, f.WorkingDir, f.VenvPath, f.Lifespan, rt, workers, pythonBin, cacheAddr, envFiles, envVars)
 		if err != nil {
 			return err
 		}
@@ -247,14 +271,14 @@ func (f *CaddySnake) Provision(ctx caddy.Context) error {
 		f.logger.Info("serving wsgi app", zap.String("module_wsgi", f.ModuleWsgi), zap.String("working_dir", f.WorkingDir), zap.String("venv_path", f.VenvPath), zap.String("python", pythonBin), zap.String("runtime", rt))
 	} else if f.ModuleAsgi != "" {
 		rt := effectivePythonRuntime("asgi", f.Runtime)
-		f.app, err = NewPythonWorkerGroup("asgi", f.ModuleAsgi, f.WorkingDir, f.VenvPath, f.Lifespan, rt, workers, pythonBin, cacheAddr)
+		f.app, err = NewPythonWorkerGroup("asgi", f.ModuleAsgi, f.WorkingDir, f.VenvPath, f.Lifespan, rt, workers, pythonBin, cacheAddr, envFiles, envVars)
 		if err != nil {
 			return err
 		}
 		f.logger.Info("serving asgi app", zap.String("module_asgi", f.ModuleAsgi), zap.String("working_dir", f.WorkingDir), zap.String("venv_path", f.VenvPath), zap.String("python", pythonBin), zap.String("runtime", rt))
 	} else if f.ModuleEsgi != "" {
 		rt := effectivePythonRuntime("esgi", f.Runtime)
-		f.app, err = NewPythonWorkerGroup("esgi", f.ModuleEsgi, f.WorkingDir, f.VenvPath, "", rt, workers, pythonBin, cacheAddr)
+		f.app, err = NewPythonWorkerGroup("esgi", f.ModuleEsgi, f.WorkingDir, f.VenvPath, "", rt, workers, pythonBin, cacheAddr, envFiles, envVars)
 		if err != nil {
 			return err
 		}
@@ -280,17 +304,17 @@ func (f *CaddySnake) Provision(ctx caddy.Context) error {
 		if f.ModuleWsgi != "" {
 			rt := effectivePythonRuntime("wsgi", f.Runtime)
 			factory = func() (AppServer, error) {
-				return NewPythonWorkerGroup("wsgi", f.ModuleWsgi, f.WorkingDir, f.VenvPath, f.Lifespan, rt, workers, pythonBin, cacheAddr)
+				return NewPythonWorkerGroup("wsgi", f.ModuleWsgi, f.WorkingDir, f.VenvPath, f.Lifespan, rt, workers, pythonBin, cacheAddr, envFiles, envVars)
 			}
 		} else if f.ModuleAsgi != "" {
 			rt := effectivePythonRuntime("asgi", f.Runtime)
 			factory = func() (AppServer, error) {
-				return NewPythonWorkerGroup("asgi", f.ModuleAsgi, f.WorkingDir, f.VenvPath, f.Lifespan, rt, workers, pythonBin, cacheAddr)
+				return NewPythonWorkerGroup("asgi", f.ModuleAsgi, f.WorkingDir, f.VenvPath, f.Lifespan, rt, workers, pythonBin, cacheAddr, envFiles, envVars)
 			}
 		} else {
 			rt := effectivePythonRuntime("esgi", f.Runtime)
 			factory = func() (AppServer, error) {
-				return NewPythonWorkerGroup("esgi", f.ModuleEsgi, f.WorkingDir, f.VenvPath, "", rt, workers, pythonBin, cacheAddr)
+				return NewPythonWorkerGroup("esgi", f.ModuleEsgi, f.WorkingDir, f.VenvPath, "", rt, workers, pythonBin, cacheAddr, envFiles, envVars)
 			}
 		}
 
@@ -310,16 +334,18 @@ func (f *CaddySnake) Provision(ctx caddy.Context) error {
 func (f *CaddySnake) provisionDynamic(workers int, cacheAddr string) error {
 	autoreload := f.Autoreload == "on"
 	pythonPath := f.PythonPath
+	envFilePatterns := cloneEnvFiles(f.EnvFiles)
+	envVarPatterns := cloneEnvVars(f.EnvVars)
 
 	if f.ModuleWsgi != "" {
 		lifespan := f.Lifespan
 		rt := effectivePythonRuntime("wsgi", f.Runtime)
-		factory := func(module, dir, venv string) (AppServer, error) {
+		factory := func(module, dir, venv string, envFiles []string, envVars map[string]string) (AppServer, error) {
 			pythonBin := resolvePythonInterpreter(pythonPath, venv)
-			return NewPythonWorkerGroup("wsgi", module, dir, venv, lifespan, rt, workers, pythonBin, cacheAddr)
+			return NewPythonWorkerGroup("wsgi", module, dir, venv, lifespan, rt, workers, pythonBin, cacheAddr, envFiles, envVars)
 		}
 		var err error
-		f.app, err = NewDynamicApp(f.ModuleWsgi, f.WorkingDir, f.VenvPath, factory, f.logger, autoreload, nil)
+		f.app, err = NewDynamicApp(f.ModuleWsgi, f.WorkingDir, f.VenvPath, envFilePatterns, envVarPatterns, factory, f.logger, autoreload, nil)
 		if err != nil {
 			return err
 		}
@@ -334,12 +360,12 @@ func (f *CaddySnake) provisionDynamic(workers int, cacheAddr string) error {
 	} else if f.ModuleAsgi != "" {
 		lifespan := f.Lifespan
 		rt := effectivePythonRuntime("asgi", f.Runtime)
-		factory := func(module, dir, venv string) (AppServer, error) {
+		factory := func(module, dir, venv string, envFiles []string, envVars map[string]string) (AppServer, error) {
 			pythonBin := resolvePythonInterpreter(pythonPath, venv)
-			return NewPythonWorkerGroup("asgi", module, dir, venv, lifespan, rt, workers, pythonBin, cacheAddr)
+			return NewPythonWorkerGroup("asgi", module, dir, venv, lifespan, rt, workers, pythonBin, cacheAddr, envFiles, envVars)
 		}
 		var err error
-		f.app, err = NewDynamicApp(f.ModuleAsgi, f.WorkingDir, f.VenvPath, factory, f.logger, autoreload, nil)
+		f.app, err = NewDynamicApp(f.ModuleAsgi, f.WorkingDir, f.VenvPath, envFilePatterns, envVarPatterns, factory, f.logger, autoreload, nil)
 		if err != nil {
 			return err
 		}
@@ -350,12 +376,12 @@ func (f *CaddySnake) provisionDynamic(workers int, cacheAddr string) error {
 		)
 	} else if f.ModuleEsgi != "" {
 		rt := effectivePythonRuntime("esgi", f.Runtime)
-		factory := func(module, dir, venv string) (AppServer, error) {
+		factory := func(module, dir, venv string, envFiles []string, envVars map[string]string) (AppServer, error) {
 			pythonBin := resolvePythonInterpreter(pythonPath, venv)
-			return NewPythonWorkerGroup("esgi", module, dir, venv, "", rt, workers, pythonBin, cacheAddr)
+			return NewPythonWorkerGroup("esgi", module, dir, venv, "", rt, workers, pythonBin, cacheAddr, envFiles, envVars)
 		}
 		var err error
-		f.app, err = NewDynamicApp(f.ModuleEsgi, f.WorkingDir, f.VenvPath, factory, f.logger, autoreload, nil)
+		f.app, err = NewDynamicApp(f.ModuleEsgi, f.WorkingDir, f.VenvPath, envFilePatterns, envVarPatterns, factory, f.logger, autoreload, nil)
 		if err != nil {
 			return err
 		}
@@ -408,6 +434,9 @@ func (m *CaddySnake) Validate() error {
 	}
 	if m.Lifespan != "" && m.Lifespan != "on" && m.Lifespan != "off" {
 		return fmt.Errorf("lifespan must be 'on' or 'off', got: %s", m.Lifespan)
+	}
+	if err := validateEnvVars(m.EnvVars); err != nil {
+		return err
 	}
 	return nil
 }
@@ -537,13 +566,15 @@ type PythonWorker struct {
 	DialNet    string // "unix" or "tcp"
 	DialAddr   string // socket path or host:port
 	CacheAddr  string // CADDYSNAKE_CACHE_ADDR: unix://path (Unix) or 127.0.0.1:port (Windows); empty = omit env
+	EnvFiles   []string
+	EnvVars    map[string]string
 
 	Cmd       *exec.Cmd
 	Transport *http.Transport
 	Proxy     *httputil.ReverseProxy
 }
 
-func NewPythonWorker(iface, app, workingDir, venv, lifespan, pyRuntime, pythonBin, scriptPath, cacheAddr string) (*PythonWorker, error) {
+func NewPythonWorker(iface, app, workingDir, venv, lifespan, pyRuntime, pythonBin, scriptPath, cacheAddr string, envFiles []string, envVars map[string]string) (*PythonWorker, error) {
 	var socket *os.File
 	var sockDir string
 	var err error
@@ -590,6 +621,8 @@ func NewPythonWorker(iface, app, workingDir, venv, lifespan, pyRuntime, pythonBi
 		DialNet:    dialNet,
 		DialAddr:   dialAddr,
 		CacheAddr:  cacheAddr,
+		EnvFiles:   cloneEnvFiles(envFiles),
+		EnvVars:    cloneEnvVars(envVars),
 	}
 	err = w.Start()
 	return w, err
@@ -640,15 +673,11 @@ func (w *PythonWorker) Start() error {
 	w.Cmd = exec.Command(w.PythonBin, args...)
 	w.Cmd.Stdout = os.Stdout
 	w.Cmd.Stderr = os.Stderr
-	env := append(os.Environ(), "PYTHONUNBUFFERED=1")
-	if w.CacheAddr != "" {
-		env = append(env,
-			EnvCaddysnakeCacheAddr+"="+w.CacheAddr,
-			EnvCaddysnakeWorkerInterface+"="+w.Interface,
-			EnvCaddysnakeCacheTimeoutSeconds+"="+strconv.Itoa(DefaultCacheClientTimeoutSec),
-		)
+	fileVars, err := loadEnvFiles(w.WorkingDir, w.EnvFiles)
+	if err != nil {
+		return err
 	}
-	w.Cmd.Env = env
+	w.Cmd.Env = buildWorkerEnv(os.Environ(), fileVars, w.EnvVars, workerInternalEnv(w.Interface, w.CacheAddr)...)
 	setSysProcAttr(w.Cmd)
 
 	if err := w.Cmd.Start(); err != nil {
@@ -759,7 +788,7 @@ type PythonWorkerGroup struct {
 	ScriptPath string // path to worker_main.py inside BundleDir
 }
 
-func NewPythonWorkerGroup(iface, app, workingDir, venv, lifespan, runtime string, count int, pythonBin, cacheAddr string) (*PythonWorkerGroup, error) {
+func NewPythonWorkerGroup(iface, app, workingDir, venv, lifespan, runtime string, count int, pythonBin, cacheAddr string, envFiles []string, envVars map[string]string) (*PythonWorkerGroup, error) {
 	scriptPath, bundleDir, err := writeCaddysnakePyBundle()
 	if err != nil {
 		return nil, fmt.Errorf("failed to write worker bundle: %w", err)
@@ -768,7 +797,7 @@ func NewPythonWorkerGroup(iface, app, workingDir, venv, lifespan, runtime string
 	errs := make([]error, count)
 	workers := make([]*PythonWorker, count)
 	for i := 0; i < count; i++ {
-		workers[i], errs[i] = NewPythonWorker(iface, app, workingDir, venv, lifespan, runtime, pythonBin, scriptPath, cacheAddr)
+		workers[i], errs[i] = NewPythonWorker(iface, app, workingDir, venv, lifespan, runtime, pythonBin, scriptPath, cacheAddr, envFiles, envVars)
 	}
 	wg := &PythonWorkerGroup{
 		Workers:    workers,
