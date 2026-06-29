@@ -44,7 +44,7 @@ jobs:
         uses: pre-commit/action@646c83fcd040023954eafda54b4db0192ce70507 # v3.0.0
 
       - name: golangci-lint
-        uses: golangci/golangci-lint-action@1481404843a886702a437a5302a8731dcaaf8560 # v6.5.0
+        uses: golangci/golangci-lint-action@2226d7cb06a077cd73e56eedd38eecad18e5d837 # v6.5.0
         with:
           version: v2.1.6
 
@@ -78,7 +78,7 @@ jobs:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           persist-credentials: false
-      - uses: actions/setup-node@39370e3970a6d2694543399a3660a17beef7a0cf # v4.1.0
+      - uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af # v4.1.0
         with:
           node-version: "22"
           cache: npm

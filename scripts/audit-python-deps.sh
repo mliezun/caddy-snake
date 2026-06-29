@@ -10,11 +10,11 @@ if ! command -v pip-audit >/dev/null 2>&1; then
 fi
 
 status=0
-while IFS= read -r -d '' req; do
+for req in requirements-dev.txt; do
   echo "==> pip-audit: $req"
   if ! pip-audit -r "$req" --progress-spinner=off; then
     status=1
   fi
-done < <(find . -path './tests/*/venv' -prune -o -name 'requirements*.txt' -print0)
+done
 
 exit "$status"

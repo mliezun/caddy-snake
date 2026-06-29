@@ -728,7 +728,9 @@ def ws_build_frame(opcode, payload, fin=True):
 
 def ws_accept_key(key):
     """Compute the Sec-WebSocket-Accept value."""
-    return base64.b64encode(hashlib.sha1(key.encode() + WS_MAGIC).digest()).decode()
+    return base64.b64encode(
+        hashlib.sha1(key.encode() + WS_MAGIC, usedforsecurity=False).digest()
+    ).decode()
 
 
 def _write_port_file_atomic(path, value):
