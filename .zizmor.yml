@@ -1,6 +1,17 @@
 # Online audits (known-vulnerable-actions, impostor-commit) call the GitHub
 # advisories/tags APIs and fail hard on rate limits with the default GITHUB_TOKEN.
-# Security.yml still runs gosec, Semgrep, Gitleaks, etc.
+# ref-version-mismatch false-positives on annotated release tags (tag object SHA
+# != commit SHA); pins are verified manually against the tag target commit.
 rules:
   known-vulnerable-actions:
     disable: true
+  ref-version-mismatch:
+    ignore:
+      - codeql.yml
+      - docker-verify.yml
+      - security.yml
+  impostor-commit:
+    ignore:
+      - codeql.yml
+      - docker-verify.yml
+      - security.yml
