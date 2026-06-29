@@ -20,9 +20,11 @@ if ! git diff --exit-code go.mod go.sum >/dev/null 2>&1; then
   exit 1
 fi
 
+echo "=== stub embed caddy binaries ==="
+./scripts/stub-embed-caddy.sh
+
 echo "=== golangci-lint ==="
-mapfile -t packages < <(go list ./... | grep -Ev '/cmd/embed(-app)?$')
-golangci-lint run "${packages[@]}"
+golangci-lint run ./...
 
 echo "=== go vet ==="
 go vet ./...
