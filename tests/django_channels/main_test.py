@@ -1,11 +1,12 @@
-import os
-import base64
-import uuid
-import time
-import json
 import asyncio
-import websockets
+import base64
+import json
+import os
+import time
+import uuid
 from concurrent.futures import ThreadPoolExecutor
+
+import websockets
 
 item_count = 0
 
@@ -70,9 +71,7 @@ async def item_lifecycle():
     try:
         async with websockets.connect(WS_ENDPOINT) as websocket:
             # Store item
-            assert await websocket_store_item(websocket, item_id, item), (
-                "Store item failed"
-            )
+            assert await websocket_store_item(websocket, item_id, item), "Store item failed"
 
             # Retrieve item
             assert await websocket_get_item(websocket, item_id, item), "Get item failed"
@@ -130,7 +129,5 @@ def make_objects(max_workers: int, count: int):
 if __name__ == "__main__":
     import sys
 
-    count = (
-        int(sys.argv[1]) if len(sys.argv) > 1 else 2500
-    )  # Reduced default for WebSocket tests
+    count = int(sys.argv[1]) if len(sys.argv) > 1 else 2500  # Reduced default for WebSocket tests
     make_objects(max_workers=4, count=count)

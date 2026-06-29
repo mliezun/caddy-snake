@@ -28,4 +28,4 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements-dev.txt
       - name: Run tests
-        run: pytest caddysnake_test.py -v --cov=caddysnake --cov-report=term-missing
+        run: pytest caddysnake_test.py -v --cov=caddysnake --cov-report=term-missing --cov-fail-under=50

@@ -37,9 +37,7 @@ ENV_EXPECTATIONS = {
 }
 
 
-def wait_for_all_apps_healthy(
-    timeout_seconds: float = 90.0, interval: float = 0.5
-) -> None:
+def wait_for_all_apps_healthy(timeout_seconds: float = 90.0, interval: float = 0.5) -> None:
     """Block until every app returns 200 — workers can start after Caddy's storage log line."""
 
     deadline = time.time() + timeout_seconds
@@ -57,9 +55,7 @@ def wait_for_all_apps_healthy(
             return
         time.sleep(interval)
 
-    raise AssertionError(
-        f"Dynamic apps not healthy after {timeout_seconds}s ({last=!r})"
-    )
+    raise AssertionError(f"Dynamic apps not healthy after {timeout_seconds}s ({last=!r})")
 
 
 def request_app(name: str) -> requests.Response:
@@ -77,9 +73,7 @@ def test_individual_apps():
     """Each app should return its own unique greeting."""
     for name, expected_body in APPS.items():
         resp = request_app(name)
-        assert resp.status_code == 200, (
-            f"[{name}] expected status 200, got {resp.status_code}"
-        )
+        assert resp.status_code == 200, f"[{name}] expected status 200, got {resp.status_code}"
         assert resp.text == expected_body, (
             f"[{name}] expected body '{expected_body}', got '{resp.text}'"
         )

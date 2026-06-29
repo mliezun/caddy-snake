@@ -1,14 +1,33 @@
 repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-merge-conflict
+      - id: check-yaml
+
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    # Ruff version.
     rev: v0.11.8
     hooks:
-      # Run the linter.
       - id: ruff
-        args: [ --fix ]
-      # Run the formatter.
+        args: [--fix]
       - id: ruff-format
-  -   repo: https://github.com/pre-commit/pre-commit-hooks
-      rev: v5.0.0
-      hooks:
-      - id: check-yaml
+
+  - repo: https://github.com/astral-sh/ty-pre-commit
+    rev: v0.0.55
+    hooks:
+      - id: ty
+
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.24.2
+    hooks:
+      - id: gitleaks
+
+  - repo: local
+    hooks:
+      - id: go-fmt-check
+        name: go-fmt-check
+        entry: bash -c 'files=$(gofmt -l "$@"); if [ -n "$files" ]; then echo "$files"; exit 1; fi' --
+        language: system
+        types: [go]

@@ -1,0 +1,56 @@
+[project]
+name = "caddy-snake"
+version = "0.0.0"
+requires-python = ">=3.12"
+description = "Caddy module and Python WSGI/ASGI server (development metadata only)"
+readme = "README.md"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+exclude = [
+    "tests/*/venv",
+    "docs/build",
+    "**/__pycache__",
+]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "SIM"]
+ignore = ["E501"]
+
+[tool.ruff.lint.per-file-ignores]
+"cmd/embed/**" = ["SIM102", "SIM117"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["caddysnake", "tests"]
+
+[tool.ty.environment]
+python-version = "3.12"
+
+[tool.ty.src]
+include = [
+    "caddysnake.py",
+    "cmd/cli/**/*.py",
+    "tests/test_apps/**/*.py",
+]
+exclude = [
+    "tests/*/venv/**",
+    "**/venv/**",
+    "docs/build/**",
+    "benchmarks/**",
+]
+
+[[tool.ty.overrides]]
+include = ["tests/**"]
+
+[tool.ty.overrides.rules]
+possibly-missing-attribute = "warn"
+unresolved-import = "ignore"
+deprecated = "ignore"
+
+[[tool.ty.overrides]]
+include = ["caddysnake.py", "cmd/cli/**"]
+
+[tool.ty.overrides.rules]
+unresolved-import = "ignore"
+deprecated = "ignore"

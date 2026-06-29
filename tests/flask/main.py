@@ -1,7 +1,7 @@
 import wsgiref.validate
+
 from flask import Flask, request
 from sqlitedict import SqliteDict
-
 
 app = Flask(__name__)
 

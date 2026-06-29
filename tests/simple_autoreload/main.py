@@ -1,6 +1,7 @@
-from typing import Callable
 import json
 import wsgiref.validate
+from collections.abc import Callable
+
 from sqlitedict import SqliteDict
 
 db = SqliteDict("items.db", autocommit=True)

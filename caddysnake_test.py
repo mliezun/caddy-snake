@@ -13,7 +13,6 @@ import pytest
 # Import caddysnake module (caddysnake.py in project root)
 import caddysnake as cs
 
-
 # ==================== Pure Functions ====================
 
 
@@ -342,12 +341,10 @@ class TestWsReadFrame:
         assert first == {"type": "websocket.receive", "text": "Hello"}
 
     async def test_ws_read_loop_decodes_utf8_after_reassembly(self):
-        euro = "€".encode("utf-8")
+        euro = "€".encode()
         reader = asyncio.StreamReader()
         reader.feed_data(self._masked_frame(cs.WS_OPCODE_TEXT, euro[:2], fin=False))
-        reader.feed_data(
-            self._masked_frame(cs.WS_OPCODE_CONTINUATION, euro[2:], fin=True)
-        )
+        reader.feed_data(self._masked_frame(cs.WS_OPCODE_CONTINUATION, euro[2:], fin=True))
         reader.feed_eof()
 
         receive_queue = asyncio.Queue()
@@ -366,9 +363,7 @@ class TestWsReadFrame:
 
     async def test_ws_read_loop_rejects_unexpected_continuation(self):
         reader = asyncio.StreamReader()
-        reader.feed_data(
-            self._masked_frame(cs.WS_OPCODE_CONTINUATION, b"oops", fin=True)
-        )
+        reader.feed_data(self._masked_frame(cs.WS_OPCODE_CONTINUATION, b"oops", fin=True))
         reader.feed_eof()
 
         receive_queue = asyncio.Queue()
@@ -419,13 +414,7 @@ class TestReadHttpRequest:
         assert await self._read_all(body_stream) == b""
 
     async def test_post_with_content_length(self):
-        req = (
-            b"POST / HTTP/1.1\r\n"
-            b"Host: localhost\r\n"
-            b"Content-Length: 11\r\n"
-            b"\r\n"
-            b"hello world"
-        )
+        req = b"POST / HTTP/1.1\r\nHost: localhost\r\nContent-Length: 11\r\n\r\nhello world"
         result = await self._feed_and_read(req)
         assert result is not None
         _, _, _, _, _, body_stream = result
@@ -527,12 +516,8 @@ class TestHandleAsgiHttp:
                     "headers": [],  # no Content-Length
                 }
             )
-            await send(
-                {"type": "http.response.body", "body": b"chunk1", "more_body": True}
-            )
-            await send(
-                {"type": "http.response.body", "body": b"chunk2", "more_body": True}
-            )
+            await send({"type": "http.response.body", "body": b"chunk1", "more_body": True})
+            await send({"type": "http.response.body", "body": b"chunk2", "more_body": True})
             await send({"type": "http.response.body", "body": b"", "more_body": False})
 
         async def _drain():
@@ -581,9 +566,7 @@ class TestHandleAsgiHttp:
             while True:
                 event = await receive()
                 received.append(event)
-                if event["type"] == "http.request" and not event.get(
-                    "more_body", False
-                ):
+                if event["type"] == "http.request" and not event.get("more_body", False):
                     break
             await send({"type": "http.response.start", "status": 204, "headers": []})
             await send({"type": "http.response.body", "body": b""})
@@ -596,13 +579,7 @@ class TestHandleAsgiHttp:
         writer.drain = _drain
         writer.is_closing = lambda: False
 
-        req = (
-            b"POST /upload HTTP/1.1\r\n"
-            b"Host: localhost\r\n"
-            b"Content-Length: 10\r\n"
-            b"\r\n"
-            b"abcdefghij"
-        )
+        req = b"POST /upload HTTP/1.1\r\nHost: localhost\r\nContent-Length: 10\r\n\r\nabcdefghij"
         reader = asyncio.StreamReader()
         reader.feed_data(req)
         reader.feed_eof()
@@ -693,8 +670,7 @@ class TestHandleAsgiHttp:
             if write_calls > 1:
                 # uvloop raises this exact error when the handler is closed.
                 raise RuntimeError(
-                    "unable to perform operation on <UnixTransport ...>; "
-                    "the handler is closed"
+                    "unable to perform operation on <UnixTransport ...>; the handler is closed"
                 )
             written.append(data)
 
@@ -964,9 +940,7 @@ class TestBuildWsgiEnviron:
         assert env["X_FROM"] == "caddy-snake"
 
     def test_path_unquoting(self):
-        env = cs._build_wsgi_environ(
-            "GET", "/hello%20world", "HTTP/1.1", [], {}, io.BytesIO(b"")
-        )
+        env = cs._build_wsgi_environ("GET", "/hello%20world", "HTTP/1.1", [], {}, io.BytesIO(b""))
         assert env["PATH_INFO"] == "hello world" or env["PATH_INFO"] == "/hello world"
 
     def test_url_scheme_default_http(self):
@@ -1397,8 +1371,9 @@ class TestWsgiHandler:
 class TestMain:
     def test_main_wsgi_calls_run_wsgi_server(self):
         """main() with --interface wsgi calls run_wsgi_server with imported app."""
-        with mock.patch.object(cs, "run_wsgi_server") as run_wsgi:
-            with mock.patch.object(
+        with (
+            mock.patch.object(cs, "run_wsgi_server") as run_wsgi,
+            mock.patch.object(
                 sys,
                 "argv",
                 [
@@ -1410,15 +1385,16 @@ class TestMain:
                     "--interface",
                     "wsgi",
                 ],
-            ):
-                # main() would block in run_wsgi_server; mock it to return immediately
-                run_wsgi.side_effect = lambda *args, **kwargs: None
-                cs.main()
-                run_wsgi.assert_called_once()
-                call = run_wsgi.call_args
-                assert callable(call[0][0])
-                assert call[0][1] == "/tmp/test.sock"
-                assert call[0][2] == "sync"
+            ),
+        ):
+            # main() would block in run_wsgi_server; mock it to return immediately
+            run_wsgi.side_effect = lambda *args, **kwargs: None
+            cs.main()
+            run_wsgi.assert_called_once()
+            call = run_wsgi.call_args
+            assert callable(call[0][0])
+            assert call[0][1] == "/tmp/test.sock"
+            assert call[0][2] == "sync"
 
     def test_main_asgi_calls_run_asgi_server(self):
         """main() with --interface asgi calls run_asgi_server with imported app."""
@@ -1426,10 +1402,9 @@ class TestMain:
         async def _fake_run_asgi(*args):
             pass
 
-        with mock.patch.object(
-            cs, "run_asgi_server", side_effect=_fake_run_asgi
-        ) as run_asgi:
-            with mock.patch.object(
+        with (
+            mock.patch.object(cs, "run_asgi_server", side_effect=_fake_run_asgi) as run_asgi,
+            mock.patch.object(
                 sys,
                 "argv",
                 [
@@ -1441,13 +1416,14 @@ class TestMain:
                     "--interface",
                     "asgi",
                 ],
-            ):
-                cs.main()
-                run_asgi.assert_called_once()
-                args = run_asgi.call_args[0]
-                assert callable(args[0])
-                assert args[1] == "/tmp/test.sock"
-                assert args[2] is False  # lifespan off
+            ),
+        ):
+            cs.main()
+            run_asgi.assert_called_once()
+            args = run_asgi.call_args[0]
+            assert callable(args[0])
+            assert args[1] == "/tmp/test.sock"
+            assert args[2] is False  # lifespan off
 
     def test_main_esgi_calls_run_esgi_server(self):
         """main() with --interface esgi calls run_esgi_server with imported app."""
@@ -1474,18 +1450,20 @@ class TestMain:
                 assert call[2] == "gevent"
 
     def test_main_invalid_interface(self):
-        with mock.patch.object(
-            sys,
-            "argv",
-            [
-                "caddysnake.py",
-                "--socket",
-                "/tmp/s",
-                "--app",
-                "x:y",
-                "--interface",
-                "invalid",
-            ],
+        with (
+            mock.patch.object(
+                sys,
+                "argv",
+                [
+                    "caddysnake.py",
+                    "--socket",
+                    "/tmp/s",
+                    "--app",
+                    "x:y",
+                    "--interface",
+                    "invalid",
+                ],
+            ),
+            pytest.raises(SystemExit),
         ):
-            with pytest.raises(SystemExit):
-                cs.main()
+            cs.main()

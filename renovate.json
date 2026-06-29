@@ -1,0 +1,45 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": [
+    "config:recommended",
+    ":dependencyDashboard",
+    ":semanticCommits"
+  ],
+  "schedule": ["before 6am on Monday"],
+  "labels": ["dependencies"],
+  "packageRules": [
+    {
+      "description": "Group security patches",
+      "matchUpdateTypes": ["patch"],
+      "matchCategories": ["security"],
+      "groupName": "security-patches",
+      "automerge": false
+    },
+    {
+      "description": "Go module updates need review",
+      "matchManagers": ["gomod"],
+      "matchUpdateTypes": ["major"],
+      "enabled": true
+    },
+    {
+      "description": "Pin GitHub Actions to digest updates",
+      "matchManagers": ["github-actions"],
+      "pinDigests": true
+    }
+  ],
+  "gomod": {
+    "enabled": true
+  },
+  "pip_requirements": {
+    "fileMatch": ["(^|/)requirements.*\\.txt$"]
+  },
+  "npm": {
+    "fileMatch": ["docs/package.json"]
+  },
+  "cargo": {
+    "enabled": true
+  },
+  "pre-commit": {
+    "enabled": true
+  }
+}

@@ -58,14 +58,14 @@ func handleNewDirEvent(event fsnotify.Event, watcher *fsnotify.Watcher) {
 // files in the working directory change. It watches for .py file modifications
 // and reloads the app after a debounce period to group rapid changes.
 type AutoreloadableApp struct {
-	mu                   sync.RWMutex
-	app                  AppServer
-	factory              func() (AppServer, error)
-	watcher              *fsnotify.Watcher
-	stopCh               chan struct{}
-	logger               *zap.Logger
-	workingDir           string
-	exitOnReloadFailure   func(code int) // if set, process exits on reload failure instead of serving 500
+	mu                  sync.RWMutex
+	app                 AppServer
+	factory             func() (AppServer, error)
+	watcher             *fsnotify.Watcher
+	stopCh              chan struct{}
+	logger              *zap.Logger
+	workingDir          string
+	exitOnReloadFailure func(code int) // if set, process exits on reload failure instead of serving 500
 }
 
 // NewAutoreloadableApp creates an AutoreloadableApp that wraps the given app and

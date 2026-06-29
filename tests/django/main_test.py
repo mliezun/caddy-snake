@@ -1,8 +1,9 @@
-import os
 import base64
-import uuid
+import os
 import time
+import uuid
 from concurrent.futures import ThreadPoolExecutor
+
 import requests
 
 item_count = 0

@@ -77,15 +77,15 @@ type AppServer interface {
 
 // CaddySnake module that communicates with a Python app
 type CaddySnake struct {
-	ModuleWsgi string `json:"module_wsgi,omitempty"`
-	ModuleAsgi string `json:"module_asgi,omitempty"`
-	ModuleEsgi string `json:"module_esgi,omitempty"`
-	Runtime    string `json:"runtime,omitempty"`
-	Lifespan   string `json:"lifespan,omitempty"`
-	WorkingDir string `json:"working_dir,omitempty"`
-	VenvPath   string `json:"venv_path,omitempty"`
-	Workers    string `json:"workers,omitempty"`
-	Autoreload string `json:"autoreload,omitempty"`
+	ModuleWsgi string            `json:"module_wsgi,omitempty"`
+	ModuleAsgi string            `json:"module_asgi,omitempty"`
+	ModuleEsgi string            `json:"module_esgi,omitempty"`
+	Runtime    string            `json:"runtime,omitempty"`
+	Lifespan   string            `json:"lifespan,omitempty"`
+	WorkingDir string            `json:"working_dir,omitempty"`
+	VenvPath   string            `json:"venv_path,omitempty"`
+	Workers    string            `json:"workers,omitempty"`
+	Autoreload string            `json:"autoreload,omitempty"`
 	PythonPath string            `json:"python_path,omitempty"`
 	EnvFiles   []string          `json:"env_files,omitempty"`
 	EnvVars    map[string]string `json:"env_vars,omitempty"`

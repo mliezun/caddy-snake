@@ -1,0 +1,5 @@
+tests/*/venv/
+**/venv/
+docs/build/
+docs/node_modules/
+benchmarks/results.json

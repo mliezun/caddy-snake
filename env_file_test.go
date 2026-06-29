@@ -56,13 +56,13 @@ func TestParseEnvFile_InvalidLine(t *testing.T) {
 func TestBuildWorkerEnv_Precedence(t *testing.T) {
 	base := []string{"SHARED=from_process", "ONLY_BASE=1"}
 	fileVars := map[string]string{
-		"SHARED":          "from_file",
+		"SHARED":             "from_file",
 		"APP_TEST_FROM_FILE": "file_value",
 	}
 	inlineVars := map[string]string{
-		"SHARED":             "from_inline",
-		"APP_TEST_INLINE":    "inline_value",
-		"APP_TEST_OVERRIDE":  "from_inline",
+		"SHARED":            "from_inline",
+		"APP_TEST_INLINE":   "inline_value",
+		"APP_TEST_OVERRIDE": "from_inline",
 	}
 	extra := []string{"PYTHONUNBUFFERED=1", "CADDYSNAKE_CACHE_ADDR=unix://test"}
 

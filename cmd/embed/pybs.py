@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 import argparse
-import sys
 import json
-import time
-import urllib.request
-import urllib.error
-import random
 import os
+import random
+import sys
+import time
+import urllib.error
+import urllib.request
 from pathlib import Path
 
 
@@ -116,9 +116,7 @@ def urlopen_with_retry(
             if e.code in (403, 429) and attempt < max_retries:
                 # Check for Retry-After header (seconds), cap to avoid stalls
                 retry_after = e.headers.get("Retry-After") if e.headers else None
-                base = (
-                    int(retry_after) if retry_after and retry_after.isdigit() else delay
-                )
+                base = int(retry_after) if retry_after and retry_after.isdigit() else delay
                 wait = min(max(base, initial_delay), max_sleep_seconds)
                 jitter = random.uniform(0, min(15.0, max(3.0, wait * 0.15)))
                 print(
@@ -304,9 +302,7 @@ def select_asset(
             matches_criteria = False
 
         if matches_criteria:
-            matches.append(
-                (asset["browser_download_url"], asset["name"], parsed["version"])
-            )
+            matches.append((asset["browser_download_url"], asset["name"], parsed["version"]))
 
     if matches:
         # If we have multiple matches (e.g., for partial version like 3.12),
@@ -372,9 +368,7 @@ def select_asset(
                 except ValueError:
                     return (0, 0, 0)
 
-            fallback_matches.sort(
-                key=lambda x: extract_version_tuple(x[2]), reverse=True
-            )
+            fallback_matches.sort(key=lambda x: extract_version_tuple(x[2]), reverse=True)
 
         return fallback_matches[0][0], fallback_matches[0][1]
 
@@ -468,9 +462,7 @@ Examples:
     parser.add_argument("version", help="'latest' or a release tag (e.g. 20250920)")
 
     # Python version
-    parser.add_argument(
-        "--python-version", default="3.13", help="Python version (default: 3.13)"
-    )
+    parser.add_argument("--python-version", default="3.13", help="Python version (default: 3.13)")
 
     # Architecture selection
     parser.add_argument(
@@ -535,9 +527,7 @@ Examples:
             f"Error: Unsupported build configuration '{args.build_config}'",
             file=sys.stderr,
         )
-        print(
-            "Use --list-options to see available build configurations", file=sys.stderr
-        )
+        print("Use --list-options to see available build configurations", file=sys.stderr)
         sys.exit(1)
 
     if not validate_content_type(args.content_type):
@@ -547,9 +537,7 @@ Examples:
 
     # Validate Windows variant if specified
     if args.windows_variant:
-        if not args.architecture.startswith(
-            ("i686-pc-windows-msvc", "x86_64-pc-windows-msvc")
-        ):
+        if not args.architecture.startswith(("i686-pc-windows-msvc", "x86_64-pc-windows-msvc")):
             print(
                 "Error: Windows variant can only be used with Windows architectures",
                 file=sys.stderr,
@@ -600,7 +588,7 @@ Examples:
 
         # Sort by distance (ascending) and show first 10
         assets_with_distance.sort(key=lambda x: x[0])
-        for distance, asset_name in assets_with_distance[:10]:
+        for _distance, asset_name in assets_with_distance[:10]:
             print(f"  {asset_name}", file=sys.stderr)
         if len(assets_with_distance) > 10:
             print(f"  ... and {len(assets_with_distance) - 10} more", file=sys.stderr)

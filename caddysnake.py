@@ -14,6 +14,7 @@ import argparse
 import asyncio
 import base64
 import concurrent.futures
+import contextlib
 import hashlib
 import importlib
 import ipaddress
@@ -231,9 +232,7 @@ _DRAIN_HIGH_WATER = 64 * 1024
 
 MAX_REQUEST_LINE = 8192
 MAX_HEADERS_SIZE = 64 * 1024  # 64 KB total header block
-MAX_BODY_SIZE = (
-    128 * 1024 * 1024
-)  # 128 MB (internal IPC; external limits enforced by Caddy)
+MAX_BODY_SIZE = 128 * 1024 * 1024  # 128 MB (internal IPC; external limits enforced by Caddy)
 MAX_HEADER_COUNT = 100
 MAX_WS_FRAME_SIZE = 16 * 1024 * 1024  # 16 MB
 MAX_WS_MESSAGE_SIZE = 16 * 1024 * 1024  # 16 MB reassembled message
@@ -339,9 +338,7 @@ class _WsgiInputStream:
     def _fetch(self, max_bytes=64 * 1024):
         if self._eof:
             return b""
-        fut = asyncio.run_coroutine_threadsafe(
-            self._body_stream.read(max_bytes), self._loop
-        )
+        fut = asyncio.run_coroutine_threadsafe(self._body_stream.read(max_bytes), self._loop)
         data = fut.result()
         if not data:
             self._eof = True
@@ -367,9 +364,7 @@ class _WsgiInputStream:
             return b""
         limit = size if size is not None and size >= 0 else None
         while True:
-            search_end = (
-                len(self._buffer) if limit is None else min(limit, len(self._buffer))
-            )
+            search_end = len(self._buffer) if limit is None else min(limit, len(self._buffer))
             newline = self._buffer.find(b"\n", 0, search_end)
             if newline != -1:
                 end = newline + 1
@@ -748,10 +743,8 @@ def _write_port_file_atomic(path, value):
             os.fsync(f.fileno())
         os.replace(tmp_path, path)
     finally:
-        try:
+        with contextlib.suppress(OSError):
             os.unlink(tmp_path)
-        except OSError:
-            pass
 
 
 async def _read_http_request(reader):
@@ -865,14 +858,14 @@ async def _handle_asgi_http(writer, app, scope, body_stream):
             writer.write(data)
         except _CLIENT_DISCONNECT_ERRORS:
             disconnect_event.set()
-            raise ClientDisconnected
+            raise ClientDisconnected from None
 
     async def _drain_to_client():
         try:
             await writer.drain()
         except _CLIENT_DISCONNECT_ERRORS:
             disconnect_event.set()
-            raise ClientDisconnected
+            raise ClientDisconnected from None
 
     async def _drain_if_needed():
         # Drain only above the high-water mark (same policy as the WSGI
@@ -890,7 +883,7 @@ async def _handle_asgi_http(writer, app, scope, body_stream):
         nonlocal pending_headers, has_cl, has_te
         if disconnect_event.is_set() or _client_gone():
             disconnect_event.set()
-            raise ClientDisconnected
+            raise ClientDisconnected from None
         msg_type = message["type"]
 
         if msg_type == "http.response.start":
@@ -948,9 +941,7 @@ async def _handle_asgi_http(writer, app, scope, body_stream):
                 if use_chunked:
                     if body_data:
                         _write_to_client(
-                            f"{len(body_data):x}\r\n".encode("ascii")
-                            + body_data
-                            + b"\r\n"
+                            f"{len(body_data):x}\r\n".encode("ascii") + body_data + b"\r\n"
                         )
                     if not more_body:
                         _write_to_client(b"0\r\n\r\n")
@@ -1065,9 +1056,7 @@ async def _ws_read_loop(reader, receive_queue, closed_event, writer):
                         except UnicodeDecodeError:
                             await protocol_error(1007)
                             break
-                        await receive_queue.put(
-                            {"type": "websocket.receive", "text": message}
-                        )
+                        await receive_queue.put({"type": "websocket.receive", "text": message})
                     else:
                         await receive_queue.put(
                             {
@@ -1077,7 +1066,7 @@ async def _ws_read_loop(reader, receive_queue, closed_event, writer):
                         )
                     fragment_opcode = None
                     fragment_buffer.clear()
-            elif opcode == WS_OPCODE_TEXT or opcode == WS_OPCODE_BINARY:
+            elif opcode in (WS_OPCODE_TEXT, WS_OPCODE_BINARY):
                 if fragment_opcode is not None:
                     await protocol_error(1002)
                     break
@@ -1089,13 +1078,9 @@ async def _ws_read_loop(reader, receive_queue, closed_event, writer):
                         except UnicodeDecodeError:
                             await protocol_error(1007)
                             break
-                        await receive_queue.put(
-                            {"type": "websocket.receive", "text": message}
-                        )
+                        await receive_queue.put({"type": "websocket.receive", "text": message})
                     else:
-                        await receive_queue.put(
-                            {"type": "websocket.receive", "bytes": payload}
-                        )
+                        await receive_queue.put({"type": "websocket.receive", "bytes": payload})
                 else:
                     fragment_opcode = opcode
                     fragment_buffer = bytearray(payload)
@@ -1150,9 +1135,7 @@ async def _handle_asgi_websocket(reader, writer, app, scope, raw_headers):
             writer.write(response.encode("latin-1"))
             await writer.drain()
             ws_accepted.set()
-            read_task = asyncio.create_task(
-                _ws_read_loop(reader, receive_queue, ws_closed, writer)
-            )
+            read_task = asyncio.create_task(_ws_read_loop(reader, receive_queue, ws_closed, writer))
 
         elif msg_type == "websocket.send":
             if "text" in message:
@@ -1169,9 +1152,7 @@ async def _handle_asgi_websocket(reader, writer, app, scope, raw_headers):
                 # ASGI app rejected connection before accept: respond with HTTP 403
                 try:
                     writer.write(
-                        b"HTTP/1.1 403 Forbidden\r\n"
-                        b"Content-Length: 13\r\n\r\n"
-                        b"403 Forbidden"
+                        b"HTTP/1.1 403 Forbidden\r\nContent-Length: 13\r\n\r\n403 Forbidden"
                     )
                     await writer.drain()
                 except (ConnectionError, OSError):
@@ -1203,10 +1184,8 @@ async def _handle_asgi_websocket(reader, writer, app, scope, raw_headers):
         ws_closed.set()
         if read_task and not read_task.done():
             read_task.cancel()
-            try:
+            with contextlib.suppress(asyncio.CancelledError):
                 await read_task
-            except asyncio.CancelledError:
-                pass
 
 
 # ==================== ESGI Server (gevent, 0.1-draft) ====================
@@ -1636,20 +1615,16 @@ class _EsgiWsRootProtocolSync:
             return
         self._closed = True
         if not self._accepted:
-            try:
+            with contextlib.suppress(OSError):
                 self._sock.sendall(
                     b"HTTP/1.1 403 Forbidden\r\nContent-Length: 13\r\n\r\n403 Forbidden"
                 )
-            except OSError:
-                pass
             return
         c = 1000 if code is None else int(code)
         r = reason or ""
         payload = struct.pack("!H", c) + r.encode("utf-8")
-        try:
+        with contextlib.suppress(OSError):
             self._sock.sendall(ws_build_frame(WS_OPCODE_CLOSE, payload))
-        except OSError:
-            pass
         if self._reader is not None:
             self._reader.kill(block=False)
 
@@ -1737,9 +1712,7 @@ class _EsgiHttpProtocolSync:
             data = f.read()
         self.response_bytes(status, headers, data)
 
-    def response_file_range(
-        self, status: int, headers: list, file, start: int, end: int
-    ) -> None:
+    def response_file_range(self, status: int, headers: list, file, start: int, end: int) -> None:
         path = os.fsdecode(file)
         with open(path, "rb") as f:
             f.seek(start)
@@ -1770,21 +1743,17 @@ def _handle_esgi_http_sync(
     except Exception:
         traceback.print_exc(file=sys.stderr)
         if not protocol._responded:
-            try:
+            with contextlib.suppress(Exception):
                 protocol.response_bytes(
                     500,
                     [("Content-Type", "text/plain")],
                     b"Internal Server Error",
                 )
-            except Exception:
-                pass
     if not protocol._body_started:
         body_stream.discard()
 
 
-def _handle_esgi_websocket_sync(
-    sock, app, raw_headers, headers_list, version, path, method
-):
+def _handle_esgi_websocket_sync(sock, app, raw_headers, headers_list, version, path, method):
     scope = _build_esgi_ws_scope(method, path, version, headers_list, raw_headers)
     ws_proto = _EsgiWsRootProtocolSync(sock, raw_headers)
     try:
@@ -1792,14 +1761,12 @@ def _handle_esgi_websocket_sync(
     except Exception:
         traceback.print_exc(file=sys.stderr)
         if not ws_proto._accepted:
-            try:
+            with contextlib.suppress(OSError):
                 sock.sendall(
                     b"HTTP/1.1 500 Internal Server Error\r\n"
                     b"Content-Length: 21\r\n\r\n"
                     b"Internal Server Error"
                 )
-            except OSError:
-                pass
     finally:
         ws_proto.cleanup_after_app()
 
@@ -1860,17 +1827,13 @@ def run_esgi_server(app, socket_path: str, runtime: str):
         if _USE_TCP:
             import socket as _stdsocket
 
-            try:
+            with contextlib.suppress(OSError):
                 sock.setsockopt(_stdsocket.IPPROTO_TCP, _stdsocket.TCP_NODELAY, 1)
-            except OSError:
-                pass
         try:
             _esgi_connection_loop(sock, app)
         finally:
-            try:
+            with contextlib.suppress(OSError):
                 sock.close()
-            except OSError:
-                pass
 
     server = None
 
@@ -1880,9 +1843,7 @@ def run_esgi_server(app, socket_path: str, runtime: str):
         else:
             if os.path.exists(socket_path):
                 os.unlink(socket_path)
-            listener_sock = gevent.socket.socket(
-                gevent.socket.AF_UNIX, gevent.socket.SOCK_STREAM
-            )
+            listener_sock = gevent.socket.socket(gevent.socket.AF_UNIX, gevent.socket.SOCK_STREAM)
             listener_sock.bind(socket_path)
             listener_sock.listen(256)
             server = StreamServer(listener_sock, handle)
@@ -1901,10 +1862,8 @@ def run_esgi_server(app, socket_path: str, runtime: str):
 
         def _stop(*_args):
             if server is not None:
-                try:
+                with contextlib.suppress(Exception):
                     server.close()
-                except Exception:
-                    pass
 
         gsig.signal(signal.SIGTERM, _stop)
         gsig.signal(signal.SIGINT, _stop)
@@ -1916,10 +1875,8 @@ def run_esgi_server(app, socket_path: str, runtime: str):
             except Exception:
                 traceback.print_exc(file=sys.stderr)
         if server is not None:
-            try:
+            with contextlib.suppress(Exception):
                 server.close()
-            except Exception:
-                pass
         try:
             if not _USE_TCP and os.path.exists(socket_path):
                 os.unlink(socket_path)
@@ -2075,13 +2032,11 @@ async def _handle_asgi_lifespan(app, state):
         await receive_queue.put({"type": "lifespan.shutdown"})
         try:
             await asyncio.wait_for(shutdown_complete.wait(), timeout=30)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             print("Lifespan shutdown timed out", file=sys.stderr)
         lifespan_task.cancel()
-        try:
+        with contextlib.suppress(asyncio.CancelledError):
             await lifespan_task
-        except asyncio.CancelledError:
-            pass
 
     return True, do_shutdown
 
