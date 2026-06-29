@@ -1,0 +1,6 @@
+# Online audits (known-vulnerable-actions, impostor-commit) call the GitHub
+# advisories/tags APIs and fail hard on rate limits with the default GITHUB_TOKEN.
+# Security.yml still runs gosec, Semgrep, Gitleaks, etc.
+rules:
+  known-vulnerable-actions:
+    disable: true
