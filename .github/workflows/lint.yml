@@ -67,7 +67,7 @@ jobs:
         run: ruff format --check .
 
       - name: ty type check
-        run: uvx ty==0.0.55 check --output-format github
+        run: ty check --output-format github
 
       - name: actionlint
         run: actionlint
