@@ -728,10 +728,9 @@ def ws_build_frame(opcode, payload, fin=True):
 
 def ws_accept_key(key):
     """Compute the Sec-WebSocket-Accept value."""
+    # nosemgrep: python.lang.security.insecure-hash-algorithms.insecure-hash-algorithm-sha1
     return base64.b64encode(
-        hashlib.sha1(  # nosemgrep: python.lang.security.insecure-hash-algorithms.insecure-hash-algorithm-sha1
-            key.encode() + WS_MAGIC, usedforsecurity=False
-        ).digest()
+        hashlib.sha1(key.encode() + WS_MAGIC, usedforsecurity=False).digest()
     ).decode()
 
 
