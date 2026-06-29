@@ -780,7 +780,7 @@ func (w *PythonWorker) Cleanup() error {
 				return err
 			}
 		case <-time.After(5 * time.Second):
-			w.Cmd.Process.Kill()
+			_ = w.Cmd.Process.Kill()
 			<-done
 		}
 	}
