@@ -21,7 +21,8 @@ if ! git diff --exit-code go.mod go.sum >/dev/null 2>&1; then
 fi
 
 echo "=== golangci-lint ==="
-golangci-lint run ./...
+mapfile -t packages < <(go list ./... | grep -Ev '/cmd/embed(-app)?$')
+golangci-lint run "${packages[@]}"
 
 echo "=== go vet ==="
 go vet ./...

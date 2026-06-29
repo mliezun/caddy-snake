@@ -1,9 +1,6 @@
 run:
   timeout: 5m
   tests: true
-  skip-dirs:
-    - cmd/embed
-    - cmd/embed-app
 
 linters:
   enable:
