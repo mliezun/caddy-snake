@@ -45,9 +45,9 @@ jobs:
         id: arch
         run: |
           if [ "${{ matrix.os }}" == "ubuntu-22.04-arm" ]; then
-            echo "arch=aarch64-unknown-linux-gnu" >> $GITHUB_OUTPUT
+            echo "arch=aarch64-unknown-linux-gnu" >> "$GITHUB_OUTPUT"
           else
-            echo "arch=x86_64_v2-unknown-linux-gnu" >> $GITHUB_OUTPUT
+            echo "arch=x86_64_v2-unknown-linux-gnu" >> "$GITHUB_OUTPUT"
           fi
       - name: Ensure app.zip exists
         working-directory: cmd/embed-app
@@ -64,7 +64,7 @@ jobs:
         run: |
           ./embed-test --listen 127.0.0.1:9080 > embed.log 2>&1 &
           timeout 120 bash -c 'while ! grep -qE "finished cleaning storage units|serving initial configuration" embed.log 2>/dev/null; do sleep 1; done'
-          for i in $(seq 1 60); do
+          for _ in $(seq 1 60); do
             RESPONSE=$(curl -s http://127.0.0.1:9080/ || true)
             if echo "$RESPONSE" | grep -q "Replace this placeholder"; then
               echo "Response: $RESPONSE"
