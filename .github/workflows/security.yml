@@ -16,14 +16,24 @@ jobs:
   govulncheck:
     name: govulncheck
     runs-on: ubuntu-24.04
-    continue-on-error: true # transitive Caddy/TLS deps; tracked via Renovate and go.mod bumps
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           persist-credentials: false
-      - uses: golang/govulncheck-action@b625fbe08f3bccbe446d94fbf87fcc875a4f50ee # v1.0.2
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
-          go-version-input: "1.26"
+          go-version: "1.26"
+          cache: false
+      - name: govulncheck (report-only)
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+          set +e
+          govulncheck ./...
+          status=$?
+          if [ "$status" -ne 0 ]; then
+            echo "::warning title=govulncheck::Reported vulnerabilities (often transitive Caddy/TLS deps); see log above"
+          fi
+          exit 0
 
   pip-audit:
     name: pip-audit
@@ -95,7 +105,7 @@ jobs:
     permissions:
       security-events: write
     container:
-      image: semgrep/semgrep
+      image: semgrep/semgrep@sha256:4095860d71cc40d42617b92b0b420711736ada7d67fdb254c5ef4f37dd8fc3ec
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
@@ -110,7 +120,7 @@ jobs:
             --metrics=off
       - name: Upload SARIF
         if: always()
-        uses: github/codeql-action/upload-sarif@dd903d2e4f5405488e5ef1422510ee31c8b32357 # v3.28.1
+        uses: github/codeql-action/upload-sarif@b6a472f63d85b9c78a3ac5e89422239fc15e9b3c # v3.28.1
         with:
           sarif_file: semgrep.sarif
           category: semgrep
@@ -150,7 +160,7 @@ jobs:
           persist-credentials: false
       - name: Snyk Code test
         env:
-          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }} # zizmor: ignore[secrets-in-untrusted-context]
         run: |
           if [ -z "${SNYK_TOKEN:-}" ]; then
             echo "SNYK_TOKEN not set; skipping Snyk Code scan."

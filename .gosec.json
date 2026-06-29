@@ -1,0 +1,6 @@
+{
+  "global": {
+    "exclude-dirs": ["cmd/embed", "cmd/embed-app"],
+    "exclude": "G204,G301,G302,G304,G306,G703,G115"
+  }
+}

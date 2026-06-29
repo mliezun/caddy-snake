@@ -51,7 +51,7 @@ jobs:
         run: |
           docker build --build-arg PY_VERSION=${{ matrix.python-version }} -t caddy-snake:scan .
       - name: Run Trivy vulnerability scanner
-        uses: aquasecurity/trivy-action@915b19bbe73b92a6cf82a1bc12b087c9a19a5fe2 # v0.28.0
+        uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1 # v0.35.0
         with:
           image-ref: caddy-snake:scan
           format: sarif
@@ -60,7 +60,7 @@ jobs:
           exit-code: "1"
       - name: Upload Trivy scan results
         if: always()
-        uses: github/codeql-action/upload-sarif@dd903d2e4f5405488e5ef1422510ee31c8b32357 # v3.28.1
+        uses: github/codeql-action/upload-sarif@b6a472f63d85b9c78a3ac5e89422239fc15e9b3c # v3.28.1
         with:
           sarif_file: trivy-results.sarif
           category: trivy
