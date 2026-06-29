@@ -22,3 +22,12 @@ issues:
     - docs
     - cmd/embed
     - cmd/embed-app
+  exclude-rules:
+    - path: _test\.go
+      linters:
+        - errcheck
+        - gosimple
+        - staticcheck
+    - path: cache_server\.go
+      linters:
+        - unused

@@ -65,7 +65,7 @@ type cacheStore struct {
 	mu     sync.Mutex
 	data   map[string]*cacheEntry
 	conds  map[string]*sync.Cond // lazily created; all use &mu
-	keyCap int                   // placeholder for max keys enforcement
+	keyCap int                   //nolint:unused // reserved for future max-keys enforcement
 }
 
 func newCacheStore() *cacheStore {
