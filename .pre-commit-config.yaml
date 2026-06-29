@@ -3,6 +3,7 @@ repos:
     rev: v5.0.0
     hooks:
       - id: trailing-whitespace
+        exclude: \.svg$
       - id: end-of-file-fixer
         exclude: \.svg$
       - id: check-merge-conflict
