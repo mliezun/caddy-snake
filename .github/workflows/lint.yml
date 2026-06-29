@@ -73,7 +73,7 @@ jobs:
         run: actionlint
 
       - name: shellcheck
-        run: find . -name '*.sh' -not -path './tests/*/venv/*' -print0 | xargs -0 shellcheck
+        run: find . -name '*.sh' -not -path './tests/*/venv/*' -print0 | xargs -0 shellcheck -S error
 
   docs:
     name: Docs build
