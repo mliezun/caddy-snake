@@ -57,6 +57,7 @@ jobs:
           format: sarif
           output: trivy-results.sarif
           severity: CRITICAL,HIGH
+          scanners: vuln
           exit-code: "1"
       - name: Upload Trivy scan results
         if: always()
