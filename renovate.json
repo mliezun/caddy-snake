@@ -3,18 +3,13 @@
   "extends": [
     "config:recommended",
     ":dependencyDashboard",
-    ":semanticCommits"
+    ":semanticCommits",
+    "group:all"
   ],
+  "separateMajorMinor": false,
   "schedule": ["before 6am on Monday"],
   "labels": ["dependencies"],
   "packageRules": [
-    {
-      "description": "Group security patches",
-      "matchUpdateTypes": ["patch"],
-      "matchCategories": ["security"],
-      "groupName": "security-patches",
-      "automerge": false
-    },
     {
       "description": "Go module updates need review",
       "matchManagers": ["gomod"],
