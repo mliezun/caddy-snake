@@ -5,7 +5,7 @@ go 1.26
 require (
 	github.com/caddyserver/caddy/v2 v2.10.0
 	github.com/caddyserver/certmagic v0.23.0
-	github.com/fsnotify/fsnotify v1.9.0
+	github.com/fsnotify/fsnotify v1.10.1
 	github.com/spf13/cobra v1.9.1
 	go.uber.org/zap v1.27.0
 )
