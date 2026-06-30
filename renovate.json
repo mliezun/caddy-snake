@@ -31,10 +31,14 @@
     "enabled": true
   },
   "pip_requirements": {
-    "fileMatch": ["(^|/)requirements.*\\.txt$"]
+    "managerFilePatterns": [
+      "/(^|/)requirements.*\\.txt$/"
+    ]
   },
   "npm": {
-    "fileMatch": ["docs/package.json"]
+    "managerFilePatterns": [
+      "/docs/package.json/"
+    ]
   },
   "cargo": {
     "enabled": true
