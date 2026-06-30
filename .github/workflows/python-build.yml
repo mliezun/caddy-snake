@@ -93,7 +93,7 @@ jobs:
     # The pypa/gh-action-pypi-publish action ships only a linux/amd64 image,
     # so the publish job must run on an amd64 runner regardless of where the
     # wheels were built.
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     environment:
       name: pypi-publish
       url: https://pypi.org/p/caddysnake
