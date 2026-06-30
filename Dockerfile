@@ -1,4 +1,4 @@
-FROM ubuntu:22.04 AS builder
+FROM ubuntu:26.04 AS builder
 
 ARG GO_VERSION=1.26.4
 
@@ -20,7 +20,7 @@ RUN go install github.com/caddyserver/xcaddy/cmd/xcaddy@latest &&\
     cd /usr/local/bin &&\
     CGO_ENABLED=0 /root/go/bin/xcaddy build --with github.com/mliezun/caddy-snake=/build
 
-FROM ubuntu:22.04
+FROM ubuntu:26.04
 
 ARG PY_VERSION=3.13
 
