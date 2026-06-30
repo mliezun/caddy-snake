@@ -7,7 +7,7 @@ require (
 	github.com/caddyserver/certmagic v0.23.0
 	github.com/fsnotify/fsnotify v1.9.0
 	github.com/spf13/cobra v1.9.1
-	go.uber.org/zap v1.27.0
+	go.uber.org/zap v1.28.0
 )
 
 require (
