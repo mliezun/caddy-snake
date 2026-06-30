@@ -1,10 +1,12 @@
 import pytest
 
 from caddysnake.kv_cache import (
+    ENV_WORKER_ID,
     Cache,
     CacheConfigurationError,
     CacheError,
     _encode_cmd,
+    worker_id,
 )
 
 
@@ -23,9 +25,10 @@ class _FakeSock:
     def __init__(self, to_recv: bytes):
         self._data = to_recv
         self.sent = b""
+        self.timeout = None
 
-    def settimeout(self, _t):
-        pass
+    def settimeout(self, t):
+        self.timeout = t
 
     def connect(self, _addr):
         pass
@@ -33,11 +36,15 @@ class _FakeSock:
     def sendall(self, data):
         self.sent = data
 
-    def recv(self, _n):
+    def recv(self, n):
         if not self._data:
             return b""
-        chunk = self._data
-        self._data = b""
+        if len(self._data) <= n:
+            chunk = self._data
+            self._data = b""
+            return chunk
+        chunk = self._data[:n]
+        self._data = self._data[n:]
         return chunk
 
     def close(self):
@@ -48,31 +55,35 @@ class _FakeMod:
     AF_INET = 2
     SOCK_STREAM = 1
     _response = b""
+    last_sock: _FakeSock | None = None
 
     @classmethod
     def socket(cls, *_a, **_k):
-        return _FakeSock(cls._response)
+        cls.last_sock = _FakeSock(cls._response)
+        return cls.last_sock
+
+
+def _patch_cache(monkeypatch):
+    monkeypatch.setenv("CADDYSNAKE_CACHE_ADDR", "127.0.0.1:19999")
+    monkeypatch.delenv("CADDYSNAKE_WORKER_INTERFACE", raising=False)
+    monkeypatch.setattr("caddysnake.kv_cache._socket_module", lambda: _FakeMod)
 
 
 def test_get_miss_roundtrip(monkeypatch):
-    monkeypatch.setenv("CADDYSNAKE_CACHE_ADDR", "127.0.0.1:19999")
-    monkeypatch.delenv("CADDYSNAKE_WORKER_INTERFACE", raising=False)
+    _patch_cache(monkeypatch)
     _FakeMod._response = b"$-1\r\n"
-    monkeypatch.setattr("caddysnake.kv_cache._socket_module", lambda: _FakeMod)
     assert Cache().get("missing") is None
 
 
 def test_delete_returns_int(monkeypatch):
-    monkeypatch.setenv("CADDYSNAKE_CACHE_ADDR", "127.0.0.1:19999")
+    _patch_cache(monkeypatch)
     _FakeMod._response = b":1\r\n"
-    monkeypatch.setattr("caddysnake.kv_cache._socket_module", lambda: _FakeMod)
     assert Cache().delete("k") == 1
 
 
 def test_server_err_raises(monkeypatch):
-    monkeypatch.setenv("CADDYSNAKE_CACHE_ADDR", "127.0.0.1:19999")
+    _patch_cache(monkeypatch)
     _FakeMod._response = b"-ERR something wrong\r\n"
-    monkeypatch.setattr("caddysnake.kv_cache._socket_module", lambda: _FakeMod)
     with pytest.raises(CacheError, match="something wrong"):
         Cache().get("k")
 
@@ -85,7 +96,120 @@ def test_missing_cache_addr(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_aget(monkeypatch):
-    monkeypatch.setenv("CADDYSNAKE_CACHE_ADDR", "127.0.0.1:19999")
+    _patch_cache(monkeypatch)
     _FakeMod._response = b"$3\r\nbye\r\n"
-    monkeypatch.setattr("caddysnake.kv_cache._socket_module", lambda: _FakeMod)
     assert await Cache().aget("k") == b"bye"
+
+
+def test_cache_set_methods_encode_commands(monkeypatch):
+    _patch_cache(monkeypatch)
+    _FakeMod._response = b":1\r\n"
+    Cache().sadd("g", b"m")
+    assert _FakeMod.last_sock is not None and b"CSSADD" in _FakeMod.last_sock.sent
+    _FakeMod._response = b":1\r\n"
+    Cache().srem("g", b"m")
+    assert _FakeMod.last_sock is not None and b"CSSREM" in _FakeMod.last_sock.sent
+    _FakeMod._response = b"*1\r\n$1\r\nm\r\n"
+    assert Cache().smembers("g") == [b"m"]
+
+
+def test_cache_set_members_empty_array(monkeypatch):
+    _patch_cache(monkeypatch)
+    _FakeMod._response = b"*0\r\n"
+    assert Cache().smembers("missing") == []
+
+
+def test_cache_setnx_return_bool(monkeypatch):
+    _patch_cache(monkeypatch)
+    _FakeMod._response = b":1\r\n"
+    assert Cache().setnx("k", b"v") is True
+    _FakeMod._response = b":0\r\n"
+    assert Cache().setnx("k", b"v") is False
+
+
+def test_cache_setnx_ttl_argument_encoding(monkeypatch):
+    _patch_cache(monkeypatch)
+    _FakeMod._response = b":1\r\n"
+    Cache().setnx("k", b"v", ttl=60)
+    assert _FakeMod.last_sock is not None
+    assert b"60" in _FakeMod.last_sock.sent
+
+
+def test_cache_keys_pattern_encoding_and_reply(monkeypatch):
+    _patch_cache(monkeypatch)
+    _FakeMod._response = b"*2\r\n$3\r\napp\r\n$4\r\napp2\r\n"
+    keys = Cache().keys("app", limit=10)
+    assert keys == [b"app", b"app2"]
+    assert _FakeMod.last_sock is not None
+    assert b"CSKEYS" in _FakeMod.last_sock.sent
+
+
+def test_cache_publish_subscribe_commands(monkeypatch):
+    _patch_cache(monkeypatch)
+    _FakeMod._response = b":2\r\n"
+    assert Cache().publish("ch", b"msg") == 2
+    _FakeMod._response = b"$3\r\nmsg\r\n"
+    assert Cache().subscribe("ch", timeout=1.0) == b"msg"
+
+
+def test_cache_subscribe_timeout_and_eof_errors(monkeypatch):
+    _patch_cache(monkeypatch)
+    _FakeMod._response = b"$-1\r\n"
+    assert Cache().subscribe("ch", timeout=0.1) is None
+    with pytest.raises(ValueError):
+        Cache().subscribe("ch", timeout=0)
+
+
+def test_worker_id_environment_accessor(monkeypatch):
+    monkeypatch.delenv(ENV_WORKER_ID, raising=False)
+    assert worker_id() is None
+    monkeypatch.setenv(ENV_WORKER_ID, "2")
+    assert worker_id() == 2
+    monkeypatch.setenv(ENV_WORKER_ID, "bad")
+    assert worker_id() is None
+
+
+@pytest.mark.asyncio
+async def test_async_wrappers_for_new_methods(monkeypatch):
+    _patch_cache(monkeypatch)
+    _FakeMod._response = b":1\r\n"
+    c = Cache()
+    assert await c.asadd("g", b"a") == 1
+    _FakeMod._response = b":1\r\n"
+    assert await c.asrem("g", b"a") == 1
+    _FakeMod._response = b"*0\r\n"
+    assert await c.asmembers("g") == []
+    _FakeMod._response = b":1\r\n"
+    assert await c.asetnx("k", b"v") is True
+    _FakeMod._response = b"*0\r\n"
+    assert await c.akeys("p") == []
+    _FakeMod._response = b":0\r\n"
+    assert await c.apublish("c", b"m") == 0
+    _FakeMod._response = b"$-1\r\n"
+    assert await c.asubscribe("c", timeout=0.01) is None
+
+
+def test_new_methods_require_cache_addr(monkeypatch):
+    monkeypatch.delenv("CADDYSNAKE_CACHE_ADDR", raising=False)
+    c = Cache()
+    with pytest.raises(CacheConfigurationError):
+        c.sadd("k", b"v")
+    with pytest.raises(CacheConfigurationError):
+        c.srem("k", b"v")
+    with pytest.raises(CacheConfigurationError):
+        c.smembers("k")
+    with pytest.raises(CacheConfigurationError):
+        c.setnx("k", b"v")
+    with pytest.raises(CacheConfigurationError):
+        c.keys("p")
+    with pytest.raises(CacheConfigurationError):
+        c.publish("c", b"m")
+    with pytest.raises(CacheConfigurationError):
+        c.subscribe("c", timeout=1.0)
+
+
+def test_partial_resp_reads_for_new_array_replies(monkeypatch):
+    _patch_cache(monkeypatch)
+    _FakeMod._response = b"*1\r\n$1\r\n"
+    _FakeMod._response += b"a\r\n"
+    assert Cache().smembers("g") == [b"a"]

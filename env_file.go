@@ -209,7 +209,7 @@ func buildWorkerEnv(base []string, fileVars, inlineVars map[string]string, extra
 	return envMapToSlice(merged)
 }
 
-func workerInternalEnv(iface, cacheAddr string) []string {
+func workerInternalEnv(iface, cacheAddr, workerID string) []string {
 	extra := []string{"PYTHONUNBUFFERED=1"}
 	if cacheAddr != "" {
 		extra = append(extra,
@@ -217,6 +217,9 @@ func workerInternalEnv(iface, cacheAddr string) []string {
 			EnvCaddysnakeWorkerInterface+"="+iface,
 			EnvCaddysnakeCacheTimeoutSeconds+"="+strconv.Itoa(DefaultCacheClientTimeoutSec),
 		)
+		if workerID != "" {
+			extra = append(extra, EnvCaddysnakeWorkerID+"="+workerID)
+		}
 	}
 	return extra
 }

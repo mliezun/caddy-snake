@@ -5,10 +5,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net"
 	"os"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -19,6 +21,7 @@ import (
 const (
 	EnvCaddysnakeCacheAddr           = "CADDYSNAKE_CACHE_ADDR"
 	EnvCaddysnakeWorkerInterface     = "CADDYSNAKE_WORKER_INTERFACE"
+	EnvCaddysnakeWorkerID            = "CADDYSNAKE_WORKER_ID"
 	EnvCaddysnakeCacheTimeoutSeconds = "CADDYSNAKE_CACHE_TIMEOUT"
 )
 
@@ -30,28 +33,36 @@ const cacheAddrUnixScheme = "unix://"
 
 // Resource limits (conservative defaults).
 const (
-	maxCacheKeyLen        = 8192
-	maxCacheScalarLen     = 1 << 20 // 1 MiB
-	maxCacheListElemLen   = 1 << 20
-	maxCacheListLen       = 100_000
-	maxCacheKeys          = 1_000_000
-	maxRESPProtoLineBytes = 1 << 20
+	maxCacheKeyLen         = 8192
+	maxCacheScalarLen      = 1 << 20 // 1 MiB
+	maxCacheListElemLen    = 1 << 20
+	maxCacheListLen        = 100_000
+	maxCacheKeys           = 1_000_000
+	maxRESPProtoLineBytes  = 1 << 20
+	defaultCSKEYSLimit     = 1000
+	maxCSKEYSLimit         = 1000
+	maxSubscribeTimeoutSec = 300.0
 )
 
-var errCacheLimit = errors.New("limit")
+var (
+	errCacheLimit = errors.New("limit")
+	errWrongType  = errors.New("wrong type")
+)
 
 type entryKind int
 
 const (
 	entryScalar entryKind = iota
 	entryList
+	entrySet
 )
 
 type cacheEntry struct {
-	kind   entryKind
-	scalar []byte
-	list   [][]byte
-	expiry *time.Time // wall clock; nil = no expiry
+	kind    entryKind
+	scalar  []byte
+	list    [][]byte
+	members map[string][]byte // set: dedup by string(member bytes)
+	expiry  *time.Time        // wall clock; nil = no expiry
 }
 
 func (e *cacheEntry) expired(now time.Time) bool {
@@ -62,10 +73,11 @@ func (e *cacheEntry) expired(now time.Time) bool {
 }
 
 type cacheStore struct {
-	mu     sync.Mutex
-	data   map[string]*cacheEntry
-	conds  map[string]*sync.Cond // lazily created; all use &mu
-	keyCap int                   //nolint:unused // reserved for future max-keys enforcement
+	mu      sync.Mutex
+	data    map[string]*cacheEntry
+	conds   map[string]*sync.Cond // lazily created; all use &mu
+	closing bool
+	keyCap  int //nolint:unused // reserved for future max-keys enforcement
 }
 
 func newCacheStore() *cacheStore {
@@ -98,6 +110,31 @@ func (s *cacheStore) broadcastKey(key string) {
 func (s *cacheStore) deleteEntryLocked(key string) {
 	delete(s.data, key)
 	s.dropCond(key)
+}
+
+func (s *cacheStore) shutdownLocked() {
+	s.closing = true
+	for _, c := range s.conds {
+		c.Broadcast()
+	}
+}
+
+func (s *cacheStore) Shutdown() {
+	s.mu.Lock()
+	s.shutdownLocked()
+	s.mu.Unlock()
+}
+
+func (s *cacheStore) entryLocked(k string, now time.Time) (*cacheEntry, bool) {
+	e := s.data[k]
+	if e == nil {
+		return nil, false
+	}
+	if e.expired(now) {
+		s.deleteEntryLocked(k)
+		return nil, false
+	}
+	return e, true
 }
 
 func (s *cacheStore) checkKeyLen(key []byte) error {
@@ -172,32 +209,35 @@ func (s *cacheStore) Set(key, value []byte, ttlSec int64) error {
 	return nil
 }
 
-// Get returns (scalar, nil, true, true) | (nil, listCopy, false, true) | (_, _, _, false) miss.
-func (s *cacheStore) Get(key []byte) (scalar []byte, list [][]byte, isList, ok bool) {
+// Get returns value data and kind. ok=false on miss or invalid key.
+func (s *cacheStore) Get(key []byte) (scalar []byte, list [][]byte, setMembers [][]byte, kind entryKind, ok bool) {
 	now := time.Now()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	if err := s.checkKeyLen(key); err != nil {
-		return nil, nil, false, false
+		return nil, nil, nil, entryScalar, false
 	}
 	k := string(key)
-	e := s.data[k]
-	if e == nil {
-		return nil, nil, false, false
+	e, ok := s.entryLocked(k, now)
+	if !ok {
+		return nil, nil, nil, entryScalar, false
 	}
-	if e.expired(now) {
-		s.deleteEntryLocked(k)
-		return nil, nil, false, false
+	switch e.kind {
+	case entryScalar:
+		return append([]byte(nil), e.scalar...), nil, nil, entryScalar, true
+	case entryList:
+		out := make([][]byte, len(e.list))
+		for i, b := range e.list {
+			out[i] = append([]byte(nil), b...)
+		}
+		return nil, out, nil, entryList, true
+	case entrySet:
+		out := setMembersSorted(e.members)
+		return nil, nil, out, entrySet, true
+	default:
+		return nil, nil, nil, entryScalar, false
 	}
-	if e.kind == entryScalar {
-		return append([]byte(nil), e.scalar...), nil, false, true
-	}
-	out := make([][]byte, len(e.list))
-	for i, b := range e.list {
-		out[i] = append([]byte(nil), b...)
-	}
-	return nil, out, true, true
 }
 
 func (s *cacheStore) Delete(key []byte) int {
@@ -258,6 +298,9 @@ func (s *cacheStore) Append(key, value []byte) error {
 
 	// clear TTL on append (per spec)
 	noTTL := (*time.Time)(nil)
+	if e.kind == entrySet {
+		return errWrongType
+	}
 	if e.kind == entryScalar {
 		if 2 > maxCacheListLen {
 			return fmt.Errorf("%w: list length", errCacheLimit)
@@ -308,19 +351,23 @@ func (s *cacheStore) Pop(key []byte, deadline *time.Time) ([]byte, bool) {
 	}
 
 	for {
-		now := time.Now()
-		e := s.data[k]
-		if e == nil || e.expired(now) {
-			if e != nil {
-				s.deleteEntryLocked(k)
-			}
+		if s.closing {
 			if timer != nil {
 				timer.Stop()
 			}
 			s.mu.Unlock()
 			return nil, false
 		}
-		if e.kind == entryScalar {
+		now := time.Now()
+		e, exists := s.entryLocked(k, now)
+		if !exists {
+			if timer != nil {
+				timer.Stop()
+			}
+			s.mu.Unlock()
+			return nil, false
+		}
+		if e.kind == entryScalar || e.kind == entrySet {
 			if timer != nil {
 				timer.Stop()
 			}
@@ -349,6 +396,316 @@ func (s *cacheStore) Pop(key []byte, deadline *time.Time) ([]byte, bool) {
 		cond := s.condForKey(k)
 		cond.Wait()
 	}
+}
+
+func setMembersSorted(m map[string][]byte) [][]byte {
+	if len(m) == 0 {
+		return nil
+	}
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sortStrings(keys)
+	out := make([][]byte, len(keys))
+	for i, k := range keys {
+		out[i] = append([]byte(nil), m[k]...)
+	}
+	return out
+}
+
+func sortStrings(ss []string) {
+	sort.Strings(ss)
+}
+
+// SAdd returns 1 if member was added, 0 if already present.
+func (s *cacheStore) SAdd(key, member []byte) (int, error) {
+	now := time.Now()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if err := s.checkKeyLen(key); err != nil {
+		return 0, err
+	}
+	if err := s.checkElem(member); err != nil {
+		return 0, err
+	}
+	k := string(key)
+	mk := string(member)
+	e := s.data[k]
+	if e != nil && e.expired(now) {
+		s.deleteEntryLocked(k)
+		e = nil
+	}
+	if e != nil && e.kind != entrySet {
+		return 0, errWrongType
+	}
+	if e == nil {
+		if err := s.enforceKeysCap(); err != nil {
+			return 0, err
+		}
+		s.data[k] = &cacheEntry{
+			kind:    entrySet,
+			members: map[string][]byte{mk: append([]byte(nil), member...)},
+			expiry:  nil,
+		}
+		return 1, nil
+	}
+	if _, ok := e.members[mk]; ok {
+		return 0, nil
+	}
+	if len(e.members) >= maxCacheListLen {
+		return 0, fmt.Errorf("%w: set size", errCacheLimit)
+	}
+	e.members[mk] = append([]byte(nil), member...)
+	return 1, nil
+}
+
+// SRem returns 1 if member was removed, 0 if absent.
+func (s *cacheStore) SRem(key, member []byte) (int, error) {
+	now := time.Now()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if err := s.checkKeyLen(key); err != nil {
+		return 0, err
+	}
+	k := string(key)
+	e := s.data[k]
+	if e == nil || e.expired(now) {
+		if e != nil {
+			s.deleteEntryLocked(k)
+		}
+		return 0, nil
+	}
+	if e.kind != entrySet {
+		return 0, errWrongType
+	}
+	mk := string(member)
+	if _, ok := e.members[mk]; !ok {
+		return 0, nil
+	}
+	delete(e.members, mk)
+	if len(e.members) == 0 {
+		s.deleteEntryLocked(k)
+	}
+	return 1, nil
+}
+
+// SMembers returns sorted member copies; empty slice if key missing (Redis-aligned).
+func (s *cacheStore) SMembers(key []byte) ([][]byte, error) {
+	now := time.Now()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if err := s.checkKeyLen(key); err != nil {
+		return nil, err
+	}
+	k := string(key)
+	e, ok := s.entryLocked(k, now)
+	if !ok {
+		return [][]byte{}, nil
+	}
+	if e.kind != entrySet {
+		return nil, errWrongType
+	}
+	return setMembersSorted(e.members), nil
+}
+
+// SetNX returns 1 if key was set, 0 if key already exists (any non-expired kind).
+func (s *cacheStore) SetNX(key, value []byte, ttlSec int64) (int, error) {
+	now := time.Now()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if err := s.checkKeyLen(key); err != nil {
+		return 0, err
+	}
+	if err := s.checkScalarVal(value); err != nil {
+		return 0, err
+	}
+	k := string(key)
+	if e, ok := s.entryLocked(k, now); ok && e != nil {
+		return 0, nil
+	}
+	if err := s.enforceKeysCap(); err != nil {
+		return 0, err
+	}
+	exp := wallExpiry(ttlSec)
+	s.data[k] = &cacheEntry{kind: entryScalar, scalar: append([]byte(nil), value...), expiry: exp}
+	s.broadcastKey(k)
+	return 1, nil
+}
+
+// Keys returns up to limit key names matching prefix (sorted). Prefix must be non-empty.
+func (s *cacheStore) Keys(prefix []byte, limit int) ([][]byte, error) {
+	if len(prefix) == 0 {
+		return nil, fmt.Errorf("%w: keys prefix required", errCacheLimit)
+	}
+	if limit <= 0 {
+		limit = defaultCSKEYSLimit
+	}
+	if limit > maxCSKEYSLimit {
+		limit = maxCSKEYSLimit
+	}
+	pfx := string(prefix)
+	now := time.Now()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	var matched []string
+	for k, e := range s.data {
+		if e.expired(now) {
+			s.deleteEntryLocked(k)
+			continue
+		}
+		if !strings.HasPrefix(k, pfx) {
+			continue
+		}
+		matched = append(matched, k)
+	}
+	sortStrings(matched)
+	if len(matched) > limit {
+		matched = matched[:limit]
+	}
+	out := make([][]byte, len(matched))
+	for i, k := range matched {
+		out[i] = []byte(k)
+	}
+	return out, nil
+}
+
+// --- pub/sub (blocking one-shot receive) ---
+
+type pubSubWaiter struct {
+	msg       []byte
+	ready     bool
+	cancelled bool
+}
+
+type pubSubChannel struct {
+	waiters []*pubSubWaiter
+	cond    *sync.Cond
+}
+
+type pubSub struct {
+	mu       sync.Mutex
+	channels map[string]*pubSubChannel
+	closing  bool
+}
+
+func newPubSub() *pubSub {
+	ps := &pubSub{channels: make(map[string]*pubSubChannel)}
+	return ps
+}
+
+func (ps *pubSub) channelLocked(name string) *pubSubChannel {
+	ch, ok := ps.channels[name]
+	if !ok {
+		ch = &pubSubChannel{cond: sync.NewCond(&ps.mu)}
+		ps.channels[name] = ch
+	}
+	return ch
+}
+
+func (ps *pubSub) removeWaiter(ch *pubSubChannel, w *pubSubWaiter) {
+	for i, x := range ch.waiters {
+		if x == w {
+			ch.waiters = append(ch.waiters[:i], ch.waiters[i+1:]...)
+			return
+		}
+	}
+}
+
+func (ps *pubSub) Subscribe(channel []byte, deadline time.Time) ([]byte, bool) {
+	if err := checkPubSubName(channel); err != nil {
+		return nil, false
+	}
+	name := string(channel)
+	ps.mu.Lock()
+	if ps.closing {
+		ps.mu.Unlock()
+		return nil, false
+	}
+	ch := ps.channelLocked(name)
+	w := &pubSubWaiter{}
+	ch.waiters = append(ch.waiters, w)
+
+	timedOut := false
+	timer := time.AfterFunc(time.Until(deadline), func() {
+		ps.mu.Lock()
+		timedOut = true
+		ch.cond.Broadcast()
+		ps.mu.Unlock()
+	})
+
+	for !w.ready && !w.cancelled && !ps.closing && !timedOut {
+		ch.cond.Wait()
+	}
+	timer.Stop()
+
+	var out []byte
+	if w.ready {
+		out = append([]byte(nil), w.msg...)
+	}
+	ps.removeWaiter(ch, w)
+	if len(ch.waiters) == 0 {
+		delete(ps.channels, name)
+	}
+	ps.mu.Unlock()
+	if w.ready {
+		return out, true
+	}
+	return nil, false
+}
+
+func (ps *pubSub) Publish(channel, message []byte) (int, error) {
+	if err := checkPubSubName(channel); err != nil {
+		return 0, err
+	}
+	if len(message) > maxCacheScalarLen {
+		return 0, fmt.Errorf("%w: message size", errCacheLimit)
+	}
+	name := string(channel)
+	ps.mu.Lock()
+	defer ps.mu.Unlock()
+	if ps.closing {
+		return 0, nil
+	}
+	ch, ok := ps.channels[name]
+	if !ok || len(ch.waiters) == 0 {
+		return 0, nil
+	}
+	n := 0
+	for _, w := range ch.waiters {
+		if w.ready {
+			continue
+		}
+		w.msg = append([]byte(nil), message...)
+		w.ready = true
+		n++
+	}
+	ch.cond.Broadcast()
+	return n, nil
+}
+
+func (ps *pubSub) Shutdown() {
+	ps.mu.Lock()
+	ps.closing = true
+	for _, ch := range ps.channels {
+		for _, w := range ch.waiters {
+			w.cancelled = true
+		}
+		ch.cond.Broadcast()
+	}
+	ps.mu.Unlock()
+}
+
+func checkPubSubName(channel []byte) error {
+	if len(channel) == 0 || len(channel) > maxCacheKeyLen {
+		return fmt.Errorf("%w: channel size", errCacheLimit)
+	}
+	return nil
 }
 
 // --- RESP ---
@@ -492,6 +849,7 @@ func respReadArray(r *bufio.Reader) ([][]byte, error) {
 
 type cacheServer struct {
 	store   *cacheStore
+	pubsub  *pubSub
 	ln      net.Listener
 	done    chan struct{}
 	closeMu sync.Mutex
@@ -514,10 +872,11 @@ func startCacheServerTCPOnly() (*cacheServer, error) {
 		return nil, err
 	}
 	s := &cacheServer{
-		store: newCacheStore(),
-		ln:    ln,
-		done:  make(chan struct{}),
-		addr:  ln.Addr().String(),
+		store:  newCacheStore(),
+		pubsub: newPubSub(),
+		ln:     ln,
+		done:   make(chan struct{}),
+		addr:   ln.Addr().String(),
 	}
 	go s.acceptLoop()
 	return s, nil
@@ -548,6 +907,7 @@ func startCacheServerUnixSocket() (*cacheServer, error) {
 	envAddr := cacheAddrUnixScheme + filepath.ToSlash(absPath)
 	s := &cacheServer{
 		store:   newCacheStore(),
+		pubsub:  newPubSub(),
 		ln:      ln,
 		done:    make(chan struct{}),
 		addr:    envAddr,
@@ -567,6 +927,8 @@ func (s *cacheServer) Close() error {
 	}
 	s.closed = true
 	s.closeMu.Unlock()
+	s.store.Shutdown()
+	s.pubsub.Shutdown()
 	err := s.ln.Close()
 	<-s.done
 	if s.sockDir != "" {
@@ -616,12 +978,16 @@ func (s *cacheServer) handleConn(conn net.Conn) {
 				_ = respWriteError(w, "wrong number of arguments for CSGET")
 				return
 			}
-			scalar, list, isList, ok := s.store.Get(parts[1])
+			scalar, list, _, kind, ok := s.store.Get(parts[1])
 			if !ok {
 				_ = respWriteBulk(w, nil) // $-1
 				continue
 			}
-			if !isList {
+			if kind == entrySet {
+				_ = respWriteError(w, errWrongType.Error())
+				continue
+			}
+			if kind == entryScalar {
 				_ = respWriteBulk(w, scalar)
 				continue
 			}
@@ -665,7 +1031,11 @@ func (s *cacheServer) handleConn(conn net.Conn) {
 				return
 			}
 			if err := s.store.Append(parts[1], parts[2]); err != nil {
-				_ = respWriteError(w, err.Error())
+				if errors.Is(err, errWrongType) {
+					_ = respWriteError(w, errWrongType.Error())
+				} else {
+					_ = respWriteError(w, err.Error())
+				}
 				continue
 			}
 			_ = respWriteSimpleString(w, "OK")
@@ -685,6 +1055,137 @@ func (s *cacheServer) handleConn(conn net.Conn) {
 				dl = &t
 			}
 			v, ok := s.store.Pop(parts[1], dl)
+			if !ok {
+				_ = respWriteBulk(w, nil)
+				continue
+			}
+			_ = respWriteBulk(w, v)
+		case "CSSADD":
+			if len(parts) != 3 {
+				_ = respWriteError(w, "wrong number of arguments for CSSADD")
+				return
+			}
+			n, err := s.store.SAdd(parts[1], parts[2])
+			if err != nil {
+				if errors.Is(err, errWrongType) {
+					_ = respWriteError(w, errWrongType.Error())
+				} else {
+					_ = respWriteError(w, err.Error())
+				}
+				continue
+			}
+			_ = respWriteInt(w, int64(n))
+		case "CSSREM":
+			if len(parts) != 3 {
+				_ = respWriteError(w, "wrong number of arguments for CSSREM")
+				return
+			}
+			n, err := s.store.SRem(parts[1], parts[2])
+			if err != nil {
+				if errors.Is(err, errWrongType) {
+					_ = respWriteError(w, errWrongType.Error())
+				} else {
+					_ = respWriteError(w, err.Error())
+				}
+				continue
+			}
+			_ = respWriteInt(w, int64(n))
+		case "CSSMEMBERS":
+			if len(parts) != 2 {
+				_ = respWriteError(w, "wrong number of arguments for CSSMEMBERS")
+				return
+			}
+			members, err := s.store.SMembers(parts[1])
+			if err != nil {
+				if errors.Is(err, errWrongType) {
+					_ = respWriteError(w, errWrongType.Error())
+				} else {
+					_ = respWriteError(w, err.Error())
+				}
+				continue
+			}
+			if len(members) == 0 {
+				if err := respWriteArrayHeader(w, 0); err != nil {
+					return
+				}
+				_ = w.Flush()
+				continue
+			}
+			_ = respWriteArrayOfBulks(w, members)
+		case "CSSETNX":
+			if len(parts) != 3 && len(parts) != 4 {
+				_ = respWriteError(w, "wrong number of arguments for CSSETNX")
+				return
+			}
+			var ttl int64
+			if len(parts) == 4 && len(parts[3]) > 0 {
+				t, err := strconv.ParseInt(string(parts[3]), 10, 64)
+				if err != nil || t < 0 {
+					_ = respWriteError(w, "invalid TTL")
+					return
+				}
+				ttl = t
+			}
+			n, err := s.store.SetNX(parts[1], parts[2], ttl)
+			if err != nil {
+				_ = respWriteError(w, err.Error())
+				continue
+			}
+			_ = respWriteInt(w, int64(n))
+		case "CSKEYS":
+			if len(parts) != 1 && len(parts) != 2 && len(parts) != 3 {
+				_ = respWriteError(w, "wrong number of arguments for CSKEYS")
+				return
+			}
+			prefix := []byte{}
+			limit := defaultCSKEYSLimit
+			if len(parts) >= 2 {
+				prefix = parts[1]
+			}
+			if len(parts) == 3 {
+				l, err := strconv.Atoi(string(parts[2]))
+				if err != nil || l < 0 {
+					_ = respWriteError(w, "invalid limit")
+					return
+				}
+				limit = l
+			}
+			keys, err := s.store.Keys(prefix, limit)
+			if err != nil {
+				_ = respWriteError(w, err.Error())
+				continue
+			}
+			if len(keys) == 0 {
+				if err := respWriteArrayHeader(w, 0); err != nil {
+					return
+				}
+				_ = w.Flush()
+				continue
+			}
+			_ = respWriteArrayOfBulks(w, keys)
+		case "CSPUBLISH":
+			if len(parts) != 3 {
+				_ = respWriteError(w, "wrong number of arguments for CSPUBLISH")
+				return
+			}
+			n, err := s.pubsub.Publish(parts[1], parts[2])
+			if err != nil {
+				_ = respWriteError(w, err.Error())
+				continue
+			}
+			_ = respWriteInt(w, int64(n))
+		case "CSSUBSCRIBE":
+			if len(parts) != 3 {
+				_ = respWriteError(w, "wrong number of arguments for CSSUBSCRIBE")
+				return
+			}
+			sec, err := strconv.ParseFloat(string(parts[2]), 64)
+			if err != nil || math.IsNaN(sec) || math.IsInf(sec, 0) || sec <= 0 || sec > maxSubscribeTimeoutSec {
+				_ = respWriteError(w, "invalid timeout")
+				return
+			}
+			deadline := time.Now().Add(time.Duration(sec * float64(time.Second)))
+			v, ok := s.pubsub.Subscribe(parts[1], deadline)
 			if !ok {
 				_ = respWriteBulk(w, nil)
 				continue

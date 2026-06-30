@@ -566,6 +566,7 @@ type PythonWorker struct {
 	DialNet    string // "unix" or "tcp"
 	DialAddr   string // socket path or host:port
 	CacheAddr  string // CADDYSNAKE_CACHE_ADDR: unix://path (Unix) or 127.0.0.1:port (Windows); empty = omit env
+	WorkerID   string // CADDYSNAKE_WORKER_ID: stable index 0..N-1 within the worker group
 	EnvFiles   []string
 	EnvVars    map[string]string
 
@@ -574,7 +575,7 @@ type PythonWorker struct {
 	Proxy     *httputil.ReverseProxy
 }
 
-func NewPythonWorker(iface, app, workingDir, venv, lifespan, pyRuntime, pythonBin, scriptPath, cacheAddr string, envFiles []string, envVars map[string]string) (*PythonWorker, error) {
+func NewPythonWorker(iface, app, workingDir, venv, lifespan, pyRuntime, pythonBin, scriptPath, cacheAddr, workerID string, envFiles []string, envVars map[string]string) (*PythonWorker, error) {
 	var socket *os.File
 	var sockDir string
 	var err error
@@ -621,6 +622,7 @@ func NewPythonWorker(iface, app, workingDir, venv, lifespan, pyRuntime, pythonBi
 		DialNet:    dialNet,
 		DialAddr:   dialAddr,
 		CacheAddr:  cacheAddr,
+		WorkerID:   workerID,
 		EnvFiles:   cloneEnvFiles(envFiles),
 		EnvVars:    cloneEnvVars(envVars),
 	}
@@ -677,7 +679,7 @@ func (w *PythonWorker) Start() error {
 	if err != nil {
 		return err
 	}
-	w.Cmd.Env = buildWorkerEnv(os.Environ(), fileVars, w.EnvVars, workerInternalEnv(w.Interface, w.CacheAddr)...)
+	w.Cmd.Env = buildWorkerEnv(os.Environ(), fileVars, w.EnvVars, workerInternalEnv(w.Interface, w.CacheAddr, w.WorkerID)...)
 	setSysProcAttr(w.Cmd)
 
 	if err := w.Cmd.Start(); err != nil {
@@ -815,7 +817,7 @@ func NewPythonWorkerGroup(iface, app, workingDir, venv, lifespan, runtime string
 	errs := make([]error, count)
 	workers := make([]*PythonWorker, count)
 	for i := 0; i < count; i++ {
-		workers[i], errs[i] = NewPythonWorker(iface, app, workingDir, venv, lifespan, runtime, pythonBin, scriptPath, cacheAddr, envFiles, envVars)
+		workers[i], errs[i] = NewPythonWorker(iface, app, workingDir, venv, lifespan, runtime, pythonBin, scriptPath, cacheAddr, strconv.Itoa(i), envFiles, envVars)
 	}
 	wg := &PythonWorkerGroup{
 		Workers:    workers,

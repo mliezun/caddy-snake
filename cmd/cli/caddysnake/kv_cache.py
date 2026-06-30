@@ -4,8 +4,9 @@ Python workers connect using the environment variable ``CADDYSNAKE_CACHE_ADDR``
 (``unix://...`` on Unix, ``127.0.0.1:port`` on Windows). Use ``Cache`` or the module-level
 ``cache`` singleton when that variable is set (typically process workers under Caddy).
 
-Each key stores either a **scalar** (one blob of bytes) or a **list** (FIFO queue of
-blobs). Method docstrings on ``Cache`` describe how operations behave in each mode.
+Each key stores either a **scalar** (one blob of bytes), a **list** (FIFO queue of
+blobs), or a **set** (unique member blobs). Method docstrings on ``Cache`` describe
+how operations behave in each mode.
 
 The ``cache`` name exported from this module is a single shared ``Cache()`` instance for
 convenience (same methods as the class).
@@ -20,6 +21,7 @@ from typing import Any
 ENV_ADDR = "CADDYSNAKE_CACHE_ADDR"
 ENV_IFACE = "CADDYSNAKE_WORKER_INTERFACE"
 ENV_TIMEOUT = "CADDYSNAKE_CACHE_TIMEOUT"
+ENV_WORKER_ID = "CADDYSNAKE_WORKER_ID"
 
 
 class CacheError(RuntimeError):
@@ -28,6 +30,17 @@ class CacheError(RuntimeError):
 
 class CacheConfigurationError(CacheError):
     """Cache is not available (missing env or wrong runtime)."""
+
+
+def worker_id() -> int | None:
+    """Return ``CADDYSNAKE_WORKER_ID`` as an int, or ``None`` if unset or invalid."""
+    raw = os.environ.get(ENV_WORKER_ID)
+    if raw is None or raw == "":
+        return None
+    try:
+        return int(raw)
+    except ValueError:
+        return None
 
 
 def _socket_module():
@@ -169,44 +182,29 @@ class Cache:
     closes. Suitable for small payloads and cross-worker coordination; not a substitute
     for Redis or a database (see the docs).
 
-    **Scalar vs list:** ``set`` stores a **scalar**. ``append`` builds or extends a
-    **list**; if the key held a scalar, it becomes ``[old_scalar, new_chunk]``. ``get``
-    returns ``bytes`` for a scalar, ``list[bytes]`` for a list (possibly empty), or
-    ``None`` if the key is missing or expired. ``pop`` only applies to **list** keys
-    (FIFO); it returns ``None`` for scalars, missing keys, or when a timed wait expires
-    before an element arrives.
+    **Scalar vs list vs set:** ``set`` stores a **scalar**. ``append`` builds or extends a
+    **list**. ``sadd``/``srem``/``smembers`` operate on **sets**. ``get`` returns ``bytes``
+    for a scalar, ``list[bytes]`` for a list, or ``None`` if missing or expired.
+
+    **Blocking receive:** ``pop`` and ``subscribe`` block on the server when ``timeout`` is
+    set. ``subscribe`` requires a timeout (one-shot blocking receive, not persistent
+    Redis-style pub/sub).
 
     **Errors:** Failures from the server or network raise ``CacheError``. Missing
-    ``CADDYSNAKE_CACHE_ADDR`` (or bad address) raises ``CacheConfigurationError``.
-
-    **Async:** ``aset``, ``aget``, ``adelete``, ``aappend``, and ``apop`` run the
-    blocking counterparts in ``asyncio.to_thread`` for use in ASGI code.
-
-    Example::
-
-        from caddysnake import cache
-
-        cache.set("user:42:session", session_bytes, ttl=3600)
-        raw = cache.get("user:42:session")
-
-        cache.append("jobs", b"task-1")
-        cache.append("jobs", b"task-2")
-        first = cache.pop("jobs")
+    ``CADDYSNAKE_CACHE_ADDR`` raises ``CacheConfigurationError``.
     """
 
     __slots__ = ()
 
-    def _open_socket(self, mod):
+    def _open_socket(self, mod, timeout: float | None = None):
         addr = _require_addr()
+        t = _timeout_sec() if timeout is None else timeout
         if addr.startswith("unix://"):
             path = addr[7:]
-            # ESGI uses gevent for the Go-facing server, but gevent's client
-            # AF_UNIX path has been unreliable; stdlib socket is fine here (short
-            # local IPC and does not block other greenlets' I/O meaningfully).
             import socket as stdsocket
 
             sock = stdsocket.socket(stdsocket.AF_UNIX, stdsocket.SOCK_STREAM)
-            sock.settimeout(_timeout_sec())
+            sock.settimeout(t)
             try:
                 sock.connect(path)
             except OSError as e:
@@ -215,7 +213,7 @@ class Cache:
             return sock
         host, port = _parse_tcp_host_port(addr)
         sock = mod.socket(mod.AF_INET, mod.SOCK_STREAM)
-        sock.settimeout(_timeout_sec())
+        sock.settimeout(t)
         try:
             sock.connect((host, port))
         except OSError as e:
@@ -233,20 +231,19 @@ class Cache:
         finally:
             sock.close()
 
+    def _roundtrip_blocking(self, parts: list[bytes], wait_sec: float) -> Any:
+        mod = _socket_module()
+        sock_timeout = max(_timeout_sec(), wait_sec + 5.0)
+        sock = self._open_socket(mod, timeout=sock_timeout)
+        buf = bytearray()
+        try:
+            sock.sendall(_encode_cmd(parts))
+            return _read_reply(sock, buf)
+        finally:
+            sock.close()
+
     def set(self, key: str | bytes, value: str | bytes, ttl: int | None = None) -> None:
-        """Store a scalar value under ``key``, replacing any previous value (scalar or list).
-
-        After ``set``, the key is a **scalar** until ``append`` is used.
-
-        Args:
-            key: Cache key (UTF-8 if ``str``).
-            value: Value to store (UTF-8 if ``str``).
-            ttl: Optional time-to-live in **seconds** (integer). Omit or ``None`` for no
-                expiry on this key (until deleted or overwritten).
-
-        Raises:
-            CacheError: Server rejected the operation (limits, I/O, etc.).
-        """
+        """Store a scalar value under ``key``, replacing any previous value."""
         kb = _to_bytes(key)
         vb = _to_bytes(value)
         if ttl is None:
@@ -255,16 +252,7 @@ class Cache:
             self._roundtrip([b"CSSET", kb, vb, str(int(ttl)).encode()])
 
     def get(self, key: str | bytes) -> bytes | list[bytes] | None:
-        """Return the value at ``key``, or ``None`` if missing or expired.
-
-        Returns:
-            * ``bytes`` — key holds a **scalar** (via ``set``).
-            * ``list[bytes]`` — key holds a **list** (via ``append``); may be empty.
-            * ``None`` — no such key, expired, or invalid key per server limits.
-
-        Raises:
-            CacheError: Server or protocol error.
-        """
+        """Return the value at ``key``, or ``None`` if missing or expired."""
         r = self._roundtrip([b"CSGET", _to_bytes(key)])
         if r is None:
             return None
@@ -273,76 +261,115 @@ class Cache:
         return r
 
     def delete(self, key: str | bytes) -> int:
-        """Remove ``key`` if it exists.
-
-        Returns:
-            ``1`` if a key was removed, ``0`` if it was already absent or expired.
-
-        Raises:
-            CacheError: Server or protocol error.
-        """
+        """Remove ``key`` if it exists. Returns ``1`` if removed, ``0`` otherwise."""
         return int(self._roundtrip([b"CSDEL", _to_bytes(key)]))
 
     def append(self, key: str | bytes, value: str | bytes) -> None:
-        """Append a chunk to the **list** at ``key``.
-
-        If the key does not exist, starts a one-element list. If it holds a **scalar**,
-        the scalar and ``value`` become the first two list elements. **TTL is cleared**
-        when a key becomes or stays a list.
-
-        Raises:
-            CacheError: Server rejected the operation (e.g. list size/value limits).
-        """
+        """Append a chunk to the **list** at ``key``."""
         self._roundtrip([b"CSAPPEND", _to_bytes(key), _to_bytes(value)])
 
     def pop(self, key: str | bytes, timeout: float | None = None) -> bytes | None:
-        """Pop the **first** element from the list at ``key`` (FIFO).
-
-        Blocks only when ``timeout`` is set: waits up to that many **seconds** for an
-        element to appear. Another worker can ``append`` while you wait.
-
-        Returns:
-            * ``bytes`` — first queued element was removed and returned.
-            * ``None`` — key missing, expired, key holds a **scalar** (not a list), list
-              empty at observation time, or ``timeout`` elapsed with no element.
-
-        Args:
-            key: Cache key.
-            timeout: Maximum seconds to wait for a list element; ``None`` returns
-                immediately (non-blocking pop).
-
-        Raises:
-            CacheError: Server or protocol error.
-        """
+        """Pop the **first** element from the list at ``key`` (FIFO)."""
         kb = _to_bytes(key)
         if timeout is None:
             r = self._roundtrip([b"CSPOP", kb])
         else:
-            r = self._roundtrip([b"CSPOP", kb, str(float(timeout)).encode()])
+            r = self._roundtrip_blocking(
+                [b"CSPOP", kb, str(float(timeout)).encode()], float(timeout)
+            )
+        return r
+
+    def sadd(self, key: str | bytes, member: str | bytes) -> int:
+        """Add ``member`` to the **set** at ``key``. Returns ``1`` if new, ``0`` if present."""
+        return int(self._roundtrip([b"CSSADD", _to_bytes(key), _to_bytes(member)]))
+
+    def srem(self, key: str | bytes, member: str | bytes) -> int:
+        """Remove ``member`` from the set at ``key``. Returns ``1`` if removed, ``0`` if absent."""
+        return int(self._roundtrip([b"CSSREM", _to_bytes(key), _to_bytes(member)]))
+
+    def smembers(self, key: str | bytes) -> list[bytes]:
+        """Return all members of the set at ``key`` (empty list if missing)."""
+        r = self._roundtrip([b"CSSMEMBERS", _to_bytes(key)])
+        if not isinstance(r, list):
+            return []
+        return r
+
+    def setnx(self, key: str | bytes, value: str | bytes, ttl: int | None = None) -> bool:
+        """Set scalar ``key`` only if absent. Returns ``True`` if set, ``False`` if exists."""
+        kb = _to_bytes(key)
+        vb = _to_bytes(value)
+        if ttl is None:
+            n = self._roundtrip([b"CSSETNX", kb, vb])
+        else:
+            n = self._roundtrip([b"CSSETNX", kb, vb, str(int(ttl)).encode()])
+        return int(n) == 1
+
+    def keys(self, prefix: str | bytes, limit: int = 1000) -> list[bytes]:
+        """List key names matching ``prefix`` (up to ``limit``, max 1000).
+
+        ``prefix`` must be non-empty (server rejects full keyspace scans).
+        """
+        pb = _to_bytes(prefix)
+        if not pb:
+            raise ValueError("keys prefix must be non-empty")
+        r = self._roundtrip([b"CSKEYS", pb, str(int(limit)).encode()])
+        if not isinstance(r, list):
+            return []
+        return r
+
+    def publish(self, channel: str | bytes, message: str | bytes) -> int:
+        """Deliver ``message`` to waiters blocked on ``channel``. Returns waiter count."""
+        return int(self._roundtrip([b"CSPUBLISH", _to_bytes(channel), _to_bytes(message)]))
+
+    def subscribe(self, channel: str | bytes, timeout: float) -> bytes | None:
+        """Block up to ``timeout`` seconds for one message on ``channel`` (required).
+
+        One-shot blocking receive; not a persistent subscription. Returns ``None`` on
+        timeout with no message.
+        """
+        if timeout <= 0:
+            raise ValueError("subscribe timeout must be positive")
+        r = self._roundtrip_blocking(
+            [b"CSSUBSCRIBE", _to_bytes(channel), str(float(timeout)).encode()],
+            float(timeout),
+        )
         return r
 
     async def aset(self, key: str | bytes, value: str | bytes, ttl: int | None = None) -> None:
-        """Async wrapper for ``set`` (runs in a worker thread via ``asyncio.to_thread``)."""
         await asyncio.to_thread(self.set, key, value, ttl)
 
     async def aget(self, key: str | bytes) -> bytes | list[bytes] | None:
-        """Async wrapper for ``get`` (``asyncio.to_thread``)."""
         return await asyncio.to_thread(self.get, key)
 
     async def adelete(self, key: str | bytes) -> int:
-        """Async wrapper for ``delete`` (``asyncio.to_thread``)."""
         return await asyncio.to_thread(self.delete, key)
 
     async def aappend(self, key: str | bytes, value: str | bytes) -> None:
-        """Async wrapper for ``append`` (``asyncio.to_thread``)."""
         await asyncio.to_thread(self.append, key, value)
 
     async def apop(self, key: str | bytes, timeout: float | None = None) -> bytes | None:
-        """Async wrapper for ``pop`` (``asyncio.to_thread``).
-
-        The blocking wait still runs in a thread; tune ``timeout`` to bound wait time.
-        """
         return await asyncio.to_thread(self.pop, key, timeout)
+
+    async def asadd(self, key: str | bytes, member: str | bytes) -> int:
+        return await asyncio.to_thread(self.sadd, key, member)
+
+    async def asrem(self, key: str | bytes, member: str | bytes) -> int:
+        return await asyncio.to_thread(self.srem, key, member)
+
+    async def asmembers(self, key: str | bytes) -> list[bytes]:
+        return await asyncio.to_thread(self.smembers, key)
+
+    async def asetnx(self, key: str | bytes, value: str | bytes, ttl: int | None = None) -> bool:
+        return await asyncio.to_thread(self.setnx, key, value, ttl)
+
+    async def akeys(self, prefix: str | bytes = "", limit: int = 1000) -> list[bytes]:
+        return await asyncio.to_thread(self.keys, prefix, limit)
+
+    async def apublish(self, channel: str | bytes, message: str | bytes) -> int:
+        return await asyncio.to_thread(self.publish, channel, message)
+
+    async def asubscribe(self, channel: str | bytes, timeout: float) -> bytes | None:
+        return await asyncio.to_thread(self.subscribe, channel, timeout)
 
 
 cache = Cache()

@@ -61,9 +61,9 @@ func TestCacheStore_SetGetScalar(t *testing.T) {
 	if err := s.Set([]byte("k"), []byte("v"), 0); err != nil {
 		t.Fatal(err)
 	}
-	sc, list, isList, ok := s.Get([]byte("k"))
-	if !ok || isList || string(sc) != "v" || list != nil {
-		t.Fatalf("unexpected get: sc=%q list=%v isList=%v ok=%v", sc, list, isList, ok)
+	sc, list, _, kind, ok := s.Get([]byte("k"))
+	if !ok || kind != entryScalar || string(sc) != "v" || list != nil {
+		t.Fatalf("unexpected get: sc=%q list=%v kind=%v ok=%v", sc, list, kind, ok)
 	}
 }
 
@@ -73,9 +73,9 @@ func TestCacheStore_SetReplacesList(t *testing.T) {
 	if err := s.Set([]byte("k"), []byte("x"), 0); err != nil {
 		t.Fatal(err)
 	}
-	sc, _, isList, ok := s.Get([]byte("k"))
-	if !ok || isList || string(sc) != "x" {
-		t.Fatalf("expected scalar x, got ok=%v isList=%v sc=%q", ok, isList, sc)
+	sc, _, _, kind, ok := s.Get([]byte("k"))
+	if !ok || kind != entryScalar || string(sc) != "x" {
+		t.Fatalf("expected scalar x, got ok=%v kind=%v sc=%q", ok, kind, sc)
 	}
 }
 
@@ -83,9 +83,9 @@ func TestCacheStore_EmptyListGet(t *testing.T) {
 	s := newCacheStore()
 	_ = s.Append([]byte("k"), []byte("a"))
 	_, _ = s.Pop([]byte("k"), nil)
-	_, list, isList, ok := s.Get([]byte("k"))
-	if !ok || !isList || len(list) != 0 {
-		t.Fatalf("expected empty list, ok=%v isList=%v len=%d", ok, isList, len(list))
+	_, list, _, kind, ok := s.Get([]byte("k"))
+	if !ok || kind != entryList || len(list) != 0 {
+		t.Fatalf("expected empty list, ok=%v kind=%v len=%d", ok, kind, len(list))
 	}
 }
 
@@ -93,12 +93,12 @@ func TestCacheStore_AppendClearsTTL(t *testing.T) {
 	s := newCacheStore()
 	_ = s.Set([]byte("k"), []byte("v"), 3600)
 	_ = s.Append([]byte("k"), []byte("x"))
-	_, _, isList, ok := s.Get([]byte("k"))
-	if !ok || !isList {
-		t.Fatalf("expected list after append promote, ok=%v isList=%v", ok, isList)
+	_, _, _, kind, ok := s.Get([]byte("k"))
+	if !ok || kind != entryList {
+		t.Fatalf("expected list after append promote, ok=%v kind=%v", ok, kind)
 	}
 	// entry should not be expired immediately
-	_, _, _, ok2 := s.Get([]byte("k"))
+	_, _, _, _, ok2 := s.Get([]byte("k"))
 	if !ok2 {
 		t.Fatal("expected key still present")
 	}
@@ -193,9 +193,9 @@ func TestCacheStore_SetScalarUnblocksWaitingPop(t *testing.T) {
 	if popOK {
 		t.Fatal("expected pop to wake with nil when key becomes scalar")
 	}
-	sc, _, isList, ok := s.Get([]byte("k"))
-	if !ok || isList || string(sc) != "scalar" {
-		t.Fatalf("expected scalar preserved, ok=%v isList=%v sc=%q", ok, isList, sc)
+	sc, _, _, kind, ok := s.Get([]byte("k"))
+	if !ok || kind != entryScalar || string(sc) != "scalar" {
+		t.Fatalf("expected scalar preserved, ok=%v kind=%v sc=%q", ok, kind, sc)
 	}
 }
 
@@ -363,5 +363,331 @@ func TestCacheServer_CSQUIT(t *testing.T) {
 	}
 	if _, err := r.ReadByte(); err != io.EOF {
 		t.Fatalf("expected EOF after quit, got %v", err)
+	}
+}
+
+func TestCacheStore_SetAddMembersUnique(t *testing.T) {
+	s := newCacheStore()
+	n, err := s.SAdd([]byte("g"), []byte("a"))
+	if err != nil || n != 1 {
+		t.Fatalf("sadd: n=%d err=%v", n, err)
+	}
+	n, err = s.SAdd([]byte("g"), []byte("a"))
+	if err != nil || n != 0 {
+		t.Fatalf("sadd dup: n=%d err=%v", n, err)
+	}
+	members, err := s.SMembers([]byte("g"))
+	if err != nil || len(members) != 1 || string(members[0]) != "a" {
+		t.Fatalf("smembers: %v err=%v", members, err)
+	}
+}
+
+func TestCacheStore_SetRemoveCountsAndEmptySet(t *testing.T) {
+	s := newCacheStore()
+	_, _ = s.SAdd([]byte("g"), []byte("a"))
+	n, err := s.SRem([]byte("g"), []byte("a"))
+	if err != nil || n != 1 {
+		t.Fatalf("srem: n=%d err=%v", n, err)
+	}
+	n, err = s.SRem([]byte("g"), []byte("a"))
+	if err != nil || n != 0 {
+		t.Fatalf("srem missing: n=%d err=%v", n, err)
+	}
+	members, err := s.SMembers([]byte("g"))
+	if err != nil || len(members) != 0 {
+		t.Fatalf("expected empty set, got %v", members)
+	}
+}
+
+func TestCacheStore_SetTypeReplacementRules(t *testing.T) {
+	s := newCacheStore()
+	_, _ = s.SAdd([]byte("k"), []byte("m"))
+	if err := s.Set([]byte("k"), []byte("scalar"), 0); err != nil {
+		t.Fatal(err)
+	}
+	_, err := s.SAdd([]byte("k"), []byte("x"))
+	if err != errWrongType {
+		t.Fatalf("sadd on scalar: %v", err)
+	}
+	_ = s.Append([]byte("l"), []byte("a"))
+	_, err = s.SAdd([]byte("l"), []byte("x"))
+	if err != errWrongType {
+		t.Fatalf("sadd on list: %v", err)
+	}
+	_, _ = s.SAdd([]byte("s"), []byte("m"))
+	if err := s.Append([]byte("s"), []byte("a")); err != errWrongType {
+		t.Fatalf("append on set: %v", err)
+	}
+}
+
+func TestCacheStore_SetNXConcurrentSingleWinner(t *testing.T) {
+	s := newCacheStore()
+	var wg sync.WaitGroup
+	wins := make([]int, 20)
+	for i := 0; i < 20; i++ {
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+			n, err := s.SetNX([]byte("lock"), []byte("v"), 0)
+			if err != nil {
+				t.Errorf("setnx: %v", err)
+				return
+			}
+			if n == 1 {
+				wins[idx] = 1
+			}
+		}(i)
+	}
+	wg.Wait()
+	total := 0
+	for _, w := range wins {
+		total += w
+	}
+	if total != 1 {
+		t.Fatalf("expected 1 winner, got %d", total)
+	}
+}
+
+func TestCacheStore_SetNXExpiredKeyCanBeReclaimed(t *testing.T) {
+	s := newCacheStore()
+	n, err := s.SetNX([]byte("k"), []byte("a"), 1)
+	if err != nil || n != 1 {
+		t.Fatalf("setnx: n=%d err=%v", n, err)
+	}
+	time.Sleep(1100 * time.Millisecond)
+	n, err = s.SetNX([]byte("k"), []byte("b"), 0)
+	if err != nil || n != 1 {
+		t.Fatalf("reclaim: n=%d err=%v", n, err)
+	}
+	sc, _, _, kind, ok := s.Get([]byte("k"))
+	if !ok || kind != entryScalar || string(sc) != "b" {
+		t.Fatalf("get after reclaim: ok=%v sc=%q", ok, sc)
+	}
+}
+
+func TestCacheServer_CSSADD_CSSMEMBERS_RESP(t *testing.T) {
+	srv, err := startCacheServer()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer srv.Close()
+	conn := dialCacheServer(t, srv)
+	defer conn.Close()
+	r := bufio.NewReader(conn)
+
+	_, _ = io.WriteString(conn, respStringArrayCmd("CSSADD", "g", "a"))
+	if readProtoLine(t, r) != ":1" {
+		t.Fatal("sadd")
+	}
+	_, _ = io.WriteString(conn, respStringArrayCmd("CSSMEMBERS", "g"))
+	if readProtoLine(t, r) != "*1" {
+		t.Fatal("smembers header")
+	}
+	if string(readBulkString(t, r)) != "a" {
+		t.Fatal("member")
+	}
+	_, _ = io.WriteString(conn, respStringArrayCmd("CSSMEMBERS", "missing"))
+	if readProtoLine(t, r) != "*0" {
+		t.Fatal("smembers missing")
+	}
+}
+
+func TestCacheServer_CSSETNXCreatesAndRejectsExisting(t *testing.T) {
+	srv, err := startCacheServer()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer srv.Close()
+	conn := dialCacheServer(t, srv)
+	defer conn.Close()
+	r := bufio.NewReader(conn)
+
+	_, _ = io.WriteString(conn, respStringArrayCmd("CSSETNX", "k", "v"))
+	if readProtoLine(t, r) != ":1" {
+		t.Fatal("setnx create")
+	}
+	_, _ = io.WriteString(conn, respStringArrayCmd("CSSETNX", "k", "other"))
+	if readProtoLine(t, r) != ":0" {
+		t.Fatal("setnx reject")
+	}
+}
+
+func TestCacheServer_CSKEYSPrefixAndAllTypes(t *testing.T) {
+	srv, err := startCacheServer()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer srv.Close()
+	conn := dialCacheServer(t, srv)
+	defer conn.Close()
+	r := bufio.NewReader(conn)
+
+	_, _ = io.WriteString(conn, respStringArrayCmd("CSSET", "app:scalar", "v"))
+	readProtoLine(t, r)
+	_, _ = io.WriteString(conn, respStringArrayCmd("CSAPPEND", "app:list", "a"))
+	readProtoLine(t, r)
+	_, _ = io.WriteString(conn, respStringArrayCmd("CSSADD", "app:set", "m"))
+	readProtoLine(t, r)
+	_, _ = io.WriteString(conn, respStringArrayCmd("CSSET", "other", "x"))
+	readProtoLine(t, r)
+
+	_, _ = io.WriteString(conn, respStringArrayCmd("CSKEYS", "app:", "100"))
+	line := readProtoLine(t, r)
+	if line != "*3" {
+		t.Fatalf("keys want *3, got %q", line)
+	}
+}
+
+func TestCacheServer_PubSubPublishUnblocksSubscribers(t *testing.T) {
+	srv, err := startCacheServer()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer srv.Close()
+
+	var wg sync.WaitGroup
+	var got []byte
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		c := dialCacheServer(t, srv)
+		defer c.Close()
+		r := bufio.NewReader(c)
+		_, _ = io.WriteString(c, respStringArrayCmd("CSSUBSCRIBE", "ch", "5"))
+		got = readBulkString(t, r)
+	}()
+
+	time.Sleep(50 * time.Millisecond)
+	pub := dialCacheServer(t, srv)
+	defer pub.Close()
+	pr := bufio.NewReader(pub)
+	_, _ = io.WriteString(pub, respStringArrayCmd("CSPUBLISH", "ch", "hello"))
+	if readProtoLine(t, pr) != ":1" {
+		t.Fatal("publish count")
+	}
+
+	wg.Wait()
+	if string(got) != "hello" {
+		t.Fatalf("got %q", got)
+	}
+}
+
+func TestCacheServer_PubSubMultipleSubscribersAndPublishCount(t *testing.T) {
+	srv, err := startCacheServer()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer srv.Close()
+
+	startSub := func(out *[]byte) *sync.WaitGroup {
+		var wg sync.WaitGroup
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			c := dialCacheServer(t, srv)
+			defer c.Close()
+			r := bufio.NewReader(c)
+			_, _ = io.WriteString(c, respStringArrayCmd("CSSUBSCRIBE", "fan", "5"))
+			*out = readBulkString(t, r)
+		}()
+		return &wg
+	}
+	var a, b []byte
+	wg1 := startSub(&a)
+	wg2 := startSub(&b)
+	time.Sleep(50 * time.Millisecond)
+
+	pub := dialCacheServer(t, srv)
+	defer pub.Close()
+	pr := bufio.NewReader(pub)
+	_, _ = io.WriteString(pub, respStringArrayCmd("CSPUBLISH", "fan", "msg"))
+	if readProtoLine(t, pr) != ":2" {
+		t.Fatal("publish count")
+	}
+	wg1.Wait()
+	wg2.Wait()
+	if string(a) != "msg" || string(b) != "msg" {
+		t.Fatalf("a=%q b=%q", a, b)
+	}
+}
+
+func TestCacheServer_CloseUnblocksSubscribersAndPops(t *testing.T) {
+	srv, err := startCacheServer()
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = srv.store.Append([]byte("q"), []byte("only"))
+	_, _ = srv.store.Pop([]byte("q"), nil)
+
+	popDone := make(chan struct{})
+	go func() {
+		defer close(popDone)
+		_, _ = srv.store.Pop([]byte("q"), nil)
+	}()
+
+	subDone := make(chan struct{})
+	go func() {
+		defer close(subDone)
+		_, _ = srv.pubsub.Subscribe([]byte("c"), time.Now().Add(30*time.Second))
+	}()
+
+	time.Sleep(30 * time.Millisecond)
+	_ = srv.Close()
+
+	select {
+	case <-popDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("pop not unblocked")
+	}
+	select {
+	case <-subDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("subscribe not unblocked")
+	}
+}
+
+func TestCacheServer_CSKEYSRejectsEmptyPrefix(t *testing.T) {
+	srv, err := startCacheServer()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer srv.Close()
+	conn := dialCacheServer(t, srv)
+	defer conn.Close()
+	r := bufio.NewReader(conn)
+
+	_, _ = io.WriteString(conn, respStringArrayCmd("CSKEYS", "", "10"))
+	line := readProtoLine(t, r)
+	if !strings.HasPrefix(line, "-ERR") {
+		t.Fatalf("want ERR for empty prefix, got %q", line)
+	}
+}
+
+func TestCacheStore_SRemDeletesEmptySet(t *testing.T) {
+	s := newCacheStore()
+	_, _ = s.SAdd([]byte("g"), []byte("only"))
+	_, _ = s.SRem([]byte("g"), []byte("only"))
+	_, _, _, _, ok := s.Get([]byte("g"))
+	if ok {
+		t.Fatal("empty set should remove key")
+	}
+}
+
+func TestCacheServer_CSGETWrongTypeOnSet(t *testing.T) {
+	srv, err := startCacheServer()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer srv.Close()
+	conn := dialCacheServer(t, srv)
+	defer conn.Close()
+	r := bufio.NewReader(conn)
+
+	_, _ = io.WriteString(conn, respStringArrayCmd("CSSADD", "s", "m"))
+	readProtoLine(t, r)
+	_, _ = io.WriteString(conn, respStringArrayCmd("CSGET", "s"))
+	line := readProtoLine(t, r)
+	if !strings.HasPrefix(line, "-ERR") || !strings.Contains(line, "wrong type") {
+		t.Fatalf("want wrong type err, got %q", line)
 	}
 }

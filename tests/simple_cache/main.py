@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from urllib.parse import parse_qs
 
-from caddysnake import cache
+from caddysnake import cache, worker_id
 
 
 def _wsgi_read_body(environ, max_len: int = 1 << 20) -> bytes:
@@ -20,9 +20,15 @@ def _wsgi_read_body(environ, max_len: int = 1 << 20) -> bytes:
     return environ["wsgi.input"].read(n)
 
 
+def _qs(environ) -> dict[str, list[str]]:
+    raw = environ.get("QUERY_STRING") or ""
+    return parse_qs(raw)
+
+
 def wsgi_app(environ, start_response):
     path = environ.get("PATH_INFO") or "/"
     method = (environ.get("REQUEST_METHOD") or "GET").upper()
+    qs = _qs(environ)
 
     def respond(status: int, body: bytes, ctype: str = "text/plain") -> list[bytes]:
         reason = {200: "OK", 404: "Not Found", 500: "Internal Server Error"}.get(status, "OK")
@@ -44,6 +50,53 @@ def wsgi_app(environ, start_response):
     if path == "/share/append" and method == "POST":
         cache.append("q", _wsgi_read_body(environ))
         return respond(200, b"ok")
+
+    if path == "/share/worker-id" and method == "GET":
+        wid = worker_id()
+        return respond(200, str(wid if wid is not None else -1).encode())
+
+    if path == "/share/sadd" and method == "POST":
+        key = (qs.get("k", ["grp"])[0]).encode()
+        cache.sadd(key, _wsgi_read_body(environ))
+        return respond(200, b"ok")
+
+    if path == "/share/srem" and method == "POST":
+        key = (qs.get("k", ["grp"])[0]).encode()
+        n = cache.srem(key, _wsgi_read_body(environ))
+        return respond(200, str(n).encode())
+
+    if path == "/share/smembers" and method == "GET":
+        key = (qs.get("k", ["grp"])[0]).encode()
+        members = cache.smembers(key)
+        payload = json.dumps([m.decode("latin1") for m in members]).encode()
+        return respond(200, payload, "application/json")
+
+    if path == "/share/setnx" and method == "POST":
+        key = (qs.get("k", ["lock"])[0]).encode()
+        ttl_raw = qs.get("ttl", [""])[0]
+        body = _wsgi_read_body(environ)
+        ok = cache.setnx(key, body) if ttl_raw == "" else cache.setnx(key, body, ttl=int(ttl_raw))
+        return respond(200, b"1" if ok else b"0")
+
+    if path == "/share/keys" and method == "GET":
+        prefix = (qs.get("prefix", [""])[0]).encode()
+        limit = int(qs.get("limit", ["1000"])[0])
+        keys = cache.keys(prefix, limit=limit)
+        payload = json.dumps([k.decode("latin1") for k in keys]).encode()
+        return respond(200, payload, "application/json")
+
+    if path == "/share/publish" and method == "POST":
+        ch = (qs.get("ch", ["events"])[0]).encode()
+        n = cache.publish(ch, _wsgi_read_body(environ))
+        return respond(200, str(n).encode())
+
+    if path == "/share/subscribe" and method == "GET":
+        ch = (qs.get("ch", ["events"])[0]).encode()
+        tout = float(qs.get("t", ["25"])[0])
+        msg = cache.subscribe(ch, timeout=tout)
+        if msg is None:
+            return respond(200, b"nil")
+        return respond(200, msg, "application/octet-stream")
 
     return respond(404, b"not found")
 
@@ -123,6 +176,18 @@ async def asgi_app(scope, receive, send):
             await send_resp(200, v)
         return
 
+    if path == "/asgi/worker-id" and method == "GET":
+        wid = worker_id()
+        await send_resp(200, str(wid if wid is not None else -1).encode())
+        return
+
+    if path == "/asgi/publish" and method == "POST":
+        ch = (qs.get("ch", ["events"])[0]).encode()
+        body = await read_body()
+        n = await cache.apublish(ch, body)
+        await send_resp(200, str(n).encode())
+        return
+
     await send_resp(404, b"not found")
 
 
@@ -163,5 +228,9 @@ def application(scope, protocol):
         key = (qs.get("k", ["eq"])[0]).encode()
         cache.append(key, protocol.read_body())
         resp(200, b"ok")
+        return
+    if path == "/esgi/worker-id" and method == "GET":
+        wid = worker_id()
+        resp(200, str(wid if wid is not None else -1).encode())
         return
     resp(404, b"not found")
