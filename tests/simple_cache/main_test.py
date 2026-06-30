@@ -33,19 +33,13 @@ def test_wsgi_cross_worker_blocking_pop():
 
 
 def test_asgi_aget_and_list():
-    requests.post(
-        f"{BASE_URL}/asgi/set?k=ak2", data=b"v1", timeout=10
-    ).raise_for_status()
+    requests.post(f"{BASE_URL}/asgi/set?k=ak2", data=b"v1", timeout=10).raise_for_status()
     g = requests.get(f"{BASE_URL}/asgi/get?k=ak2", timeout=10)
     assert g.status_code == 200
     assert g.content == b"v1"
 
-    requests.post(
-        f"{BASE_URL}/asgi/append?k=al", data=b"a", timeout=10
-    ).raise_for_status()
-    requests.post(
-        f"{BASE_URL}/asgi/append?k=al", data=b"b", timeout=10
-    ).raise_for_status()
+    requests.post(f"{BASE_URL}/asgi/append?k=al", data=b"a", timeout=10).raise_for_status()
+    requests.post(f"{BASE_URL}/asgi/append?k=al", data=b"b", timeout=10).raise_for_status()
     g2 = requests.get(f"{BASE_URL}/asgi/get?k=al", timeout=10)
     assert g2.status_code == 200
     assert g2.json() == ["a", "b"]
@@ -69,12 +63,8 @@ def test_esgi_cache():
     assert g.status_code == 200
     assert g.content == b"esgi-bytes"
 
-    requests.post(
-        f"{BASE_URL}/esgi/append?k=eq", data=b"p1", timeout=10
-    ).raise_for_status()
-    requests.post(
-        f"{BASE_URL}/esgi/append?k=eq", data=b"p2", timeout=10
-    ).raise_for_status()
+    requests.post(f"{BASE_URL}/esgi/append?k=eq", data=b"p1", timeout=10).raise_for_status()
+    requests.post(f"{BASE_URL}/esgi/append?k=eq", data=b"p2", timeout=10).raise_for_status()
     lst = requests.get(f"{BASE_URL}/esgi/get?k=eq", timeout=10)
     assert lst.status_code == 200
     assert lst.json() == ["p1", "p2"]

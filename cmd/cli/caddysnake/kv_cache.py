@@ -34,7 +34,7 @@ def _socket_module():
     iface = (os.environ.get(ENV_IFACE) or "").lower()
     if iface == "esgi":
         try:
-            from gevent import socket as gsocket  # type: ignore import-not-found
+            from gevent import socket as gsocket
 
             return gsocket
         except ImportError as e:
@@ -211,9 +211,7 @@ class Cache:
                 sock.connect(path)
             except OSError as e:
                 sock.close()
-                raise CacheError(
-                    f"cannot connect to cache unix socket {path!r}: {e}"
-                ) from e
+                raise CacheError(f"cannot connect to cache unix socket {path!r}: {e}") from e
             return sock
         host, port = _parse_tcp_host_port(addr)
         sock = mod.socket(mod.AF_INET, mod.SOCK_STREAM)
@@ -323,9 +321,7 @@ class Cache:
             r = self._roundtrip([b"CSPOP", kb, str(float(timeout)).encode()])
         return r
 
-    async def aset(
-        self, key: str | bytes, value: str | bytes, ttl: int | None = None
-    ) -> None:
+    async def aset(self, key: str | bytes, value: str | bytes, ttl: int | None = None) -> None:
         """Async wrapper for ``set`` (runs in a worker thread via ``asyncio.to_thread``)."""
         await asyncio.to_thread(self.set, key, value, ttl)
 
@@ -341,9 +337,7 @@ class Cache:
         """Async wrapper for ``append`` (``asyncio.to_thread``)."""
         await asyncio.to_thread(self.append, key, value)
 
-    async def apop(
-        self, key: str | bytes, timeout: float | None = None
-    ) -> bytes | None:
+    async def apop(self, key: str | bytes, timeout: float | None = None) -> bytes | None:
         """Async wrapper for ``pop`` (``asyncio.to_thread``).
 
         The blocking wait still runs in a thread; tune ``timeout`` to bound wait time.

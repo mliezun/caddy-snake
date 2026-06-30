@@ -32,3 +32,37 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
           push-image: "false"
+
+  trivy:
+    name: Trivy scan
+    runs-on: ubuntu-24.04
+    needs: build
+    permissions:
+      contents: read
+      security-events: write
+    strategy:
+      matrix:
+        python-version: ["3.13"]
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+      - name: Build image for scanning
+        run: |
+          docker build --build-arg PY_VERSION=${{ matrix.python-version }} -t caddy-snake:scan .
+      - name: Run Trivy vulnerability scanner
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: caddy-snake:scan
+          format: sarif
+          output: trivy-results.sarif
+          severity: CRITICAL,HIGH
+          limit-severities-for-sarif: true
+          scanners: vuln
+          exit-code: "1"
+      - name: Upload Trivy scan results
+        if: always()
+        uses: github/codeql-action/upload-sarif@8aad20d150bbac5944a9f9d289da16a4b0d87c1e # v4.36.2
+        with:
+          sarif_file: trivy-results.sarif
+          category: trivy

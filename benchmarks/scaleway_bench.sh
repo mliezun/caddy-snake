@@ -88,7 +88,7 @@ REMOTE_DIR="/root/caddy-snake"
 REMOTE_PREP='
 set -euo pipefail
 export DEBIAN_FRONTEND=noninteractive
-for i in $(seq 1 24); do
+for _ in $(seq 1 24); do
   apt-get update -qq && break
   sleep 10
 done

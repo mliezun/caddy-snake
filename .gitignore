@@ -37,4 +37,3 @@ items.db
 
 # Benchmark harness per-run logs
 benchmarks/hey_output_*.txt
-

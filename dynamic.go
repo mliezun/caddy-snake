@@ -117,15 +117,15 @@ type appFactory func(resolvedModule, resolvedDir, resolvedVenv string, envFiles 
 // contains {host.labels.2}, each subdomain gets its own Python app instance
 // imported from the corresponding directory.
 type DynamicApp struct {
-	mu            sync.RWMutex
-	apps          map[string]AppServer
+	mu              sync.RWMutex
+	apps            map[string]AppServer
 	modulePattern   string
 	workingDir      string
 	venvPath        string
 	envFilePatterns []string
 	envVarPatterns  map[string]string
 	factory         appFactory
-	logger        *zap.Logger
+	logger          *zap.Logger
 
 	// Autoreload fields
 	autoreload          bool
@@ -142,16 +142,16 @@ type DynamicApp struct {
 // code 1 when app creation fails (e.g. app deleted), so the process can terminate.
 func NewDynamicApp(modulePattern, workingDir, venvPath string, envFilePatterns []string, envVarPatterns map[string]string, factory appFactory, logger *zap.Logger, autoreload bool, exitOnReloadFailure func(code int)) (*DynamicApp, error) {
 	d := &DynamicApp{
-		apps:                 make(map[string]AppServer),
-		modulePattern:        modulePattern,
-		workingDir:           workingDir,
-		venvPath:             venvPath,
-		envFilePatterns:      cloneEnvFiles(envFilePatterns),
-		envVarPatterns:       cloneEnvVars(envVarPatterns),
-		factory:              factory,
-		logger:               logger,
-		autoreload:           autoreload,
-		exitOnReloadFailure:  exitOnReloadFailure,
+		apps:                make(map[string]AppServer),
+		modulePattern:       modulePattern,
+		workingDir:          workingDir,
+		venvPath:            venvPath,
+		envFilePatterns:     cloneEnvFiles(envFilePatterns),
+		envVarPatterns:      cloneEnvVars(envVarPatterns),
+		factory:             factory,
+		logger:              logger,
+		autoreload:          autoreload,
+		exitOnReloadFailure: exitOnReloadFailure,
 	}
 
 	if autoreload {

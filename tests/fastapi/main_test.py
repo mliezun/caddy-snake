@@ -1,9 +1,10 @@
-import os
 import base64
+import os
 import socket
-import uuid
 import time
+import uuid
 from concurrent.futures import ThreadPoolExecutor
+
 import psutil
 import requests
 
@@ -124,9 +125,7 @@ def wait_for_stream_endpoint(timeout: float = 60.0) -> None:
         try:
             with socket.create_connection(("localhost", 9080), timeout=2) as sock:
                 sock.sendall(
-                    b"GET /stream/slow HTTP/1.1\r\n"
-                    b"Host: localhost\r\n"
-                    b"Connection: close\r\n\r\n"
+                    b"GET /stream/slow HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n"
                 )
                 data = sock.recv(4096)
             if b"HTTP/1.1 200" in data and b"chunk-" in data:
@@ -149,9 +148,7 @@ def test_stream_client_disconnect(log_path: str = "caddy.log"):
 
     sock = socket.create_connection(("localhost", 9080))
     try:
-        sock.sendall(
-            b"GET /stream/slow HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n"
-        )
+        sock.sendall(b"GET /stream/slow HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
         data = b""
         while b"chunk-" not in data:
             chunk = sock.recv(4096)
@@ -166,7 +163,7 @@ def test_stream_client_disconnect(log_path: str = "caddy.log"):
 
     time.sleep(1.5)
 
-    with open(log_path, "r", encoding="utf-8", errors="replace") as fd:
+    with open(log_path, encoding="utf-8", errors="replace") as fd:
         fd.seek(log_offset)
         logs = fd.read()
 
@@ -190,7 +187,7 @@ def test_stream_client_disconnect(log_path: str = "caddy.log"):
 
 def check_lifespan_events_on_logs(logs: str):
     startup_count = 0
-    with open(logs, "r") as fd:
+    with open(logs) as fd:
         for line in fd:
             if "Lifespan startup" in line:
                 startup_count += 1

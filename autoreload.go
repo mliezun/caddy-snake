@@ -14,7 +14,7 @@ import (
 // watchDirRecursive adds all directories under root to the fsnotify watcher.
 // It is used by both AutoreloadableApp and DynamicApp.
 func watchDirRecursive(watcher *fsnotify.Watcher, root string, logger *zap.Logger) {
-	filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
+	if err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
 		}
@@ -28,7 +28,12 @@ func watchDirRecursive(watcher *fsnotify.Watcher, root string, logger *zap.Logge
 			)
 		}
 		return nil
-	})
+	}); err != nil {
+		logger.Warn("autoreload: failed to walk working directory",
+			zap.String("path", root),
+			zap.Error(err),
+		)
+	}
 }
 
 // isPythonFileEvent returns true if the event is a write/create/remove/rename
@@ -51,21 +56,23 @@ func handleNewDirEvent(event fsnotify.Event, watcher *fsnotify.Watcher) {
 	if err != nil || !info.IsDir() {
 		return
 	}
-	watcher.Add(event.Name)
+	if err := watcher.Add(event.Name); err != nil {
+		return
+	}
 }
 
 // AutoreloadableApp wraps an AppServer to support hot-reloading when Python
 // files in the working directory change. It watches for .py file modifications
 // and reloads the app after a debounce period to group rapid changes.
 type AutoreloadableApp struct {
-	mu                   sync.RWMutex
-	app                  AppServer
-	factory              func() (AppServer, error)
-	watcher              *fsnotify.Watcher
-	stopCh               chan struct{}
-	logger               *zap.Logger
-	workingDir           string
-	exitOnReloadFailure   func(code int) // if set, process exits on reload failure instead of serving 500
+	mu                  sync.RWMutex
+	app                 AppServer
+	factory             func() (AppServer, error)
+	watcher             *fsnotify.Watcher
+	stopCh              chan struct{}
+	logger              *zap.Logger
+	workingDir          string
+	exitOnReloadFailure func(code int) // if set, process exits on reload failure instead of serving 500
 }
 
 // NewAutoreloadableApp creates an AutoreloadableApp that wraps the given app and
@@ -203,7 +210,7 @@ type errorApp struct {
 
 func (e *errorApp) HandleRequest(w http.ResponseWriter, r *http.Request) error {
 	w.WriteHeader(http.StatusServiceUnavailable)
-	w.Write([]byte("Service temporarily unavailable"))
+	_, _ = w.Write([]byte("Service temporarily unavailable"))
 	return nil
 }
 

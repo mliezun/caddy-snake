@@ -77,15 +77,15 @@ type AppServer interface {
 
 // CaddySnake module that communicates with a Python app
 type CaddySnake struct {
-	ModuleWsgi string `json:"module_wsgi,omitempty"`
-	ModuleAsgi string `json:"module_asgi,omitempty"`
-	ModuleEsgi string `json:"module_esgi,omitempty"`
-	Runtime    string `json:"runtime,omitempty"`
-	Lifespan   string `json:"lifespan,omitempty"`
-	WorkingDir string `json:"working_dir,omitempty"`
-	VenvPath   string `json:"venv_path,omitempty"`
-	Workers    string `json:"workers,omitempty"`
-	Autoreload string `json:"autoreload,omitempty"`
+	ModuleWsgi string            `json:"module_wsgi,omitempty"`
+	ModuleAsgi string            `json:"module_asgi,omitempty"`
+	ModuleEsgi string            `json:"module_esgi,omitempty"`
+	Runtime    string            `json:"runtime,omitempty"`
+	Lifespan   string            `json:"lifespan,omitempty"`
+	WorkingDir string            `json:"working_dir,omitempty"`
+	VenvPath   string            `json:"venv_path,omitempty"`
+	Workers    string            `json:"workers,omitempty"`
+	Autoreload string            `json:"autoreload,omitempty"`
 	PythonPath string            `json:"python_path,omitempty"`
 	EnvFiles   []string          `json:"env_files,omitempty"`
 	EnvVars    map[string]string `json:"env_vars,omitempty"`
@@ -543,11 +543,11 @@ func (p *proxyBufferPool) Get() []byte {
 	if b == nil {
 		return make([]byte, 32*1024)
 	}
-	return b.([]byte)
+	return *b.(*[]byte)
 }
 
 func (p *proxyBufferPool) Put(b []byte) {
-	p.pool.Put(b)
+	p.pool.Put(&b)
 }
 
 var sharedProxyBufferPool = &proxyBufferPool{}
@@ -686,13 +686,13 @@ func (w *PythonWorker) Start() error {
 	if runtime.GOOS == "windows" {
 		port, err := waitForPortFile(w.Socket.Name(), 10*time.Second)
 		if err != nil {
-			w.Cmd.Process.Kill()
+			_ = w.Cmd.Process.Kill()
 			_ = w.Cmd.Wait()
 			return fmt.Errorf("waiting for Python worker port file: %w", err)
 		}
 		w.DialAddr = "127.0.0.1:" + strconv.Itoa(port)
 	} else if err := waitForUnixSocket(w.Socket.Name(), 10*time.Second); err != nil {
-		w.Cmd.Process.Kill()
+		_ = w.Cmd.Process.Kill()
 		_ = w.Cmd.Wait()
 		return fmt.Errorf("waiting for Python worker socket: %w", err)
 	}
@@ -765,7 +765,7 @@ func (w *PythonWorker) Cleanup() error {
 		// On Windows, Signal(SIGTERM) is not supported; only Kill works.
 		// Send SIGTERM on Unix for graceful shutdown (ASGI lifespan), Kill on Windows.
 		if runtime.GOOS == "windows" {
-			w.Cmd.Process.Kill()
+			_ = w.Cmd.Process.Kill()
 		} else {
 			_ = w.Cmd.Process.Signal(syscall.SIGTERM)
 		}
@@ -780,7 +780,7 @@ func (w *PythonWorker) Cleanup() error {
 				return err
 			}
 		case <-time.After(5 * time.Second):
-			w.Cmd.Process.Kill()
+			_ = w.Cmd.Process.Kill()
 			<-done
 		}
 	}
@@ -847,8 +847,7 @@ func (wg *PythonWorkerGroup) Cleanup() error {
 func (wg *PythonWorkerGroup) HandleRequest(rw http.ResponseWriter, req *http.Request) error {
 	n := wg.roundRobin.Add(1)
 	idx := int(n % uint64(len(wg.Workers)))
-	wg.Workers[idx].HandleRequest(rw, req)
-	return nil
+	return wg.Workers[idx].HandleRequest(rw, req)
 }
 
 func init() {

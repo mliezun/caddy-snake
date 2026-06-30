@@ -25,9 +25,7 @@ import click
     default="0",
     help="The number of workers to spawn (default: 0, uses CPU count)",
 )
-@click.option(
-    "--static-path", help="Path to a static directory to serve: path/to/static"
-)
+@click.option("--static-path", help="Path to a static directory to serve: path/to/static")
 @click.option(
     "--static-route",
     default="/static",

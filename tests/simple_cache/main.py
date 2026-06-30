@@ -25,9 +25,7 @@ def wsgi_app(environ, start_response):
     method = (environ.get("REQUEST_METHOD") or "GET").upper()
 
     def respond(status: int, body: bytes, ctype: str = "text/plain") -> list[bytes]:
-        reason = {200: "OK", 404: "Not Found", 500: "Internal Server Error"}.get(
-            status, "OK"
-        )
+        reason = {200: "OK", 404: "Not Found", 500: "Internal Server Error"}.get(status, "OK")
         start_response(f"{status} {reason}", [("Content-Type", ctype)])
         return [body]
 

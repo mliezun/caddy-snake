@@ -1,10 +1,12 @@
-import os
 import base64
-import uuid
+import contextlib
+import os
 import time
+import uuid
 from concurrent.futures import ThreadPoolExecutor
-import requests
+
 import psutil
+import requests
 
 item_count = 0
 
@@ -118,16 +120,13 @@ def wait_for_version(
         # the file so the filesystem watcher fires again.
         now = time.time()
         if retouch_path and (now - last_retouch) >= RETOUCH_INTERVAL:
-            try:
+            with contextlib.suppress(OSError):
                 _touch_file(retouch_path)
-            except OSError:
-                pass
             last_retouch = now
 
         time.sleep(0.3)
     raise AssertionError(
-        f"Timeout after {timeout}s waiting for version '{expected}' "
-        f"(last seen: '{last_value}')"
+        f"Timeout after {timeout}s waiting for version '{expected}' (last seen: '{last_value}')"
     )
 
 
@@ -147,7 +146,7 @@ def _write_and_sync(path: str, content: str) -> None:
 
 def _touch_file(path: str) -> None:
     """Re-write the file with its current content to re-trigger fs watchers."""
-    with open(path, "r") as f:
+    with open(path) as f:
         content = f.read()
     _write_and_sync(path, content)
 
@@ -196,7 +195,7 @@ def test_autoreload():
     print(f"\n=== Autoreload test ({AUTORELOAD_CYCLES} cycles) ===")
 
     # Read the original file so we can restore it no matter what
-    with open(MAIN_PY_PATH, "r") as f:
+    with open(MAIN_PY_PATH) as f:
         original_content = f.read()
 
     current_content = original_content
@@ -229,10 +228,7 @@ def test_autoreload():
             # Verify old Python process was terminated: only 1 worker should remain.
             # reload() swaps in the new worker before cleanup finishes, so poll briefly.
             workers = wait_for_worker_count(1)
-            print(
-                f"  Reload {i}: {old_ver} -> {new_ver}  ({elapsed:.2f}s)  "
-                f"[workers: {workers}]"
-            )
+            print(f"  Reload {i}: {old_ver} -> {new_ver}  ({elapsed:.2f}s)  [workers: {workers}]")
             assert workers == 1, (
                 f"Expected 1 Python worker after reload {i}, found {workers} "
                 f"(old process not terminated?)"
@@ -241,9 +237,7 @@ def test_autoreload():
         # 3. Final sanity check: exactly 1 worker after all reload cycles
         final_workers = wait_for_worker_count(1)
         print(f"  Final Python workers: {final_workers}")
-        assert final_workers == 1, (
-            f"Expected 1 Python worker at end of test, found {final_workers}"
-        )
+        assert final_workers == 1, f"Expected 1 Python worker at end of test, found {final_workers}"
 
         print("=== Autoreload test passed ===\n")
 

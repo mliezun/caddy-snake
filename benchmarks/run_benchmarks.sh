@@ -83,7 +83,7 @@ run_benchmark() {
 
     # Wait for server to be ready
     echo "    Waiting for server..."
-    for i in $(seq 1 30); do
+    for _ in $(seq 1 30); do
         if curl -s http://localhost:9080/hello > /dev/null 2>&1; then
             break
         fi
@@ -180,7 +180,7 @@ run_benchmark "fastapi_caddysnake" \
 run_benchmark "esgi_gevent_caddy" \
     'rm -f $BENCH_DIR/esgi_upstream.sock
      cd $BENCH_DIR && source venv/bin/activate && python /workspace/caddysnake.py --interface esgi --app app_esgi:application --socket "$BENCH_DIR/esgi_upstream.sock" --working-dir "$BENCH_DIR" --venv "$BENCH_DIR/venv" --runtime gevent > /dev/null 2>&1 &
-     for i in $(seq 1 30); do
+     for _ in $(seq 1 30); do
        if [[ -S "$BENCH_DIR/esgi_upstream.sock" ]]; then break; fi
        sleep 1
      done

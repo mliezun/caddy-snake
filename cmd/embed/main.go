@@ -69,7 +69,7 @@ func extractTarGz(data []byte, targetDir string) error {
 				return err
 			}
 			outFile.Close()
-			
+
 		case tar.TypeSymlink:
 			// Guard against symlinks escaping the target directory
 			linkDest := header.Linkname

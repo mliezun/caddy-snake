@@ -14,10 +14,10 @@ fi
 echo "Starting $BINARY on 127.0.0.1:$PORT..."
 ./"$BINARY" --listen "127.0.0.1:$PORT" 2>&1 &
 PID=$!
-trap "kill $PID 2>/dev/null || true" EXIT
+trap 'kill "$PID" 2>/dev/null || true' EXIT
 
 echo "Waiting for server and workers..."
-for i in $(seq 1 45); do
+for _ in $(seq 1 45); do
     RESPONSE=$(curl -s "http://127.0.0.1:$PORT/")
     if echo "$RESPONSE" | grep -q "Replace this placeholder"; then
         echo "Response: $RESPONSE"

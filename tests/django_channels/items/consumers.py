@@ -1,7 +1,7 @@
 import json
 import sys
-from channels.generic.websocket import AsyncWebsocketConsumer
 
+from channels.generic.websocket import AsyncWebsocketConsumer
 
 # In-memory database for testing (similar to the original Django test)
 db = {}
@@ -75,9 +75,7 @@ class ItemConsumer(AsyncWebsocketConsumer):
 
             elif action == "ping":
                 # Echo back the ping with item data
-                await self.send(
-                    text_data=json.dumps({"action": "pong", "data": data.get("data")})
-                )
+                await self.send(text_data=json.dumps({"action": "pong", "data": data.get("data")}))
 
             else:
                 await self.send(
@@ -87,10 +85,6 @@ class ItemConsumer(AsyncWebsocketConsumer):
                 )
 
         except json.JSONDecodeError:
-            await self.send(
-                text_data=json.dumps({"action": "error", "message": "Invalid JSON"})
-            )
+            await self.send(text_data=json.dumps({"action": "error", "message": "Invalid JSON"}))
         except Exception as e:
-            await self.send(
-                text_data=json.dumps({"action": "error", "message": str(e)})
-            )
+            await self.send(text_data=json.dumps({"action": "error", "message": str(e)}))

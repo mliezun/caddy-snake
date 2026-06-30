@@ -11,7 +11,7 @@ on:
 permissions: {}
 
 jobs:
-  build:
+  lint:
     name: Lint
     runs-on: ubuntu-24.04
     steps:
@@ -19,12 +19,92 @@ jobs:
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           persist-credentials: false
+
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version: "1.26"
           cache: false
+
+      # zizmor: ignore[superfluous-actions]
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.13"
+          cache: pip
+
+      - name: Install system linters
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y shellcheck
+          bash <(curl -sSfL https://raw.githubusercontent.com/rhysd/actionlint/main/scripts/download-actionlint.bash)
+          sudo mv actionlint /usr/local/bin/
+
+      - name: Install Python QA tools
+        run: pip install -r requirements-dev.txt
+
+      - name: Stub embedded Caddy binaries for static analysis
+        run: ./scripts/stub-embed-caddy.sh
+
       - name: Check pre-commit
         uses: pre-commit/action@646c83fcd040023954eafda54b4db0192ce70507 # v3.0.0
-      - name: Go vet
+
+      - name: golangci-lint
         run: |
-          go vet .
+          go install github.com/golangci/golangci-lint/cmd/golangci-lint@v1.64.8
+          golangci-lint run ./...
+
+      - name: Verify go mod tidy
+        run: |
+          go mod tidy
+          git diff --exit-code go.mod go.sum
+
+      - name: Go vet
+        run: go vet ./...
+
+      - name: Ruff check
+        run: ruff check .
+
+      - name: Ruff format check
+        run: ruff format --check .
+
+      - name: ty type check
+        run: ty check --output-format github
+
+      - name: actionlint
+        run: actionlint
+
+      - name: shellcheck
+        run: find . -name '*.sh' -not -path './tests/*/venv/*' -print0 | xargs -0 shellcheck -S error
+
+  docs:
+    name: Docs build
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af # v4.1.0
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: docs/package-lock.json
+      - name: Build docs
+        working-directory: docs
+        run: |
+          npm ci
+          npm run build
+
+  rust:
+    name: Rust clippy
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+      - name: Install Rust
+        run: |
+          rustup component add clippy rustfmt
+      - name: cargo clippy
+        working-directory: cmd/cli
+        run: |
+          cargo clippy -- -D warnings
+          cargo fmt --check

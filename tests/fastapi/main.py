@@ -1,7 +1,7 @@
 import asyncio
 import os
 import sys
-from typing import AsyncGenerator, Optional
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, UploadFile
@@ -25,7 +25,7 @@ db = SqliteDict("items.db", autocommit=True)
 class Item(BaseModel):
     name: str
     description: str
-    blob: Optional[str]
+    blob: str | None
 
 
 @app.get("/item/{id}")

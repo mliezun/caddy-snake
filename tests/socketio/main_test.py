@@ -1,9 +1,10 @@
-import os
 import base64
-import socketio
+import os
 import time
 from concurrent.futures import ThreadPoolExecutor
+
 import psutil
+import socketio
 
 user_count = 0
 
@@ -100,10 +101,10 @@ def check_user_events_on_logs(logs: str, check_count: int = 256):
         "User connected": 0,
         "User disconnected": 0,
     }
-    with open(logs, "r") as fd:
+    with open(logs) as fd:
         for line in fd:
             event = line.strip()
-            for event_key in events_count.keys():
+            for event_key in events_count:
                 if event_key in event:
                     events_count[event_key] += 1
     for event, count in events_count.items():

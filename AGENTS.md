@@ -6,17 +6,27 @@ This guide explains how to work on the caddy-snake project: environment setup, t
 
 ## Pre-commit checklist
 
-Before committing, always run:
+Before committing, run the full local QA suite (recommended):
 
-1. **Go tests**: `go test -race -v .`
-2. **Go + caddytest** (in-process Caddy, on-demand TLS HTTPS): `go test -race -tags=caddytest -timeout 180s .`
-3. **Python tests**: `pytest caddysnake_test.py -v` (or `python -m pytest caddysnake_test.py -v`)
-4. **Integration tests** — at minimum **Flask** and **FastAPI**:
+```bash
+./scripts/qa.sh
+```
+
+Or run checks individually:
+
+1. **Pre-commit hooks**: `pre-commit run --all-files`
+2. **Go tests**: `go test -race -v .`
+3. **Go + caddytest** (in-process Caddy, on-demand TLS HTTPS): `go test -race -tags=caddytest -timeout 180s .`
+4. **Python tests**: `pytest caddysnake_test.py -v`
+5. **Static checks**: `golangci-lint run ./...`, `ruff check .`, `ty check` (or `uvx ty==0.0.55 check`)
+6. **Integration tests** — at minimum **Flask** and **FastAPI**:
    - `./tests/integration.sh flask 3.13`
    - `./tests/integration.sh fastapi 3.13`
-5. **Embed-app** (optional, requires network): `cd cmd/embed-app && ./build.sh app.zip 3.13 && ./test_embed.sh embed-test`
+7. **Embed-app** (optional, requires network): `cd cmd/embed-app && ./build.sh app.zip 3.13 && ./test_embed.sh embed-test`
 
-See [Running tests](#running-tests) for details.
+Install hook once: `pre-commit install`
+
+See [Running tests](#running-tests) and [Automated quality assurance](#automated-quality-assurance) for details.
 
 ---
 
@@ -75,7 +85,7 @@ For full CI-like integration tests without local Python/venv setup:
 ./tests/integration.sh fastapi 3.13
 ```
 
-Valid tools: `django`, `django_channels`, `flask`, `fastapi`, `simple_autoreload`, `simple_async`, `simple_esgi`, `simple_cache`, `socketio`, `dynamic`  
+Valid tools: `django`, `django_channels`, `flask`, `fastapi`, `simple_autoreload`, `simple_async`, `simple_esgi`, `simple_cache`, `socketio`, `dynamic`
 Valid Python versions: `3.12`, `3.13`, `3.13-nogil`, `3.14`, `3.14-nogil`
 
 Requires **Docker** (linux/amd64 container).
@@ -268,6 +278,48 @@ Start Caddy with your app (e.g. Flask or FastAPI), then:
 ```bash
 hey -c 100 -z 10s http://localhost:9080/hello
 ```
+
+---
+
+## Automated quality assurance
+
+CI runs lint, security, and test workflows on every PR and push to `main`.
+
+### Local commands
+
+| Command | Purpose |
+|---------|---------|
+| `./scripts/qa.sh` | Run pre-commit, Go/Python tests, linters, and security CLIs |
+| `pre-commit run --all-files` | Hooks: Ruff, ty, Gitleaks, gofmt, shellcheck, actionlint |
+| `golangci-lint run ./...` | Go static analysis |
+| `ruff check .` / `ruff format --check .` | Python lint and format |
+| `uvx ty==0.0.55 check` | Python type checking |
+| `./scripts/audit-python-deps.sh` | pip-audit over all `requirements*.txt` files |
+
+Install dev tools: `pip install -r requirements-dev.txt` (in a venv).
+
+### CI workflows
+
+| Workflow | Checks |
+|----------|--------|
+| **Lint** | pre-commit, golangci-lint, go vet, Ruff, ty, actionlint, shellcheck, docs build, cargo clippy |
+| **Security** | govulncheck, pip-audit, npm audit, gosec, bandit, Semgrep, Gitleaks |
+| **CodeQL** | Semantic SAST for Go and Python |
+| **Go Tests** | race detector, coverage ≥ 65% |
+| **Python Tests** | pytest coverage ≥ 50% |
+| **Docker** | image build + Trivy scan (CRITICAL/HIGH) |
+| **zizmor** | GitHub Actions workflow security |
+
+### Post-merge (repository settings)
+
+After merging the QA PR, configure on GitHub:
+
+- [ ] **Branch protection** on `main`: require Lint, Go Tests, Python Tests, Security, CodeQL, zizmor
+- [ ] **Secret scanning** and **push protection** (Settings → Code security)
+- [ ] **Copilot Autofix** for code scanning alerts (Settings → Code security)
+- [ ] **Renovate** app installed for dependency update PRs
+- [ ] (Optional) `SNYK_TOKEN` secret for weekly Snyk Code scans
+- [ ] (Optional) Semgrep AppSec account for AI-assisted triage
 
 ---
 

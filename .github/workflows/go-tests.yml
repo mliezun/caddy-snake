@@ -38,5 +38,10 @@ jobs:
         with:
           coverage-file: coverage.out
         continue-on-error: true
+      - name: Enforce minimum coverage
+        run: |
+          pct=$(go tool cover -func=coverage.out | awk '/^total:/ { gsub(/%/,"",$3); print $3 }')
+          echo "Go coverage: ${pct}%"
+          awk -v p="$pct" 'BEGIN { exit (p+0 >= 65 ? 0 : 1) }'
       - name: Build the server
         run: CGO_ENABLED=0 xcaddy build --with github.com/mliezun/caddy-snake=.

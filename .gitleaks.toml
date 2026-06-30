@@ -1,0 +1,16 @@
+title = "caddy-snake gitleaks config"
+
+[allowlist]
+description = "Test fixtures and documentation placeholders"
+paths = [
+    '''(?i).*\.md$''',
+    '''tests/.*/''',
+    '''benchmarks/.*/''',
+]
+
+regexes = [
+    '''sk-test-[a-zA-Z0-9]+''',
+    '''(?i)example\.(com|org|key|token)''',
+    '''(?i)replace-this-placeholder''',
+    '''(?i)your-api-key-here''',
+]
