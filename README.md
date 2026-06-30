@@ -361,18 +361,24 @@ Process-based workers run in **separate Python interpreters**, so they do not sh
 - **Linux and macOS:** the plugin listens on a **Unix domain socket** under a private temporary directory and sets **`CADDYSNAKE_CACHE_ADDR`** to a **`unix:///absolute/path/to/cache.sock`** URL. Traffic stays on the filesystem socket, not the generic TCP/IP stack.
 - **Windows:** workers use **loopback TCP**; **`CADDYSNAKE_CACHE_ADDR`** is like **`127.0.0.1:<ephemeral-port>`**.
 
-Caddy also sets **`CADDYSNAKE_WORKER_INTERFACE`** (`wsgi`, `asgi`, `esgi`, …) and **`CADDYSNAKE_CACHE_TIMEOUT`** (read/connect hint in seconds) for the Python client.
+Caddy also sets **`CADDYSNAKE_WORKER_INTERFACE`** (`wsgi`, `asgi`, `esgi`, …), **`CADDYSNAKE_WORKER_ID`** (stable index `0`…`N-1` per worker group), and **`CADDYSNAKE_CACHE_TIMEOUT`** (read/connect hint in seconds) for the Python client.
+
+The cache supports **scalars**, **FIFO lists**, **sets** (`sadd`/`srem`/`smembers`), atomic **`setnx`**, prefix **`keys`**, and one-shot **`publish`/`subscribe`** for cross-worker coordination.
 
 From app code (with the **`caddysnake`** PyPI package / CLI wheel installed in your venv), use the façade described in the [configuration reference](https://caddy-snake.readthedocs.io/en/latest/docs/reference/#shared-worker-cache):
 
 ```python
-from caddysnake import cache
+from caddysnake import cache, worker_id
 
-cache.set("visits", b"1")
-cache.append("log", b"line\n")
+cache.set("myapp:visits", b"1")
+cache.append("myapp:log", b"line\n")
+cache.sadd("myapp:group", f"worker:{worker_id()}".encode())
+if cache.setnx("myapp:lock", b"1", ttl=30):
+    ...
+msg = cache.subscribe("myapp:events", timeout=10.0)  # one-shot blocking receive
 ```
 
-Thread workers and single-worker setups do not need this path. See the docs for semantics, limits, and when to prefer Redis or another external store.
+Thread workers and single-worker setups do not need this path. See the [configuration reference](https://caddy-snake.readthedocs.io/en/latest/docs/reference/#shared-worker-cache) for the full API (sets, `setnx`, prefix `keys`, `publish`/`subscribe`, limits, and security notes).
 
 ---
 

@@ -22,11 +22,26 @@ Or run checks individually:
 6. **Integration tests** — at minimum **Flask** and **FastAPI**:
    - `./tests/integration.sh flask 3.13`
    - `./tests/integration.sh fastapi 3.13`
+   - For **shared cache** changes: `./tests/integration.sh simple_cache 3.13`
 7. **Embed-app** (optional, requires network): `cd cmd/embed-app && ./build.sh app.zip 3.13 && ./test_embed.sh embed-test`
 
 Install hook once: `pre-commit install`
 
 See [Running tests](#running-tests) and [Automated quality assurance](#automated-quality-assurance) for details.
+
+---
+
+## Documentation
+
+When you implement or change a **user-facing feature** (Caddyfile directives, worker env vars, Python/Go APIs, cache protocol, CLI behavior, integration-test apps, etc.), **update the docs in the same PR** before merge:
+
+1. **[`docs/docs/reference.md`](docs/docs/reference.md)** — authoritative configuration and API reference (Read the Docs).
+2. **[`README.md`](README.md)** — overview and quick examples for GitHub visitors.
+3. **[`AGENTS.md`](AGENTS.md)** — only when agent/workflow guidance changes (setup, QA, release steps).
+
+For cache or multi-worker features, also cover: env vars, wire protocol (`CS*` commands if applicable), Python API, limits, security/trust model, and an integration test under `tests/` when behavior spans workers.
+
+Build docs locally if you touch MkDocs content: `cd docs && mkdocs build` (also exercised in CI **Lint**).
 
 ---
 

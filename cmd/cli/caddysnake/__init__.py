@@ -3,6 +3,7 @@ from .kv_cache import (
     CacheConfigurationError,
     CacheError,
     cache,
+    worker_id,
 )
 
 __all__ = [
@@ -10,4 +11,5 @@ __all__ = [
     "CacheConfigurationError",
     "CacheError",
     "cache",
+    "worker_id",
 ]

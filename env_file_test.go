@@ -89,6 +89,25 @@ func TestBuildWorkerEnv_Precedence(t *testing.T) {
 	}
 }
 
+func TestWorkerInternalEnv_IncludesWorkerID(t *testing.T) {
+	env := workerInternalEnv("wsgi", "unix://cache.sock", "2")
+	m := parseEnvSlice(env)
+	if m[EnvCaddysnakeWorkerID] != "2" {
+		t.Errorf("CADDYSNAKE_WORKER_ID = %q, want 2", m[EnvCaddysnakeWorkerID])
+	}
+	if m[EnvCaddysnakeWorkerInterface] != "wsgi" {
+		t.Errorf("interface = %q", m[EnvCaddysnakeWorkerInterface])
+	}
+}
+
+func TestWorkerInternalEnv_OmitsWorkerIDWhenEmpty(t *testing.T) {
+	env := workerInternalEnv("asgi", "", "")
+	m := parseEnvSlice(env)
+	if _, ok := m[EnvCaddysnakeWorkerID]; ok {
+		t.Error("expected no worker id without cache")
+	}
+}
+
 func TestResolveEnvFilePath(t *testing.T) {
 	dir := t.TempDir()
 	rel := filepath.Join("configs", "app.env")

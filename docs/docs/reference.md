@@ -414,24 +414,59 @@ Caddy sets these automatically for eligible workers:
 | --- | --- |
 | **`CADDYSNAKE_CACHE_ADDR`** | Socket path (`unix://…`) or `host:port` for the cache |
 | **`CADDYSNAKE_WORKER_INTERFACE`** | Worker kind (`wsgi`, `asgi`, `esgi`, …); selects compatible client socket APIs (e.g. gevent for ESGI) |
+| **`CADDYSNAKE_WORKER_ID`** | Stable worker index **`0`…`N-1`** within the worker group (reused after reload; combine with conn/generation in app keys) |
 | **`CADDYSNAKE_CACHE_TIMEOUT`** | Hint for client read/connect timeouts (seconds) |
 
 If **`CADDYSNAKE_CACHE_ADDR`** is unset, the cache client is not available (for example, thread workers or configurations that omit the shared cache).
 
 ### How values are stored
 
-Each key is in one of two shapes:
+Each key is in one of three shapes:
 
 | Shape | How it is created | What `get` returns |
 | --- | --- | --- |
 | **Scalar** | `set(key, value)` | `bytes` |
 | **List** (FIFO) | `append` on a missing key, or on a scalar (scalar becomes first element) | `list[bytes]` (may be empty) |
+| **Set** | `sadd(key, member)` | Use **`smembers`** — `get` returns an error for set keys |
 
-- **`set`** replaces whatever was there (scalar or list) with a new scalar. Optional **`ttl`** is in whole **seconds**; omit for no expiry until delete/overwrite.
+- **`set`** replaces whatever was there (scalar, list, or set) with a new scalar. Optional **`ttl`** is in whole **seconds**; omit for no expiry until delete/overwrite.
 - **`get`** returns `None` if the key is missing or expired.
 - **`delete`** returns `1` if a key was removed, `0` if nothing was stored under that key.
 - **`append`** appends one chunk to the list. If the key held a scalar, the value becomes `[old_scalar, new_chunk]`. **TTL is cleared** when working with list data.
-- **`pop`** removes the **first** list element (FIFO). It returns `None` if the key is missing, expired, holds a **scalar**, or the list is empty when **`timeout`** is omitted. With **`timeout=float(seconds)`**, the server waits up to that long for another worker to **`append`**; it still returns `None` if the wait elapses with no element. This is the usual pattern for **cross-worker queues** (one worker blocks on `pop`, others `append`).
+- **`pop`** removes the **first** list element (FIFO). It returns `None` if the key is missing, expired, holds a **scalar** or **set**, or the list is empty when **`timeout`** is omitted. With **`timeout=float(seconds)`**, the server waits up to that long for another worker to **`append`**.
+- **`sadd` / `srem` / `smembers`** manage **set** membership (unique members). **`smembers`** returns an empty list for a missing key. Remove stale members with **`srem`** on disconnect (sets have no per-member TTL).
+- **`setnx(key, value, ttl=None)`** sets a scalar only if the key is absent; returns **`True`** if set, **`False`** if another value exists.
+- **`keys(prefix, limit=1000)`** lists key names (as **`bytes`**) matching a **non-empty** prefix (hard cap **1000**). All workers share one cache — **prefix keys** (e.g. `myapp:group:foo`) to avoid collisions.
+- **`publish(channel, message)`** delivers to workers **currently blocked** on **`subscribe(channel, timeout)`** (one-shot blocking receive, not persistent Redis-style pub/sub). Returns the number of waiters notified.
+- **`subscribe(channel, timeout)`** requires a **positive timeout** (seconds). Returns **`bytes`** or **`None`** on timeout.
+
+:::note Security and limitations
+
+There is **no tenant isolation** between workers or dynamic apps on the same handler — any worker can read, delete, or enumerate keys. Use app-specific prefixes. **`CSGROUPSEND`** (atomic set fan-out) is not built in; use **`smembers`** + **`append`** in app code with known race trade-offs, or external Redis for full channel-layer semantics.
+
+:::
+
+### Wire protocol (CS* commands)
+
+All commands are RESP2 arrays of bulk strings. Replies are bulk (`$…`), integer (`:…`), array (`*…`), simple string (`+OK`), or error (`-ERR …`).
+
+| Command | Arguments | Reply | Notes |
+| --- | --- | --- | --- |
+| **`CSGET`** | key | bulk, array, or `$-1` | Set keys → `-ERR wrong type` |
+| **`CSSET`** | key value [ttl_sec] | `+OK` | Overwrites any prior type |
+| **`CSDEL`** | key | `:0` / `:1` | |
+| **`CSAPPEND`** | key chunk | `+OK` | List only; wrong type on sets |
+| **`CSPOP`** | key [timeout_sec] | bulk or `$-1` | FIFO; blocks when timeout set |
+| **`CSSADD`** | key member | `:0` / `:1` | Creates set if missing |
+| **`CSSREM`** | key member | `:0` / `:1` | Deletes key when last member removed |
+| **`CSSMEMBERS`** | key | `*N` bulks | `*0` if missing (Redis-aligned) |
+| **`CSSETNX`** | key value [ttl_sec] | `:0` / `:1` | Scalar only if absent |
+| **`CSKEYS`** | prefix [limit] | `*N` bulks | **Prefix required**; limit ≤ 1000 |
+| **`CSPUBLISH`** | channel message | `:N` | `N` = waiters notified |
+| **`CSSUBSCRIBE`** | channel timeout_sec | bulk or `$-1` | Timeout required; max **300** s |
+| **`CSQUIT`** | — | `+OK` | Closes connection |
+
+Blocking **`CSPOP`** and **`CSSUBSCRIBE`** hold a server goroutine until data arrives, timeout, or cache shutdown (Caddy reload).
 
 ### Python API
 
@@ -492,15 +527,39 @@ item = cache.pop("jobs")
 item = cache.pop("jobs", timeout=30.0)
 ```
 
-#### `cache.aset` / `cache.aget` / `cache.adelete` / `cache.aappend` / `cache.apop`
+#### `cache.aset` / `cache.aget` / … / `cache.apop`
 
-Async variants for ASGI: each call runs the blocking client in `asyncio.to_thread`, so the event loop stays responsive.
+Async variants for ASGI: each call runs the blocking client in `asyncio.to_thread`.
+
+#### `cache.sadd` / `cache.srem` / `cache.smembers`
+
+Set operations for group rosters and connection registries.
+
+#### `cache.setnx(key, value, ttl=None) -> bool`
+
+Atomic insert-if-absent (scalar only).
+
+#### `cache.keys(prefix, limit=1000) -> list[bytes]`
+
+Prefix key listing (admin/debug; **`prefix` required**).
+
+#### `cache.publish` / `cache.subscribe`
+
+One-shot blocking fan-out: **`subscribe`** must pass **`timeout`** (seconds).
+
+#### `worker_id() -> int | None`
+
+Reads **`CADDYSNAKE_WORKER_ID`** (`0`…`N-1`) when set.
 
 ```python
+from caddysnake import cache, worker_id
+
 await cache.aset("k", b"v")
 val = await cache.aget("k")
 await cache.aappend("q", b"work")
 item = await cache.apop("q", timeout=5.0)
+cache.sadd("group:room", f"worker:{worker_id()}".encode())
+msg = cache.subscribe("events", timeout=10.0)
 ```
 
 :::note
