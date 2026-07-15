@@ -53,12 +53,15 @@ class _FakeSock:
 
 class _FakeMod:
     AF_INET = 2
+    AF_UNIX = 1
     SOCK_STREAM = 1
     _response = b""
     last_sock: _FakeSock | None = None
+    last_args: tuple = ()
 
     @classmethod
-    def socket(cls, *_a, **_k):
+    def socket(cls, *a, **_k):
+        cls.last_args = a
         cls.last_sock = _FakeSock(cls._response)
         return cls.last_sock
 
@@ -67,6 +70,34 @@ def _patch_cache(monkeypatch):
     monkeypatch.setenv("CADDYSNAKE_CACHE_ADDR", "127.0.0.1:19999")
     monkeypatch.delenv("CADDYSNAKE_WORKER_INTERFACE", raising=False)
     monkeypatch.setattr("caddysnake.kv_cache._socket_module", lambda: _FakeMod)
+
+
+def _patch_cache_unix(monkeypatch, path="/tmp/caddysnake-cache-test.sock"):
+    monkeypatch.setenv("CADDYSNAKE_CACHE_ADDR", f"unix://{path}")
+    monkeypatch.setenv("CADDYSNAKE_WORKER_INTERFACE", "esgi")
+    monkeypatch.setattr("caddysnake.kv_cache._socket_module", lambda: _FakeMod)
+
+
+def test_unix_socket_uses_the_selected_socket_module(monkeypatch):
+    # ESGI workers get gevent.socket from _socket_module(). The unix:// path must
+    # honour it: opening a blocking stdlib socket instead never yields to the gevent
+    # hub, freezing every other greenlet in the worker for the whole round-trip.
+    # unix:// is the default transport on Unix, so this is the hot path.
+    _patch_cache_unix(monkeypatch)
+    _FakeMod._response = b"$-1\r\n"
+    _FakeMod.last_args = ()
+    assert Cache().get("missing") is None
+    assert _FakeMod.last_args == (_FakeMod.AF_UNIX, _FakeMod.SOCK_STREAM)
+
+
+def test_unix_blocking_roundtrip_uses_the_selected_socket_module(monkeypatch):
+    # Same requirement for the blocking (wait) variant behind pop/subscribe, which
+    # holds the socket for up to max(_timeout_sec(), wait + 5.0) seconds.
+    _patch_cache_unix(monkeypatch)
+    _FakeMod._response = b"$-1\r\n"
+    _FakeMod.last_args = ()
+    Cache().pop("q", timeout=0.01)
+    assert _FakeMod.last_args == (_FakeMod.AF_UNIX, _FakeMod.SOCK_STREAM)
 
 
 def test_get_miss_roundtrip(monkeypatch):

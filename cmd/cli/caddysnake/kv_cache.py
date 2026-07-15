@@ -201,9 +201,12 @@ class Cache:
         t = _timeout_sec() if timeout is None else timeout
         if addr.startswith("unix://"):
             path = addr[7:]
-            import socket as stdsocket
-
-            sock = stdsocket.socket(stdsocket.AF_UNIX, stdsocket.SOCK_STREAM)
+            # Must use ``mod`` (gevent.socket for ESGI workers), never the stdlib
+            # socket: a blocking stdlib call here does not yield to the gevent hub,
+            # which freezes every other greenlet in the worker for the duration of
+            # the cache round-trip. gevent.socket supports AF_UNIX — the ESGI
+            # listener itself uses it (see run_esgi_server in caddysnake.py).
+            sock = mod.socket(mod.AF_UNIX, mod.SOCK_STREAM)
             sock.settimeout(t)
             try:
                 sock.connect(path)
