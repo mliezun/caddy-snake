@@ -1,6 +1,7 @@
 """Tests for caddysnake.py - WSGI/ASGI server for caddy-snake."""
 
 import asyncio
+import inspect
 import io
 import os
 import struct
@@ -1572,4 +1573,4 @@ class TestAsgiEventLoopBootstrap:
         assert callbacks
         for callback in callbacks:
             assert callback.__name__ == "_stop_on_signal"
-            assert not asyncio.iscoroutinefunction(callback)
+            assert not inspect.iscoroutinefunction(callback)

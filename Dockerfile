@@ -26,6 +26,7 @@ ARG PY_VERSION=3.13
 
 RUN export DEBIAN_FRONTEND=noninteractive &&\
     apt-get update -yyqq &&\
+    apt-get upgrade -yyqq libssl3 openssl &&\
     apt-get install -yyqq wget software-properties-common &&\
     add-apt-repository -y ppa:deadsnakes/ppa &&\
     apt-get update -yyqq &&\
@@ -33,7 +34,6 @@ RUN export DEBIAN_FRONTEND=noninteractive &&\
     ln -sf /usr/bin/python${PY_VERSION} /usr/bin/python &&\
     wget -q https://bootstrap.pypa.io/get-pip.py &&\
     python get-pip.py &&\
-    apt-get upgrade -yyqq libssl3 openssl &&\
     apt-get clean &&\
     rm -rf /var/lib/apt/lists/* get-pip.py
 

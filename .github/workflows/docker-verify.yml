@@ -32,6 +32,7 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
           push-image: "false"
+          platforms: linux/amd64
 
   trivy:
     name: Trivy scan

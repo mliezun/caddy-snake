@@ -7,6 +7,10 @@ inputs:
   push-image:
     description: If true, install cosign, log in, and push images
     required: true
+  platforms:
+    description: Target platforms for buildx (comma-separated)
+    required: false
+    default: "linux/amd64,linux/arm64"
   # Registry credentials must be inputs (not secrets.* in composite steps — secrets context is invalid there).
   ghcr_token:
     description: secrets.GITHUB_TOKEN for GHCR when push-image is true
@@ -63,7 +67,7 @@ runs:
         context: .
         push: ${{ inputs.push-image == 'true' }}
         build-args: PY_VERSION=${{ inputs.python-version }}
-        platforms: linux/amd64,linux/arm64
+        platforms: ${{ inputs.platforms }}
         tags: |
           ${{ env.REGISTRY_GHCR }}/${{ env.IMAGE_NAME }}:${{ endsWith(github.ref_name, '/merge') && 'dev' || github.ref_name }}-py${{ inputs.python-version }}
           ${{ env.REGISTRY_GHCR }}/${{ env.IMAGE_NAME }}:latest-py${{ inputs.python-version }}
