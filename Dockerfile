@@ -1,6 +1,6 @@
 FROM ubuntu:22.04 AS builder
 
-ARG GO_VERSION=1.26.4
+ARG GO_VERSION=1.26.5
 
 RUN export DEBIAN_FRONTEND=noninteractive &&\
     apt-get update -yyqq &&\
