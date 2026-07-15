@@ -1,6 +1,7 @@
 """Tests for caddysnake.py - WSGI/ASGI server for caddy-snake."""
 
 import asyncio
+import inspect
 import io
 import os
 import struct
@@ -1467,3 +1468,109 @@ class TestMain:
             pytest.raises(SystemExit),
         ):
             cs.main()
+
+
+class TestAsgiEventLoopBootstrap:
+    def test_asgi_loop_factory_native_returns_none(self):
+        assert cs._asgi_loop_factory("native") is None
+
+    def test_asgi_loop_factory_uvloop_returns_factory(self):
+        uvloop = pytest.importorskip("uvloop")
+        assert cs._asgi_loop_factory("uvloop") is uvloop.new_event_loop
+        assert cs._asgi_loop_factory("libuv") is uvloop.new_event_loop
+
+    def test_main_asgi_uses_loop_factory_not_policy(self):
+        """ASGI main() must not call the deprecated set_event_loop_policy API."""
+
+        async def _fake_run_asgi(*args):
+            pass
+
+        with (
+            mock.patch.object(cs, "run_asgi_server", side_effect=_fake_run_asgi),
+            mock.patch.object(cs, "_asgi_loop_factory", return_value=object()) as factory,
+            mock.patch.object(asyncio, "run") as run,
+            mock.patch.object(asyncio, "set_event_loop_policy") as set_policy,
+            mock.patch.object(
+                sys,
+                "argv",
+                [
+                    "caddysnake.py",
+                    "--socket",
+                    "/tmp/test.sock",
+                    "--app",
+                    "tests.test_apps.minimal_asgi:app",
+                    "--interface",
+                    "asgi",
+                ],
+            ),
+        ):
+            cs.main()
+            factory.assert_called_once_with("uvloop")
+            run.assert_called_once()
+            assert run.call_args.kwargs["loop_factory"] is factory.return_value
+            set_policy.assert_not_called()
+
+    def test_main_asgi_native_omits_loop_factory(self):
+        async def _fake_run_asgi(*args):
+            pass
+
+        with (
+            mock.patch.object(cs, "run_asgi_server", side_effect=_fake_run_asgi),
+            mock.patch.object(cs, "_asgi_loop_factory", return_value=None),
+            mock.patch.object(asyncio, "run") as run,
+            mock.patch.object(
+                sys,
+                "argv",
+                [
+                    "caddysnake.py",
+                    "--socket",
+                    "/tmp/test.sock",
+                    "--app",
+                    "tests.test_apps.minimal_asgi:app",
+                    "--interface",
+                    "asgi",
+                    "--runtime",
+                    "native",
+                ],
+            ),
+        ):
+            cs.main()
+            run.assert_called_once()
+            assert "loop_factory" not in run.call_args.kwargs
+
+    @pytest.mark.skipif(sys.platform == "win32", reason="Unix signal handlers only")
+    def test_run_asgi_server_uses_plain_signal_callback(self):
+        loop = mock.Mock()
+        callbacks = []
+
+        def capture(sig, callback):
+            callbacks.append(callback)
+
+        loop.add_signal_handler.side_effect = capture
+        server = mock.AsyncMock()
+        server.wait_closed = mock.AsyncMock()
+
+        async def _exercise():
+            with (
+                mock.patch.object(asyncio, "get_running_loop", return_value=loop),
+                mock.patch.object(
+                    asyncio,
+                    "start_unix_server",
+                    new_callable=mock.AsyncMock,
+                    return_value=server,
+                ),
+                mock.patch.object(asyncio, "Event") as event_cls,
+            ):
+                stop_event = mock.Mock()
+                stop_event.wait = mock.AsyncMock(side_effect=asyncio.CancelledError())
+                event_cls.return_value = stop_event
+                with pytest.raises(asyncio.CancelledError):
+                    await cs.run_asgi_server(
+                        mock.Mock(), "/tmp/caddysnake-test.sock", lifespan=False
+                    )
+
+        asyncio.run(_exercise())
+        assert callbacks
+        for callback in callbacks:
+            assert callback.__name__ == "_stop_on_signal"
+            assert not inspect.iscoroutinefunction(callback)
