@@ -1564,7 +1564,9 @@ class TestAsgiEventLoopBootstrap:
                 stop_event.wait = mock.AsyncMock(side_effect=asyncio.CancelledError())
                 event_cls.return_value = stop_event
                 with pytest.raises(asyncio.CancelledError):
-                    await cs.run_asgi_server(mock.Mock(), tempfile.mktemp(), lifespan=False)
+                    await cs.run_asgi_server(
+                        mock.Mock(), "/tmp/caddysnake-test.sock", lifespan=False
+                    )
 
         asyncio.run(_exercise())
         assert callbacks
