@@ -621,8 +621,12 @@ async def _run_wsgi_server_async(app, socket_path):
 
     stop_event = asyncio.Event()
     loop = asyncio.get_running_loop()
-    if sys.platform == "win32":
 
+    def _stop_on_signal():
+        stop_event.set()
+
+    if sys.platform == "win32":
+        # add_signal_handler raises NotImplementedError on Windows; use signal.signal
         def _stop(*args):
             stop_event.set()
 
@@ -631,7 +635,9 @@ async def _run_wsgi_server_async(app, socket_path):
     else:
         try:
             for sig in (signal.SIGTERM, signal.SIGINT):
-                loop.add_signal_handler(sig, stop_event.set)
+                # Plain function, not Event.set: asyncio 3.14+ deprecates
+                # iscoroutinefunction() checks on bound methods passed here.
+                loop.add_signal_handler(sig, _stop_on_signal)
         except (ValueError, OSError):
 
             def _stop(*args):
@@ -1198,20 +1204,24 @@ async def _handle_asgi_websocket(reader, writer, app, scope, raw_headers):
 # worker mode. Each client connection runs in its own greenlet; apps are synchronous.
 
 
-def _configure_asgi_event_loop(runtime: str) -> None:
-    """Apply event loop policy before asyncio.run for ASGI workers."""
+def _asgi_loop_factory(runtime: str):
+    """Return ``loop_factory`` for :func:`asyncio.run`, or ``None`` for the default loop.
+
+    Python 3.16 removes the asyncio policy API (``set_event_loop_policy``); pass the
+    returned factory to ``asyncio.run(..., loop_factory=...)`` instead.
+    """
     if runtime in ("uvloop", "libuv"):
         try:
             import uvloop
 
-            asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
+            return uvloop.new_event_loop
         except ImportError:
             print(
                 "warning: ASGI runtime is uvloop but uvloop is not installed; "
                 "falling back to native asyncio",
                 file=sys.stderr,
             )
-    # native: standard asyncio loop
+    return None
 
 
 def _recv_exact_sock(sock, n: int) -> bytes:
@@ -2079,6 +2089,10 @@ async def run_asgi_server(app, socket_path, lifespan):
 
     stop_event = asyncio.Event()
     loop = asyncio.get_running_loop()
+
+    def _stop_on_signal():
+        stop_event.set()
+
     if sys.platform == "win32":
         # add_signal_handler raises NotImplementedError on Windows; use signal.signal
         def _stop(*args):
@@ -2089,7 +2103,9 @@ async def run_asgi_server(app, socket_path, lifespan):
     else:
         try:
             for sig in (signal.SIGTERM, signal.SIGINT):
-                loop.add_signal_handler(sig, stop_event.set)
+                # Plain function, not Event.set: asyncio 3.14+ deprecates
+                # iscoroutinefunction() checks on bound methods passed here.
+                loop.add_signal_handler(sig, _stop_on_signal)
         except (ValueError, OSError):
 
             def _stop(*args):
@@ -2152,8 +2168,14 @@ def main():
     if args.interface == "wsgi":
         run_wsgi_server(app, args.socket, args.runtime or "sync")
     elif args.interface == "asgi":
-        _configure_asgi_event_loop(args.runtime or "uvloop")
-        asyncio.run(run_asgi_server(app, args.socket, args.lifespan == "on"))
+        run_kwargs = {}
+        loop_factory = _asgi_loop_factory(args.runtime or "uvloop")
+        if loop_factory is not None:
+            run_kwargs["loop_factory"] = loop_factory
+        asyncio.run(
+            run_asgi_server(app, args.socket, args.lifespan == "on"),
+            **run_kwargs,
+        )
     else:
         run_esgi_server(app, args.socket, args.runtime or "gevent")
 
