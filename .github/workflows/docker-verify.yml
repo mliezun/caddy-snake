@@ -34,6 +34,28 @@ jobs:
           push-image: "false"
           platforms: linux/amd64
 
+  python-symlink:
+    name: Verify python/python3 symlink
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    strategy:
+      matrix:
+        python-version: ["3.12", "3.13", "3.14"]
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+      - name: Build image and verify interpreters
+        run: |
+          expected="${{ matrix.python-version }}"
+          docker build --build-arg PY_VERSION="$expected" -t caddy-snake:pycheck .
+          for bin in python python3; do
+            got=$(docker run --rm --entrypoint "$bin" caddy-snake:pycheck -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')
+            echo "$bin -> $got (expected $expected)"
+            test "$got" = "$expected"
+          done
+
   trivy:
     name: Trivy scan
     runs-on: ubuntu-24.04

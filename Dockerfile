@@ -31,7 +31,11 @@ RUN export DEBIAN_FRONTEND=noninteractive &&\
     add-apt-repository -y ppa:deadsnakes/ppa &&\
     apt-get update -yyqq &&\
     apt-get install -yyqq python${PY_VERSION}-venv &&\
+    # Point both python and python3 at the image Python. Ubuntu ships python3 as
+    # the system interpreter (e.g. 3.10 on 22.04); workers default to "python3",
+    # so leaving the system symlink breaks pip-installed packages (see #219).
     ln -sf /usr/bin/python${PY_VERSION} /usr/bin/python &&\
+    ln -sf /usr/bin/python${PY_VERSION} /usr/bin/python3 &&\
     wget -q https://bootstrap.pypa.io/get-pip.py &&\
     python get-pip.py &&\
     apt-get clean &&\
