@@ -1,0 +1,12 @@
+# Placeholder for tooling that expects a Caddyfile in this directory.
+# simple_start_timeout's main_test.py starts Caddy itself with generated configs.
+{
+	http_port 9080
+	https_port 9443
+	log {
+		level info
+	}
+}
+localhost:9080 {
+	respond "simple_start_timeout placeholder" 200
+}

@@ -80,12 +80,22 @@ type AppServer interface {
 const DefaultStartTimeout = 120 * time.Second
 
 // startTimeoutWarnAfter is when a slow-start warning is logged if the configured
-// start_timeout allows waiting longer. Overridable in tests.
+// start_timeout allows waiting longer. Overridable via
+// CADDYSNAKE_START_TIMEOUT_WARN_AFTER (duration string) for integration tests.
 var startTimeoutWarnAfter = DefaultStartTimeout
 
 // errWorkerExited indicates the Python worker process exited before its socket
 // or port file became ready.
 var errWorkerExited = errors.New("python worker exited before becoming ready")
+
+func applyStartTimeoutWarnAfterEnv() {
+	if v := os.Getenv("CADDYSNAKE_START_TIMEOUT_WARN_AFTER"); v != "" {
+		d, err := time.ParseDuration(v)
+		if err == nil && d > 0 {
+			startTimeoutWarnAfter = d
+		}
+	}
+}
 
 // CaddySnake module that communicates with a Python app
 type CaddySnake struct {
@@ -1016,6 +1026,7 @@ func (wg *PythonWorkerGroup) HandleRequest(rw http.ResponseWriter, req *http.Req
 }
 
 func init() {
+	applyStartTimeoutWarnAfterEnv()
 	caddy.RegisterModule(CaddySnake{})
 	httpcaddyfile.RegisterHandlerDirective("python", parsePythonDirective)
 	httpcaddyfile.RegisterDirectiveOrder("python", httpcaddyfile.Before, "route")

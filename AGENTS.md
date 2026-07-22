@@ -100,7 +100,7 @@ For full CI-like integration tests without local Python/venv setup:
 ./tests/integration.sh fastapi 3.13
 ```
 
-Valid tools: `django`, `django_channels`, `flask`, `fastapi`, `simple_autoreload`, `simple_async`, `simple_esgi`, `simple_cache`, `socketio`, `dynamic`
+Valid tools: `django`, `django_channels`, `flask`, `fastapi`, `simple_autoreload`, `simple_async`, `simple_esgi`, `simple_cache`, `simple_start_timeout`, `socketio`, `dynamic`
 Valid Python versions: `3.12`, `3.13`, `3.13-nogil`, `3.14`, `3.14-nogil`
 
 Requires **Docker** (linux/amd64 container).

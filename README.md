@@ -330,15 +330,15 @@ python {
 
 **Precedence:** Caddy process environment → `env_file` → `env_var` → internal worker vars (`PYTHONUNBUFFERED`, `CADDYSNAKE_*`). Reserved names (`PYTHONUNBUFFERED`, `CADDYSNAKE_*`) cannot be set from the Caddyfile.
 
-### `start_timeout`
-
-Optional. How long to wait for each worker socket/port to become ready when Caddy loads the config. Defaults to **`120s`**. Use a duration such as `180s` or `2m`, or `-1` to wait indefinitely. If the timeout is greater than 120s (or `-1`) and the app is still starting after 120 seconds, Caddy logs a warning and continues waiting. Workers that crash during startup fail immediately.
-
 ### `workers`
 
 Number of worker processes to spawn. Defaults to the number of CPUs (`GOMAXPROCS`).
 
 When you use **process workers** (more than one worker, or the default multi-worker layout), Caddy Snake may start an **in-process shared cache** in the Go plugin and pass connection details to each worker via environment variables (see [Shared worker cache](#shared-worker-cache)).
+
+### `start_timeout`
+
+Optional. How long to wait for each worker socket/port to become ready when Caddy loads the config. Defaults to **`120s`**. Use a duration such as `180s` or `2m`, or `-1` to wait indefinitely. If the timeout is greater than 120s (or `-1`) and the app is still starting after 120 seconds, Caddy logs a warning and continues waiting. Workers that crash during startup fail immediately.
 
 ### `lifespan`
 
