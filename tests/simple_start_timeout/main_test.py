@@ -99,17 +99,16 @@ def caddy_env() -> dict[str, str]:
 
 
 def start_caddy(caddyfile: Path, log_path: Path) -> subprocess.Popen:
-    log_f = open(log_path, "w", encoding="utf-8")
-    proc = subprocess.Popen(
-        [str(CADDY_BIN), "run", "--config", str(caddyfile)],
-        cwd=str(ROOT),
-        stdout=log_f,
-        stderr=subprocess.STDOUT,
-        env=caddy_env(),
-        start_new_session=True,
-    )
-    proc._log_f = log_f  # type: ignore[attr-defined]
-    return proc
+    # Close the parent fd after spawn; the child keeps its inherited copy.
+    with open(log_path, "w", encoding="utf-8") as log_f:
+        return subprocess.Popen(
+            [str(CADDY_BIN), "run", "--config", str(caddyfile)],
+            cwd=str(ROOT),
+            stdout=log_f,
+            stderr=subprocess.STDOUT,
+            env=caddy_env(),
+            start_new_session=True,
+        )
 
 
 def stop_caddy(proc: subprocess.Popen | None) -> None:
@@ -125,10 +124,6 @@ def stop_caddy(proc: subprocess.Popen | None) -> None:
                 proc.wait(timeout=5)
     except ProcessLookupError:
         pass
-    finally:
-        log_f = getattr(proc, "_log_f", None)
-        if log_f is not None:
-            log_f.close()
 
 
 def read_log(log_path: Path) -> str:
