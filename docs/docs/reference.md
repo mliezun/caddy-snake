@@ -598,6 +598,38 @@ This cache is **ephemeral** and **not** a substitute for Redis or a database: it
 
 ---
 
+## `python-server` command
+
+The `caddy python-server` command (and the PyPI `caddysnake` wrapper) exposes the same Python-handler settings as the [`python` block](#block-form), plus a few CLI-only conveniences for listen address, HTTPS, and static files.
+
+```bash
+caddy python-server --server-type asgi --app main:app \
+  --working-dir /var/www/myapp \
+  --venv /var/www/myapp/venv \
+  --env-file /var/www/myapp/.env \
+  --env-var DEBUG=1 \
+  --start-timeout 180s \
+  --workers 4
+```
+
+| Caddyfile | CLI flag |
+|-----------|----------|
+| `module_wsgi` / `module_asgi` / `module_esgi` | `--server-type` + `--app` |
+| `runtime` | `--runtime` |
+| `lifespan` | `--lifespan` |
+| `working_dir` | `--working-dir` |
+| `venv` | `--venv` |
+| `workers` | `--workers` |
+| `start_timeout` | `--start-timeout` |
+| `autoreload` | `--autoreload` |
+| `python_path` | `--python-path` |
+| `env_file` | `--env-file` (repeatable) |
+| `env_var <name> <value>` | `--env-var NAME=VALUE` (repeatable) |
+
+CLI-only: `--domain`, `--listen`, `--static-path`, `--static-route`, `--debug`, `--access-logs`.
+
+---
+
 ## Notes
 
 - You must specify exactly one of `module_wsgi`, `module_asgi`, or `module_esgi`

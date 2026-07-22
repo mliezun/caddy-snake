@@ -337,6 +337,22 @@ func TestUnmarshalCaddyfile_BlockAllOptions(t *testing.T) {
 	}
 }
 
+func TestParseCLIEnvVars(t *testing.T) {
+	got, err := parseCLIEnvVars([]string{"FOO=bar", "BAZ=qu=ux"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got["FOO"] != "bar" || got["BAZ"] != "qu=ux" {
+		t.Fatalf("unexpected map: %#v", got)
+	}
+	if _, err := parseCLIEnvVars([]string{"NOEQUALS"}); err == nil {
+		t.Fatal("expected error for missing '='")
+	}
+	if _, err := parseCLIEnvVars([]string{"CADDYSNAKE_X=1"}); err == nil {
+		t.Fatal("expected error for reserved name")
+	}
+}
+
 func TestParseStartTimeout(t *testing.T) {
 	d, err := parseStartTimeout("")
 	if err != nil || d != DefaultStartTimeout {

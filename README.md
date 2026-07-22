@@ -65,12 +65,15 @@ This starts a server on port `9080` serving your app. See `./caddy python-server
 --python-path <path>      Path to Python executable (default: embedded Python)
 --working-dir <path>      Working directory for the Python app
 --venv <path>             Path to virtual environment
+--env-file <path>         Dotenv file for worker env (repeatable)
+--env-var NAME=VALUE      Inline worker env var (repeatable; overrides env-file)
+--start-timeout <dur|-1>  Worker readiness wait (default: 120s; -1 = indefinite)
 --static-path <path>      Serve a static files directory
 --static-route <route>    Route prefix for static files (default: /static)
 --debug                   Enable debug logging
 --access-logs             Enable access logs
 --lifespan on|off         Enable ASGI lifespan events (default: off)
---runtime <name>           WSGI: sync|gevent; ESGI: gevent only; ASGI: native|uvloop (see docs)
+--runtime <name>          WSGI: sync|gevent; ESGI: gevent only; ASGI: native|uvloop (see docs)
 --autoreload              Watch .py files and reload on changes
 ```
 

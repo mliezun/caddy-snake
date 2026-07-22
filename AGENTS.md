@@ -45,6 +45,41 @@ Build docs locally if you touch MkDocs content: `cd docs && mkdocs build` (also 
 
 ---
 
+## Keeping Caddyfile and CLI config in sync
+
+The `python` Caddyfile block and the `python-server` / `caddysnake` CLIs must expose the **same Python-handler configuration**. Users should be able to set equivalent options whether they use a Caddyfile or the CLI.
+
+Whenever you add or change a `python { ... }` subdirective (or a field on `CaddySnake`):
+
+1. **Caddyfile** — `UnmarshalCaddyfile`, JSON tags, `Validate`, and docs in `docs/docs/reference.md` + `README.md`.
+2. **Go CLI** — `caddy python-server` flags in `caddysnake.go` (`CobraFunc` + `pythonServer` wiring into `CaddySnake`).
+3. **PyPI CLI wrapper** — pass the same flags through [`cmd/cli/caddysnake_cli.py`](cmd/cli/caddysnake_cli.py) (and update [`cmd/cli/README.md`](cmd/cli/README.md)).
+4. **Docs that list CLI flags** — keep these tables/help lists aligned:
+   - `README.md` (`python-server --help` overview)
+   - `docs/docs/intro.md`
+   - `docs/docs/installation.md`
+   - `docs/docs/reference.md` (`python-server` section, if present)
+
+**Mapping (Caddyfile → CLI):**
+
+| Caddyfile | CLI flag |
+|-----------|----------|
+| `module_wsgi` / `module_asgi` / `module_esgi` | `--server-type` + `--app` |
+| `runtime` | `--runtime` |
+| `lifespan` | `--lifespan` |
+| `working_dir` | `--working-dir` |
+| `venv` | `--venv` |
+| `workers` | `--workers` |
+| `start_timeout` | `--start-timeout` |
+| `autoreload` | `--autoreload` |
+| `python_path` | `--python-path` |
+| `env_file` | `--env-file` (repeatable) |
+| `env_var <name> <value>` | `--env-var NAME=VALUE` (repeatable) |
+
+CLI-only conveniences (no Caddyfile `python` equivalent) are fine to keep separate: `--domain`, `--listen`, `--static-path`, `--static-route`, `--debug`, `--access-logs`.
+
+---
+
 ## Environment setup
 
 ### Go

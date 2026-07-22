@@ -97,6 +97,25 @@ func applyStartTimeoutWarnAfterEnv() {
 	}
 }
 
+// parseCLIEnvVars parses repeated --env-var NAME=VALUE flags into a map.
+func parseCLIEnvVars(flags []string) (map[string]string, error) {
+	if len(flags) == 0 {
+		return nil, nil
+	}
+	out := make(map[string]string, len(flags))
+	for _, raw := range flags {
+		name, value, ok := strings.Cut(raw, "=")
+		if !ok || name == "" {
+			return nil, fmt.Errorf("invalid --env-var %q (want NAME=VALUE)", raw)
+		}
+		if err := validateEnvVarName(name); err != nil {
+			return nil, fmt.Errorf("invalid --env-var name %q: %w", name, err)
+		}
+		out[name] = value
+	}
+	return out, nil
+}
+
 // CaddySnake module that communicates with a Python app
 type CaddySnake struct {
 	ModuleWsgi   string            `json:"module_wsgi,omitempty"`
@@ -1035,12 +1054,18 @@ func init() {
 		Usage: "--server-type wsgi|asgi|esgi --app <module> " +
 			"[--domain <example.com>] [--listen <addr>] [--workers <count>] " +
 			"[--python-path <path>] [--working-dir <path>] [--venv <path>] " +
+			"[--env-file <path>] [--env-var NAME=VALUE] " +
+			"[--start-timeout <duration|-1>] " +
 			"[--static-path <path>] [--static-route <route>] " +
-			"[--runtime <name>] " +
+			"[--runtime <name>] [--lifespan on|off] " +
 			"[--debug] [--access-logs] [--autoreload]",
 		Short: "Spins up a Python server",
 		Long: `
-A Python WSGI or ASGI server designed for apps and frameworks.
+A Python WSGI, ASGI, or ESGI server designed for apps and frameworks.
+
+Python-block options mirror the Caddyfile python directive (workers, venv,
+working_dir, env_file, env_var, start_timeout, runtime, lifespan, autoreload,
+python_path). CLI-only flags cover listen address, HTTPS domain, and static files.
 
 You can specify a custom socket address using the '--listen' option. You can also specify the number of workers to spawn.
 
@@ -1056,6 +1081,9 @@ Ensure DNS A/AAAA records are correctly set up if using a public domain for secu
 			cmd.Flags().String("python-path", "", "Path to the Python interpreter")
 			cmd.Flags().String("working-dir", "", "Working directory for the Python app")
 			cmd.Flags().String("venv", "", "Path to a Python virtual environment to use")
+			cmd.Flags().StringSlice("env-file", nil, "Dotenv file loaded into worker env (repeatable; later files override)")
+			cmd.Flags().StringSlice("env-var", nil, "Inline worker env var as NAME=VALUE (repeatable; overrides env-file)")
+			cmd.Flags().String("start-timeout", "", "Wait for worker readiness (default: 120s; -1 = indefinite)")
 			cmd.Flags().String("static-path", "", "Path to a static directory to serve: path/to/static")
 			cmd.Flags().String("static-route", "/static", "Route to serve the static directory: /static")
 			cmd.Flags().Bool("debug", false, "Enable debug logs")
@@ -1087,6 +1115,19 @@ func pythonServer(fs caddycmd.Flags) (int, error) {
 	venv := fs.String("venv")
 	lifespan := fs.String("lifespan")
 	runtimeFlag := fs.String("runtime")
+	startTimeout := fs.String("start-timeout")
+	envFiles, err := fs.GetStringSlice("env-file")
+	if err != nil {
+		return caddy.ExitCodeFailedStartup, err
+	}
+	envVarFlags, err := fs.GetStringSlice("env-var")
+	if err != nil {
+		return caddy.ExitCodeFailedStartup, err
+	}
+	envVars, err := parseCLIEnvVars(envVarFlags)
+	if err != nil {
+		return caddy.ExitCodeFailedStartup, err
+	}
 
 	if serverType == "" {
 		return caddy.ExitCodeFailedStartup, errors.New("--server-type is required")
@@ -1136,6 +1177,9 @@ func pythonServer(fs caddycmd.Flags) (int, error) {
 	pythonHandler.WorkingDir = workingDir
 	pythonHandler.Lifespan = lifespan
 	pythonHandler.Runtime = runtimeFlag
+	pythonHandler.StartTimeout = startTimeout
+	pythonHandler.EnvFiles = cloneEnvFiles(envFiles)
+	pythonHandler.EnvVars = envVars
 
 	if err := pythonHandler.Validate(); err != nil {
 		return caddy.ExitCodeFailedStartup, err
