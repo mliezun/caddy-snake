@@ -32,21 +32,32 @@ caddysnake --server-type wsgi --app main:app
 
 # Start an ASGI server
 caddysnake --server-type asgi --app main:app
+
+# Start an ESGI server
+caddysnake --server-type esgi --app main:application
 ```
 
-This starts a server on port `9080` serving your app. See `caddysnake --help` for all available options:
+This starts a server on port `9080` serving your app. See `caddysnake --help` for all available options. Python-handler flags match the Caddyfile `python` block; see the [configuration reference](reference.md#python-server-command) for the full list.
 
 | Flag | Description | Default |
 |------|-------------|---------|
-| `--server-type wsgi\|asgi` | **Required.** Type of Python app | — |
+| `--server-type wsgi\|asgi\|esgi` | **Required.** Type of Python app | — |
 | `--app <module:var>` | **Required.** Python module and app variable (e.g. `main:app`) | — |
 | `--domain <example.com>` | Enable HTTPS with automatic certificates | — |
 | `--listen <addr>` | Custom listen address | `:9080` |
 | `--workers <count>` | Number of worker processes | CPU count |
+| `--venv <path>` | Path to a Python virtual environment | — |
+| `--working-dir <path>` | Working directory for the Python app | — |
+| `--env-file <path>` | Dotenv file for worker env (repeatable) | — |
+| `--env-var NAME=VALUE` | Inline worker env var (repeatable) | — |
+| `--start-timeout=<dur\|-1\|forever>` | Worker readiness wait (`=-1` or `forever` for indefinite) | `120s` |
+| `--runtime <name>` | Worker runtime (see [runtime](reference.md#runtime)) | per interface |
+| `--lifespan on\|off` | ASGI lifespan events | `off` |
 | `--static-path <path>` | Serve a static files directory | — |
 | `--static-route <route>` | Route prefix for static files | `/static` |
 | `--debug` | Enable debug logging | `false` |
 | `--access-logs` | Enable access logs | `false` |
+| `--autoreload` | Watch `.py` files and reload on changes | `false` |
 
 ### Example
 

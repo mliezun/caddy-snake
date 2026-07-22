@@ -68,6 +68,7 @@ python {
     env_file <path>
     env_var <name> <value>
     workers <count>
+    start_timeout <duration|-1|forever>
     autoreload
 }
 ```
@@ -229,6 +230,27 @@ python {
     workers 4
 }
 ```
+
+### `start_timeout`
+
+How long Caddy waits for each Python worker to become ready (Unix socket or Windows port file) during provisioning. Optional; defaults to **`120s`**.
+
+Use a Caddy duration (`30s`, `2m`, …) or **`-1`** / **`forever`** to wait indefinitely until the worker is ready or the process exits.
+
+If the configured timeout is longer than `120s` (including `-1` / `forever`) and the app is still loading after 120 seconds, Caddy logs a warning and keeps waiting.
+
+On the CLI, pass indefinite wait as `--start-timeout=-1` (equals form) or `--start-timeout forever`. A bare `--start-timeout -1` is rejected by Cobra/pflag because `-1` looks like a flag name.
+
+```caddyfile
+python {
+    module_wsgi "mysite.wsgi:application"
+    working_dir "/var/www/myapp"
+    venv "/var/www/myapp/venv"
+    start_timeout 180s
+}
+```
+
+Workers that exit before becoming ready fail immediately with an error (the full timeout is not consumed).
 
 ### `autoreload`
 
@@ -575,6 +597,38 @@ msg = cache.subscribe("events", timeout=10.0)
 This cache is **ephemeral** and **not** a substitute for Redis or a database: it is scoped to the Caddy process, subject to memory limits, and intended for small shared objects or coordination between workers. Prefer an external store for durability or large payloads.
 
 :::
+
+---
+
+## `python-server` command
+
+The `caddy python-server` command (and the PyPI `caddysnake` wrapper) exposes the same Python-handler settings as the [`python` block](#block-form), plus a few CLI-only conveniences for listen address, HTTPS, and static files.
+
+```bash
+caddy python-server --server-type asgi --app main:app \
+  --working-dir /var/www/myapp \
+  --venv /var/www/myapp/venv \
+  --env-file /var/www/myapp/.env \
+  --env-var DEBUG=1 \
+  --start-timeout 180s \
+  --workers 4
+```
+
+| Caddyfile | CLI flag |
+|-----------|----------|
+| `module_wsgi` / `module_asgi` / `module_esgi` | `--server-type` + `--app` |
+| `runtime` | `--runtime` |
+| `lifespan` | `--lifespan` |
+| `working_dir` | `--working-dir` |
+| `venv` | `--venv` |
+| `workers` | `--workers` |
+| `start_timeout` | `--start-timeout` (use `--start-timeout=-1` or `forever` for indefinite) |
+| `autoreload` | `--autoreload` |
+| `python_path` | `--python-path` |
+| `env_file` | `--env-file` (repeatable) |
+| `env_var <name> <value>` | `--env-var NAME=VALUE` (repeatable) |
+
+CLI-only: `--domain`, `--listen`, `--static-path`, `--static-route`, `--debug`, `--access-logs`.
 
 ---
 

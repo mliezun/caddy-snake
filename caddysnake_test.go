@@ -27,6 +27,7 @@ import (
 	"github.com/caddyserver/caddy/v2/caddyconfig/httpcaddyfile"
 	"github.com/caddyserver/caddy/v2/modules/caddyhttp"
 	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 )
 
 func TestFindSitePackagesInVenv(t *testing.T) {
@@ -311,6 +312,7 @@ func TestUnmarshalCaddyfile_BlockAllOptions(t *testing.T) {
 		working_dir /tmp
 		venv /tmp/venv
 		workers 4
+		start_timeout 180s
 	}`
 	d := caddyfile.NewTestDispenser(input)
 	var cs CaddySnake
@@ -329,6 +331,78 @@ func TestUnmarshalCaddyfile_BlockAllOptions(t *testing.T) {
 	}
 	if cs.Workers != "4" {
 		t.Errorf("expected Workers '4', got %q", cs.Workers)
+	}
+	if cs.StartTimeout != "180s" {
+		t.Errorf("expected StartTimeout '180s', got %q", cs.StartTimeout)
+	}
+}
+
+func TestParseCLIEnvVars(t *testing.T) {
+	got, err := parseCLIEnvVars([]string{"FOO=bar", "BAZ=qu=ux"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got["FOO"] != "bar" || got["BAZ"] != "qu=ux" {
+		t.Fatalf("unexpected map: %#v", got)
+	}
+	if _, err := parseCLIEnvVars([]string{"NOEQUALS"}); err == nil {
+		t.Fatal("expected error for missing '='")
+	}
+	if _, err := parseCLIEnvVars([]string{"CADDYSNAKE_X=1"}); err == nil {
+		t.Fatal("expected error for reserved name")
+	}
+}
+
+func TestParseStartTimeout(t *testing.T) {
+	d, err := parseStartTimeout("")
+	if err != nil || d != DefaultStartTimeout {
+		t.Fatalf("empty: got %v, %v; want %v, nil", d, err, DefaultStartTimeout)
+	}
+	for _, indefinite := range []string{"-1", "forever", "none", "inf", "indefinite", "FOREVER"} {
+		d, err = parseStartTimeout(indefinite)
+		if err != nil || d != -1 {
+			t.Fatalf("%q: got %v, %v; want -1, nil", indefinite, d, err)
+		}
+	}
+	d, err = parseStartTimeout("90s")
+	if err != nil || d != 90*time.Second {
+		t.Fatalf("90s: got %v, %v; want 90s, nil", d, err)
+	}
+	if _, err := parseStartTimeout("0"); err == nil {
+		t.Fatal("expected error for 0")
+	}
+	if _, err := parseStartTimeout("0s"); err == nil {
+		t.Fatal("expected error for 0s")
+	}
+	if _, err := parseStartTimeout("nope"); err == nil {
+		t.Fatal("expected error for invalid duration")
+	}
+}
+
+func TestUnmarshalCaddyfile_StartTimeoutIndefinite(t *testing.T) {
+	input := `python {
+		module_wsgi main:app
+		start_timeout -1
+	}`
+	d := caddyfile.NewTestDispenser(input)
+	var cs CaddySnake
+	if err := cs.UnmarshalCaddyfile(d); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cs.StartTimeout != "-1" {
+		t.Fatalf("expected StartTimeout '-1', got %q", cs.StartTimeout)
+	}
+}
+
+func TestUnmarshalCaddyfile_StartTimeoutInvalid(t *testing.T) {
+	input := `python {
+		module_wsgi main:app
+		start_timeout 0s
+	}`
+	d := caddyfile.NewTestDispenser(input)
+	var cs CaddySnake
+	if err := cs.UnmarshalCaddyfile(d); err == nil {
+		t.Fatal("expected error for start_timeout 0s")
 	}
 }
 
@@ -1419,7 +1493,7 @@ func TestWaitForPortFile_Success(t *testing.T) {
 	}
 	f.Close()
 
-	port, err := waitForPortFile(path, 2*time.Second)
+	port, err := waitForPortFile(path, 2*time.Second, nil, nil)
 	if err != nil {
 		t.Errorf("waitForPortFile: %v", err)
 	}
@@ -1437,7 +1511,7 @@ func TestWaitForPortFile_Timeout(t *testing.T) {
 	f.Close()
 	// Empty file - will never have valid port
 
-	_, err = waitForPortFile(f.Name(), 100*time.Millisecond)
+	_, err = waitForPortFile(f.Name(), 100*time.Millisecond, nil, nil)
 	if err == nil {
 		t.Error("expected timeout error")
 	}
@@ -1455,7 +1529,7 @@ func TestWaitForPortFile_InvalidContent(t *testing.T) {
 	f.WriteString("not-a-port")
 	f.Close()
 
-	_, err = waitForPortFile(f.Name(), 100*time.Millisecond)
+	_, err = waitForPortFile(f.Name(), 100*time.Millisecond, nil, nil)
 	if err == nil {
 		t.Error("expected error for invalid port content")
 	}
@@ -1478,7 +1552,7 @@ func TestWaitForPortFile_EventuallyValidAfterTransientData(t *testing.T) {
 		_ = os.WriteFile(path, []byte("8123"), 0644)
 	}()
 
-	port, err := waitForPortFile(path, 2*time.Second)
+	port, err := waitForPortFile(path, 2*time.Second, nil, nil)
 	if err != nil {
 		t.Fatalf("waitForPortFile: %v", err)
 	}
@@ -1501,7 +1575,7 @@ func TestWaitForUnixSocket_Success(t *testing.T) {
 	}
 	defer ln.Close()
 
-	if err := waitForUnixSocket(path, 2*time.Second); err != nil {
+	if err := waitForUnixSocket(path, 2*time.Second, nil, nil); err != nil {
 		t.Fatalf("waitForUnixSocket: %v", err)
 	}
 }
@@ -1511,12 +1585,90 @@ func TestWaitForUnixSocket_Timeout(t *testing.T) {
 		t.Skip("unix socket test")
 	}
 	path := filepath.Join(t.TempDir(), "missing.sock")
-	if err := waitForUnixSocket(path, 100*time.Millisecond); err == nil {
+	if err := waitForUnixSocket(path, 100*time.Millisecond, nil, nil); err == nil {
 		t.Fatal("expected timeout error")
 	} else if !strings.Contains(err.Error(), "not ready within") {
 		t.Fatalf("expected 'not ready within' in error, got: %v", err)
 	}
 }
+
+func TestWaitForUnixSocket_WorkerExited(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("unix socket test")
+	}
+	path := filepath.Join(t.TempDir(), "missing.sock")
+	exited := make(chan error, 1)
+	exited <- errors.New("exit status 1")
+	err := waitForUnixSocket(path, 2*time.Second, exited, nil)
+	if err == nil {
+		t.Fatal("expected worker-exited error")
+	}
+	if !errors.Is(err, errWorkerExited) {
+		t.Fatalf("expected errWorkerExited, got: %v", err)
+	}
+}
+
+func TestWaitForUnixSocket_SlowStartWarning(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("unix socket test")
+	}
+	prev := startTimeoutWarnAfter
+	startTimeoutWarnAfter = 40 * time.Millisecond
+	t.Cleanup(func() { startTimeoutWarnAfter = prev })
+
+	path := filepath.Join(t.TempDir(), "missing.sock")
+	core, logs := observedLogs()
+	logger := zap.New(core)
+
+	err := waitForUnixSocket(path, 200*time.Millisecond, nil, logger)
+	if err == nil {
+		t.Fatal("expected timeout error")
+	}
+	found := false
+	for _, e := range logs() {
+		if strings.Contains(e, "taking a long time to load") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatal("expected slow-start warning log")
+	}
+}
+
+// observedLogs returns a zap core that records warning messages.
+func observedLogs() (zapcore.Core, func() []string) {
+	var mu sync.Mutex
+	var msgs []string
+	core := &captureCore{msgs: &msgs, mu: &mu}
+	return core, func() []string {
+		mu.Lock()
+		defer mu.Unlock()
+		out := make([]string, len(msgs))
+		copy(out, msgs)
+		return out
+	}
+}
+
+type captureCore struct {
+	msgs *[]string
+	mu   *sync.Mutex
+}
+
+func (c *captureCore) Enabled(zapcore.Level) bool { return true }
+func (c *captureCore) With([]zapcore.Field) zapcore.Core {
+	return c
+}
+func (c *captureCore) Check(ent zapcore.Entry, ce *zapcore.CheckedEntry) *zapcore.CheckedEntry {
+	return ce.AddCore(ent, c)
+}
+func (c *captureCore) Write(ent zapcore.Entry, _ []zapcore.Field) error {
+	c.mu.Lock()
+	*c.msgs = append(*c.msgs, ent.Message)
+	c.mu.Unlock()
+	return nil
+}
+func (c *captureCore) Sync() error { return nil }
 
 // ====================== dialWithRetry Tests ======================
 // These tests exercise PythonWorker.dialWithRetry via HandleRequest using
@@ -1618,7 +1770,7 @@ func TestNewPythonWorkerGroup_InvalidPythonPath(t *testing.T) {
 	tempDir := t.TempDir()
 	os.WriteFile(filepath.Join(tempDir, "app.py"), []byte(minimalWSGIApp), 0644)
 
-	_, err := NewPythonWorkerGroup("wsgi", "app:app", tempDir, "", "", "sync", 1, "/nonexistent/python-not-found", "", nil, nil)
+	_, err := NewPythonWorkerGroup("wsgi", "app:app", tempDir, "", "", "sync", 1, "/nonexistent/python-not-found", "", nil, nil, 0, nil)
 	if err == nil {
 		t.Fatal("expected error when python path is invalid")
 	}
@@ -1641,7 +1793,7 @@ func TestPythonWorkerCleanup_Timeout(t *testing.T) {
 	tempDir := t.TempDir()
 	os.WriteFile(filepath.Join(tempDir, "app.py"), []byte(minimalWSGIAppIgnoringSIGTERM), 0644)
 
-	wg, err := NewPythonWorkerGroup("wsgi", "app:app", tempDir, "", "", "sync", 1, "python3", "", nil, nil)
+	wg, err := NewPythonWorkerGroup("wsgi", "app:app", tempDir, "", "", "sync", 1, "python3", "", nil, nil, 0, nil)
 	if err != nil {
 		t.Fatalf("NewPythonWorkerGroup: %v", err)
 	}
@@ -1976,7 +2128,7 @@ func TestPythonWorkerGroup_LoadsAndServesWSGI(t *testing.T) {
 		t.Fatalf("failed to write app.py: %v", err)
 	}
 
-	wg, err := NewPythonWorkerGroup("wsgi", "app:app", tempDir, "", "", "sync", 1, "python3", "", nil, nil)
+	wg, err := NewPythonWorkerGroup("wsgi", "app:app", tempDir, "", "", "sync", 1, "python3", "", nil, nil, 0, nil)
 	if err != nil {
 		t.Fatalf("NewPythonWorkerGroup failed: %v", err)
 	}
@@ -2028,7 +2180,7 @@ func TestPythonWorkerGroup_LoadsAndServesASGI(t *testing.T) {
 		t.Fatalf("failed to write app.py: %v", err)
 	}
 
-	wg, err := NewPythonWorkerGroup("asgi", "app:app", tempDir, "", "", "uvloop", 1, "python3", "", nil, nil)
+	wg, err := NewPythonWorkerGroup("asgi", "app:app", tempDir, "", "", "uvloop", 1, "python3", "", nil, nil, 0, nil)
 	if err != nil {
 		t.Fatalf("NewPythonWorkerGroup failed: %v", err)
 	}
@@ -2087,7 +2239,7 @@ func TestPythonWorkerGroup_LoadsAndServesESGI(t *testing.T) {
 		t.Fatalf("failed to write app.py: %v", err)
 	}
 
-	wg, err := NewPythonWorkerGroup("esgi", "app:application", tempDir, "", "", "gevent", 1, "python3", "", nil, nil)
+	wg, err := NewPythonWorkerGroup("esgi", "app:application", tempDir, "", "", "gevent", 1, "python3", "", nil, nil, 0, nil)
 	if err != nil {
 		t.Fatalf("NewPythonWorkerGroup failed: %v", err)
 	}

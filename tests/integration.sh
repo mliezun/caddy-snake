@@ -14,13 +14,14 @@ set -euo pipefail
 #   ./integration_test.sh simple 3.14-nogil
 #
 # Valid tool names:
-#   django, django_channels, flask, fastapi, simple_autoreload, simple_async, simple_esgi, simple_cache, socketio, dynamic
+#   django, django_channels, flask, fastapi, simple_autoreload, simple_async,
+#   simple_esgi, simple_cache, simple_start_timeout, socketio, dynamic
 #
 # Valid python versions:
 #   3.12, 3.13, 3.13-nogil, 3.14, 3.14-nogil
 # ---------------------------------------------------------------------------
 
-VALID_TOOLS=("django" "django_channels" "flask" "fastapi" "simple_autoreload" "simple_async" "simple_esgi" "simple_cache" "socketio" "dynamic")
+VALID_TOOLS=("django" "django_channels" "flask" "fastapi" "simple_autoreload" "simple_async" "simple_esgi" "simple_cache" "simple_start_timeout" "socketio" "dynamic")
 VALID_PYVERSIONS=("3.12" "3.13" "3.13-nogil" "3.14" "3.14-nogil")
 
 usage() {
@@ -145,28 +146,38 @@ echo ">>> Building caddy with caddy-snake..."
 CGO_ENABLED=0 xcaddy build --with github.com/mliezun/caddy-snake=/workspace
 
 # Run integration tests
-echo ">>> Starting caddy..."
-./caddy run --config Caddyfile > caddy.log 2>&1 &
-CADDY_PID=$!
-
-echo ">>> Waiting for caddy to be ready..."
-timeout 60 bash -c 'while ! grep -q "finished cleaning storage units" caddy.log; do sleep 1; done'
-echo ">>> Caddy is ready (PID=${CADDY_PID})"
-
-echo ">>> Running tests..."
 source venv/bin/activate
 
-if [[ "$IS_NOGIL" == "1" ]]; then
-  python main_test.py || true
+if [[ "$TOOL_NAME" == "simple_start_timeout" ]]; then
+  # This suite starts/stops Caddy itself for each start_timeout scenario.
+  echo ">>> Running start_timeout scenarios (test-managed Caddy)..."
+  if [[ "$IS_NOGIL" == "1" ]]; then
+    python main_test.py || true
+  else
+    python main_test.py
+  fi
 else
-  python main_test.py || { echo ">>> Caddy log (tail):"; tail -300 caddy.log; exit 1; }
+  echo ">>> Starting caddy..."
+  ./caddy run --config Caddyfile > caddy.log 2>&1 &
+  CADDY_PID=$!
+
+  echo ">>> Waiting for caddy to be ready..."
+  timeout 60 bash -c 'while ! grep -q "finished cleaning storage units" caddy.log; do sleep 1; done'
+  echo ">>> Caddy is ready (PID=${CADDY_PID})"
+
+  echo ">>> Running tests..."
+  if [[ "$IS_NOGIL" == "1" ]]; then
+    python main_test.py || true
+  else
+    python main_test.py || { echo ">>> Caddy log (tail):"; tail -300 caddy.log; exit 1; }
+  fi
+
+  # Clean up caddy
+  kill "$CADDY_PID" 2>/dev/null || true
 fi
 
 echo ""
 echo ">>> Tests completed!"
-
-# Clean up caddy
-kill "$CADDY_PID" 2>/dev/null || true
 INNEREOF
 
 # Substitute placeholders

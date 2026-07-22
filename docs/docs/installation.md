@@ -33,6 +33,9 @@ caddysnake --server-type wsgi --app main:app
 # Serve an ASGI app (FastAPI, Starlette, etc.)
 caddysnake --server-type asgi --app main:app
 
+# Serve an ESGI app
+caddysnake --server-type esgi --app main:application
+
 # With HTTPS, workers, and static files
 caddysnake \
     --server-type asgi \
@@ -45,17 +48,28 @@ caddysnake \
 
 ### CLI Options
 
+Python-handler flags mirror the Caddyfile [`python` block](reference.md#block-form). See also [`python-server` command](reference.md#python-server-command).
+
 | Flag | Short | Description | Default |
 |------|-------|-------------|---------|
-| `--server-type` | `-t` | **Required.** Type of Python app: `wsgi` or `asgi` | — |
+| `--server-type` | `-t` | **Required.** Type of Python app: `wsgi`, `asgi`, or `esgi` | — |
 | `--app` | `-a` | **Required.** Python module and app variable (e.g. `main:app`) | — |
 | `--domain` | `-d` | Domain name for HTTPS with automatic certificates | — |
 | `--listen` | `-l` | Custom listen address | `:9080` |
 | `--workers` | `-w` | Number of worker processes (0 = CPU count) | `0` |
+| `--python-path` | | Path to the Python interpreter | — |
+| `--working-dir` | | Working directory for the Python app | — |
+| `--venv` | | Path to a Python virtual environment | — |
+| `--env-file` | | Dotenv file for worker env (repeatable) | — |
+| `--env-var` | | Inline worker env var `NAME=VALUE` (repeatable) | — |
+| `--start-timeout` | | Worker readiness wait (`120s` default; use `=-1` or `forever` for indefinite) | `120s` |
+| `--runtime` | | WSGI: `sync\|gevent`; ESGI: `gevent`; ASGI: `native\|uvloop` | per interface |
+| `--lifespan` | | ASGI lifespan events (`on\|off`) | `off` |
 | `--static-path` | | Path to a static files directory | — |
 | `--static-route` | | Route prefix for static files | `/static` |
 | `--debug` | | Enable debug logging | `false` |
 | `--access-logs` | | Enable access logs | `false` |
+| `--autoreload` | | Watch `.py` files and reload on changes | `false` |
 
 ### How it works
 
