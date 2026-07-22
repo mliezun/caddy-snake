@@ -255,7 +255,23 @@ func (d *DynamicApp) getOrCreateApp(key, module, dir, venv string, envFiles []st
 		zap.String("venv", venv),
 	)
 
-	app, err := d.factory(module, dir, venv, cloneEnvFiles(envFiles), cloneEnvVars(envVars))
+	// Factory runs outside the lock; if it panics, still remove the inflight
+	// entry and close done so waiters and Cleanup cannot hang forever.
+	var err error
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				d.mu.Lock()
+				delete(d.inflight, key)
+				c.app = nil
+				c.err = fmt.Errorf("panic creating dynamic app: %v", r)
+				close(c.done)
+				d.mu.Unlock()
+				panic(r)
+			}
+		}()
+		app, err = d.factory(module, dir, venv, cloneEnvFiles(envFiles), cloneEnvVars(envVars))
+	}()
 
 	d.mu.Lock()
 	delete(d.inflight, key)
