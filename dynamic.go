@@ -224,6 +224,10 @@ func (d *DynamicApp) getOrCreateApp(key, module, dir, venv string, envFiles []st
 	}
 
 	d.mu.RLock()
+	if d.closed {
+		d.mu.RUnlock()
+		return nil, errors.New("dynamic app shutting down")
+	}
 	app, ok := d.apps[key]
 	d.mu.RUnlock()
 	if ok {
@@ -231,14 +235,14 @@ func (d *DynamicApp) getOrCreateApp(key, module, dir, venv string, envFiles []st
 	}
 
 	d.mu.Lock()
+	if d.closed {
+		d.mu.Unlock()
+		return nil, errors.New("dynamic app shutting down")
+	}
 	app, ok = d.apps[key]
 	if ok {
 		d.mu.Unlock()
 		return app, nil
-	}
-	if d.closed {
-		d.mu.Unlock()
-		return nil, errors.New("dynamic app shutting down")
 	}
 	if c, creating := d.inflight[key]; creating {
 		d.mu.Unlock()
