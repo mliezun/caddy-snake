@@ -75,23 +75,50 @@ type AppServer interface {
 	HandleRequest(w http.ResponseWriter, r *http.Request) error
 }
 
-// CaddySnake module that communicates with a Python app
+// CaddySnake is an HTTP handler that serves Python WSGI, ASGI, or ESGI apps
+// by spawning worker subprocesses and proxying requests to them.
+//
+// Exactly one of module_wsgi, module_asgi, or module_esgi must be set.
+// Caddyfile: the `python` directive (see https://caddy-snake.readthedocs.io/).
 type CaddySnake struct {
-	ModuleWsgi string            `json:"module_wsgi,omitempty"`
-	ModuleAsgi string            `json:"module_asgi,omitempty"`
-	ModuleEsgi string            `json:"module_esgi,omitempty"`
-	Runtime    string            `json:"runtime,omitempty"`
-	Lifespan   string            `json:"lifespan,omitempty"`
-	WorkingDir string            `json:"working_dir,omitempty"`
-	VenvPath   string            `json:"venv_path,omitempty"`
-	Workers    string            `json:"workers,omitempty"`
-	Autoreload string            `json:"autoreload,omitempty"`
-	PythonPath string            `json:"python_path,omitempty"`
-	EnvFiles   []string          `json:"env_files,omitempty"`
-	EnvVars    map[string]string `json:"env_vars,omitempty"`
-	logger     *zap.Logger
-	app        AppServer
-	cacheSrv   *cacheServer
+	// WSGI app import path as "module:variable" (e.g. "main:app" or "mysite.wsgi:application").
+	// Mutually exclusive with module_asgi and module_esgi. Supports Caddy placeholders for dynamic loading.
+	ModuleWsgi string `json:"module_wsgi,omitempty"`
+	// ASGI app import path as "module:variable" (e.g. "main:app" for FastAPI/Starlette).
+	// Mutually exclusive with module_wsgi and module_esgi. Supports Caddy placeholders for dynamic loading.
+	ModuleAsgi string `json:"module_asgi,omitempty"`
+	// ESGI app import path as "module:variable" (synchronous application(scope, protocol) callable).
+	// Mutually exclusive with module_wsgi and module_asgi. Supports Caddy placeholders for dynamic loading.
+	ModuleEsgi string `json:"module_esgi,omitempty"`
+	// Python worker runtime at the gateway boundary.
+	// WSGI: "sync" (default) or "gevent". ESGI: "gevent" only (default).
+	// ASGI: "native" or "uvloop" (default when omitted: "uvloop").
+	Runtime string `json:"runtime,omitempty"`
+	// ASGI lifespan protocol: "on" or "off" (default). Only applies with module_asgi.
+	Lifespan string `json:"lifespan,omitempty"`
+	// Working directory for the Python app (imports, relative paths, and autoreload watch root).
+	// Supports Caddy placeholders for dynamic resolution per request.
+	WorkingDir string `json:"working_dir,omitempty"`
+	// Path to a Python virtual environment; its site-packages are added to sys.path.
+	// Caddyfile subdirective name is "venv". Supports Caddy placeholders.
+	VenvPath string `json:"venv_path,omitempty"`
+	// Number of worker processes to spawn. Defaults to GOMAXPROCS (CPU count) when empty or "0".
+	Workers string `json:"workers,omitempty"`
+	// When set to "on", watch .py files under working_dir and reload workers on changes.
+	// Caddyfile: the bare "autoreload" subdirective.
+	Autoreload string `json:"autoreload,omitempty"`
+	// Path to the Python interpreter. Defaults to venv/bin/python when venv_path is set, else system python3.
+	PythonPath string `json:"python_path,omitempty"`
+	// Dotenv-style files loaded into each worker environment (later files override earlier keys).
+	// Relative paths resolve against working_dir when set. Caddyfile: repeatable "env_file" subdirective.
+	EnvFiles []string `json:"env_files,omitempty"`
+	// Individual environment variables for workers. Applied after env_files (overrides file values).
+	// Caddyfile: repeatable "env_var NAME value". Cannot set PYTHONUNBUFFERED or CADDYSNAKE_*.
+	EnvVars map[string]string `json:"env_vars,omitempty"`
+
+	logger   *zap.Logger
+	app      AppServer
+	cacheSrv *cacheServer
 }
 
 // effectivePythonRuntime returns the runtime string passed to the Python worker.
