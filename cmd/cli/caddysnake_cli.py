@@ -40,7 +40,7 @@ import click
 )
 @click.option(
     "--start-timeout",
-    help="Wait for worker readiness (default: 120s; -1 = indefinite)",
+    help="Wait for worker readiness (default: 120s; use -1 or forever for indefinite)",
 )
 @click.option("--static-path", help="Path to a static directory to serve: path/to/static")
 @click.option(
@@ -128,7 +128,8 @@ def main(
     for item in env_var:
         args.extend(["--env-var", item])
     if start_timeout:
-        args.extend(["--start-timeout", start_timeout])
+        # Use equals form so values like -1 are not parsed as separate flags.
+        args.append(f"--start-timeout={start_timeout}")
     if static_path:
         args.extend(["--static-path", static_path])
     if static_route:

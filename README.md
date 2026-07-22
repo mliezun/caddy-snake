@@ -67,7 +67,7 @@ This starts a server on port `9080` serving your app. See `./caddy python-server
 --venv <path>             Path to virtual environment
 --env-file <path>         Dotenv file for worker env (repeatable)
 --env-var NAME=VALUE      Inline worker env var (repeatable; overrides env-file)
---start-timeout <dur|-1>  Worker readiness wait (default: 120s; -1 = indefinite)
+--start-timeout=<dur|-1>  Worker readiness wait (default: 120s; use =-1 or forever)
 --static-path <path>      Serve a static files directory
 --static-route <route>    Route prefix for static files (default: /static)
 --debug                   Enable debug logging
@@ -341,7 +341,7 @@ When you use **process workers** (more than one worker, or the default multi-wor
 
 ### `start_timeout`
 
-Optional. How long to wait for each worker socket/port to become ready when Caddy loads the config. Defaults to **`120s`**. Use a duration such as `180s` or `2m`, or `-1` to wait indefinitely. If the timeout is greater than 120s (or `-1`) and the app is still starting after 120 seconds, Caddy logs a warning and continues waiting. Workers that crash during startup fail immediately.
+Optional. How long to wait for each worker socket/port to become ready when Caddy loads the config. Defaults to **`120s`**. Use a duration such as `180s` or `2m`, or `-1` / `forever` to wait indefinitely. On the CLI, prefer `--start-timeout=-1` or `--start-timeout forever`. If the timeout is greater than 120s (or indefinite) and the app is still starting after 120 seconds, Caddy logs a warning and continues waiting. Workers that crash during startup fail immediately.
 
 ### `lifespan`
 

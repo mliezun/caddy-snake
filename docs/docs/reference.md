@@ -68,7 +68,7 @@ python {
     env_file <path>
     env_var <name> <value>
     workers <count>
-    start_timeout <duration|-1>
+    start_timeout <duration|-1|forever>
     autoreload
 }
 ```
@@ -235,9 +235,11 @@ python {
 
 How long Caddy waits for each Python worker to become ready (Unix socket or Windows port file) during provisioning. Optional; defaults to **`120s`**.
 
-Use a Caddy duration (`30s`, `2m`, …) or **`-1`** to wait indefinitely until the worker is ready or the process exits.
+Use a Caddy duration (`30s`, `2m`, …) or **`-1`** / **`forever`** to wait indefinitely until the worker is ready or the process exits.
 
-If the configured timeout is longer than `120s` (including `-1`) and the app is still loading after 120 seconds, Caddy logs a warning and keeps waiting.
+If the configured timeout is longer than `120s` (including `-1` / `forever`) and the app is still loading after 120 seconds, Caddy logs a warning and keeps waiting.
+
+On the CLI, pass indefinite wait as `--start-timeout=-1` (equals form) or `--start-timeout forever`. A bare `--start-timeout -1` is rejected by Cobra/pflag because `-1` looks like a flag name.
 
 ```caddyfile
 python {
@@ -620,7 +622,7 @@ caddy python-server --server-type asgi --app main:app \
 | `working_dir` | `--working-dir` |
 | `venv` | `--venv` |
 | `workers` | `--workers` |
-| `start_timeout` | `--start-timeout` |
+| `start_timeout` | `--start-timeout` (use `--start-timeout=-1` or `forever` for indefinite) |
 | `autoreload` | `--autoreload` |
 | `python_path` | `--python-path` |
 | `env_file` | `--env-file` (repeatable) |

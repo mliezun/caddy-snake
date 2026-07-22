@@ -41,7 +41,7 @@ Python-handler flags mirror the Caddyfile `python` block. Extra flags cover list
 | `--venv` | | Path to a Python virtual environment | — |
 | `--env-file` | | Dotenv file for worker env (repeatable) | — |
 | `--env-var` | | Inline worker env var `NAME=VALUE` (repeatable) | — |
-| `--start-timeout` | | Worker readiness wait (`120s` default; `-1` = indefinite) | `120s` |
+| `--start-timeout` | | Worker readiness wait (`120s` default; use `=-1` or `forever` for indefinite) | `120s` |
 | `--runtime` | | WSGI: `sync\|gevent`; ESGI: `gevent`; ASGI: `native\|uvloop` | per interface |
 | `--lifespan` | | ASGI lifespan events (`on\|off`) | `off` |
 | `--static-path` | | Path to a static files directory | — |

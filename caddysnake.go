@@ -136,14 +136,20 @@ type CaddySnake struct {
 	cacheSrv     *cacheServer
 }
 
-// parseStartTimeout parses a Caddyfile/JSON start_timeout value.
-// Empty means DefaultStartTimeout. "-1" means wait indefinitely (until the
-// worker is ready or the process exits). Other values use Caddy durations.
+// parseStartTimeout parses a Caddyfile/JSON/CLI start_timeout value.
+// Empty means DefaultStartTimeout. Indefinite wait (until the worker is ready
+// or the process exits) is "-1", or the aliases "forever", "none", "inf", and
+// "indefinite". Other values use Caddy durations.
+//
+// CLI note: pass indefinite as --start-timeout=-1 (equals form) or
+// --start-timeout forever. A bare "--start-timeout -1" is parsed as flags by
+// Cobra/pflag, not as a string value.
 func parseStartTimeout(s string) (time.Duration, error) {
 	if s == "" {
 		return DefaultStartTimeout, nil
 	}
-	if s == "-1" {
+	switch strings.ToLower(s) {
+	case "-1", "forever", "none", "inf", "indefinite":
 		return -1, nil
 	}
 	d, err := caddy.ParseDuration(s)
@@ -151,7 +157,7 @@ func parseStartTimeout(s string) (time.Duration, error) {
 		return 0, fmt.Errorf("invalid start_timeout: %w", err)
 	}
 	if d <= 0 {
-		return 0, fmt.Errorf("start_timeout must be a positive duration or -1, got %q", s)
+		return 0, fmt.Errorf("start_timeout must be a positive duration, -1, or forever, got %q", s)
 	}
 	return d, nil
 }
@@ -1055,7 +1061,7 @@ func init() {
 			"[--domain <example.com>] [--listen <addr>] [--workers <count>] " +
 			"[--python-path <path>] [--working-dir <path>] [--venv <path>] " +
 			"[--env-file <path>] [--env-var NAME=VALUE] " +
-			"[--start-timeout <duration|-1>] " +
+			"[--start-timeout=<duration|-1|forever>] " +
 			"[--static-path <path>] [--static-route <route>] " +
 			"[--runtime <name>] [--lifespan on|off] " +
 			"[--debug] [--access-logs] [--autoreload]",
@@ -1066,6 +1072,10 @@ A Python WSGI, ASGI, or ESGI server designed for apps and frameworks.
 Python-block options mirror the Caddyfile python directive (workers, venv,
 working_dir, env_file, env_var, start_timeout, runtime, lifespan, autoreload,
 python_path). CLI-only flags cover listen address, HTTPS domain, and static files.
+
+For an indefinite readiness wait use --start-timeout=-1 (equals form) or
+--start-timeout forever. Do not pass a bare "-1" as a separate argv token;
+Cobra/pflag treats it as a flag name.
 
 You can specify a custom socket address using the '--listen' option. You can also specify the number of workers to spawn.
 
@@ -1083,7 +1093,7 @@ Ensure DNS A/AAAA records are correctly set up if using a public domain for secu
 			cmd.Flags().String("venv", "", "Path to a Python virtual environment to use")
 			cmd.Flags().StringSlice("env-file", nil, "Dotenv file loaded into worker env (repeatable; later files override)")
 			cmd.Flags().StringSlice("env-var", nil, "Inline worker env var as NAME=VALUE (repeatable; overrides env-file)")
-			cmd.Flags().String("start-timeout", "", "Wait for worker readiness (default: 120s; -1 = indefinite)")
+			cmd.Flags().String("start-timeout", "", "Wait for worker readiness (default: 120s; use =-1 or forever for indefinite)")
 			cmd.Flags().String("static-path", "", "Path to a static directory to serve: path/to/static")
 			cmd.Flags().String("static-route", "/static", "Route to serve the static directory: /static")
 			cmd.Flags().Bool("debug", false, "Enable debug logs")

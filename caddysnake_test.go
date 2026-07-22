@@ -358,9 +358,11 @@ func TestParseStartTimeout(t *testing.T) {
 	if err != nil || d != DefaultStartTimeout {
 		t.Fatalf("empty: got %v, %v; want %v, nil", d, err, DefaultStartTimeout)
 	}
-	d, err = parseStartTimeout("-1")
-	if err != nil || d != -1 {
-		t.Fatalf("-1: got %v, %v; want -1, nil", d, err)
+	for _, indefinite := range []string{"-1", "forever", "none", "inf", "indefinite", "FOREVER"} {
+		d, err = parseStartTimeout(indefinite)
+		if err != nil || d != -1 {
+			t.Fatalf("%q: got %v, %v; want -1, nil", indefinite, d, err)
+		}
 	}
 	d, err = parseStartTimeout("90s")
 	if err != nil || d != 90*time.Second {

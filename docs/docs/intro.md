@@ -50,7 +50,7 @@ This starts a server on port `9080` serving your app. See `caddysnake --help` fo
 | `--working-dir <path>` | Working directory for the Python app | — |
 | `--env-file <path>` | Dotenv file for worker env (repeatable) | — |
 | `--env-var NAME=VALUE` | Inline worker env var (repeatable) | — |
-| `--start-timeout <dur\|-1>` | Worker readiness wait | `120s` |
+| `--start-timeout=<dur\|-1\|forever>` | Worker readiness wait (`=-1` or `forever` for indefinite) | `120s` |
 | `--runtime <name>` | Worker runtime (see [runtime](reference.md#runtime)) | per interface |
 | `--lifespan on\|off` | ASGI lifespan events | `off` |
 | `--static-path <path>` | Serve a static files directory | — |
