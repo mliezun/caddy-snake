@@ -75,23 +75,64 @@ type AppServer interface {
 	HandleRequest(w http.ResponseWriter, r *http.Request) error
 }
 
+// DefaultStartTimeout is how long Provision waits for each Python worker to
+// become ready when start_timeout is omitted.
+const DefaultStartTimeout = 120 * time.Second
+
+// startTimeoutWarnAfter is when a slow-start warning is logged if the configured
+// start_timeout allows waiting longer. Overridable in tests.
+var startTimeoutWarnAfter = DefaultStartTimeout
+
+// errWorkerExited indicates the Python worker process exited before its socket
+// or port file became ready.
+var errWorkerExited = errors.New("python worker exited before becoming ready")
+
 // CaddySnake module that communicates with a Python app
 type CaddySnake struct {
-	ModuleWsgi string            `json:"module_wsgi,omitempty"`
-	ModuleAsgi string            `json:"module_asgi,omitempty"`
-	ModuleEsgi string            `json:"module_esgi,omitempty"`
-	Runtime    string            `json:"runtime,omitempty"`
-	Lifespan   string            `json:"lifespan,omitempty"`
-	WorkingDir string            `json:"working_dir,omitempty"`
-	VenvPath   string            `json:"venv_path,omitempty"`
-	Workers    string            `json:"workers,omitempty"`
-	Autoreload string            `json:"autoreload,omitempty"`
-	PythonPath string            `json:"python_path,omitempty"`
-	EnvFiles   []string          `json:"env_files,omitempty"`
-	EnvVars    map[string]string `json:"env_vars,omitempty"`
-	logger     *zap.Logger
-	app        AppServer
-	cacheSrv   *cacheServer
+	ModuleWsgi   string            `json:"module_wsgi,omitempty"`
+	ModuleAsgi   string            `json:"module_asgi,omitempty"`
+	ModuleEsgi   string            `json:"module_esgi,omitempty"`
+	Runtime      string            `json:"runtime,omitempty"`
+	Lifespan     string            `json:"lifespan,omitempty"`
+	WorkingDir   string            `json:"working_dir,omitempty"`
+	VenvPath     string            `json:"venv_path,omitempty"`
+	Workers      string            `json:"workers,omitempty"`
+	StartTimeout string            `json:"start_timeout,omitempty"`
+	Autoreload   string            `json:"autoreload,omitempty"`
+	PythonPath   string            `json:"python_path,omitempty"`
+	EnvFiles     []string          `json:"env_files,omitempty"`
+	EnvVars      map[string]string `json:"env_vars,omitempty"`
+	logger       *zap.Logger
+	app          AppServer
+	cacheSrv     *cacheServer
+}
+
+// parseStartTimeout parses a Caddyfile/JSON start_timeout value.
+// Empty means DefaultStartTimeout. "-1" means wait indefinitely (until the
+// worker is ready or the process exits). Other values use Caddy durations.
+func parseStartTimeout(s string) (time.Duration, error) {
+	if s == "" {
+		return DefaultStartTimeout, nil
+	}
+	if s == "-1" {
+		return -1, nil
+	}
+	d, err := caddy.ParseDuration(s)
+	if err != nil {
+		return 0, fmt.Errorf("invalid start_timeout: %w", err)
+	}
+	if d <= 0 {
+		return 0, fmt.Errorf("start_timeout must be a positive duration or -1, got %q", s)
+	}
+	return d, nil
+}
+
+// effectiveStartTimeout maps a Go API zero value to DefaultStartTimeout.
+func effectiveStartTimeout(d time.Duration) time.Duration {
+	if d == 0 {
+		return DefaultStartTimeout
+	}
+	return d
 }
 
 // effectivePythonRuntime returns the runtime string passed to the Python worker.
@@ -174,6 +215,13 @@ func (f *CaddySnake) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 					if !d.Args(&f.Workers) {
 						return d.Errf("expected exactly one argument for workers")
 					}
+				case "start_timeout":
+					if !d.Args(&f.StartTimeout) {
+						return d.Errf("expected exactly one argument for start_timeout")
+					}
+					if _, err := parseStartTimeout(f.StartTimeout); err != nil {
+						return d.Errf("%v", err)
+					}
 				case "autoreload":
 					f.Autoreload = "on"
 				case "python_path":
@@ -241,13 +289,18 @@ func (f *CaddySnake) Provision(ctx caddy.Context) error {
 		workers = runtime.GOMAXPROCS(0)
 	}
 
+	startTimeout, err := parseStartTimeout(f.StartTimeout)
+	if err != nil {
+		return err
+	}
+
 	isDynamic := containsPlaceholder(f.ModuleWsgi) || containsPlaceholder(f.ModuleAsgi) ||
 		containsPlaceholder(f.ModuleEsgi) ||
 		containsPlaceholder(f.WorkingDir) || containsPlaceholder(f.VenvPath) ||
 		envFilesContainPlaceholder(f.EnvFiles) || envMapContainsPlaceholder(f.EnvVars)
 
 	if isDynamic {
-		if err = f.provisionDynamic(workers, cacheAddr); err != nil {
+		if err = f.provisionDynamic(workers, cacheAddr, startTimeout); err != nil {
 			return err
 		}
 		success = true
@@ -261,7 +314,7 @@ func (f *CaddySnake) Provision(ctx caddy.Context) error {
 
 	if f.ModuleWsgi != "" {
 		rt := effectivePythonRuntime("wsgi", f.Runtime)
-		f.app, err = NewPythonWorkerGroup("wsgi", f.ModuleWsgi, f.WorkingDir, f.VenvPath, f.Lifespan, rt, workers, pythonBin, cacheAddr, envFiles, envVars)
+		f.app, err = NewPythonWorkerGroup("wsgi", f.ModuleWsgi, f.WorkingDir, f.VenvPath, f.Lifespan, rt, workers, pythonBin, cacheAddr, envFiles, envVars, startTimeout, f.logger)
 		if err != nil {
 			return err
 		}
@@ -271,14 +324,14 @@ func (f *CaddySnake) Provision(ctx caddy.Context) error {
 		f.logger.Info("serving wsgi app", zap.String("module_wsgi", f.ModuleWsgi), zap.String("working_dir", f.WorkingDir), zap.String("venv_path", f.VenvPath), zap.String("python", pythonBin), zap.String("runtime", rt))
 	} else if f.ModuleAsgi != "" {
 		rt := effectivePythonRuntime("asgi", f.Runtime)
-		f.app, err = NewPythonWorkerGroup("asgi", f.ModuleAsgi, f.WorkingDir, f.VenvPath, f.Lifespan, rt, workers, pythonBin, cacheAddr, envFiles, envVars)
+		f.app, err = NewPythonWorkerGroup("asgi", f.ModuleAsgi, f.WorkingDir, f.VenvPath, f.Lifespan, rt, workers, pythonBin, cacheAddr, envFiles, envVars, startTimeout, f.logger)
 		if err != nil {
 			return err
 		}
 		f.logger.Info("serving asgi app", zap.String("module_asgi", f.ModuleAsgi), zap.String("working_dir", f.WorkingDir), zap.String("venv_path", f.VenvPath), zap.String("python", pythonBin), zap.String("runtime", rt))
 	} else if f.ModuleEsgi != "" {
 		rt := effectivePythonRuntime("esgi", f.Runtime)
-		f.app, err = NewPythonWorkerGroup("esgi", f.ModuleEsgi, f.WorkingDir, f.VenvPath, "", rt, workers, pythonBin, cacheAddr, envFiles, envVars)
+		f.app, err = NewPythonWorkerGroup("esgi", f.ModuleEsgi, f.WorkingDir, f.VenvPath, "", rt, workers, pythonBin, cacheAddr, envFiles, envVars, startTimeout, f.logger)
 		if err != nil {
 			return err
 		}
@@ -304,17 +357,17 @@ func (f *CaddySnake) Provision(ctx caddy.Context) error {
 		if f.ModuleWsgi != "" {
 			rt := effectivePythonRuntime("wsgi", f.Runtime)
 			factory = func() (AppServer, error) {
-				return NewPythonWorkerGroup("wsgi", f.ModuleWsgi, f.WorkingDir, f.VenvPath, f.Lifespan, rt, workers, pythonBin, cacheAddr, envFiles, envVars)
+				return NewPythonWorkerGroup("wsgi", f.ModuleWsgi, f.WorkingDir, f.VenvPath, f.Lifespan, rt, workers, pythonBin, cacheAddr, envFiles, envVars, startTimeout, f.logger)
 			}
 		} else if f.ModuleAsgi != "" {
 			rt := effectivePythonRuntime("asgi", f.Runtime)
 			factory = func() (AppServer, error) {
-				return NewPythonWorkerGroup("asgi", f.ModuleAsgi, f.WorkingDir, f.VenvPath, f.Lifespan, rt, workers, pythonBin, cacheAddr, envFiles, envVars)
+				return NewPythonWorkerGroup("asgi", f.ModuleAsgi, f.WorkingDir, f.VenvPath, f.Lifespan, rt, workers, pythonBin, cacheAddr, envFiles, envVars, startTimeout, f.logger)
 			}
 		} else {
 			rt := effectivePythonRuntime("esgi", f.Runtime)
 			factory = func() (AppServer, error) {
-				return NewPythonWorkerGroup("esgi", f.ModuleEsgi, f.WorkingDir, f.VenvPath, "", rt, workers, pythonBin, cacheAddr, envFiles, envVars)
+				return NewPythonWorkerGroup("esgi", f.ModuleEsgi, f.WorkingDir, f.VenvPath, "", rt, workers, pythonBin, cacheAddr, envFiles, envVars, startTimeout, f.logger)
 			}
 		}
 
@@ -331,18 +384,19 @@ func (f *CaddySnake) Provision(ctx caddy.Context) error {
 
 // provisionDynamic sets up the module in dynamic mode where Caddy placeholders
 // in module_wsgi/module_asgi/module_esgi, working_dir, or venv are resolved per-request.
-func (f *CaddySnake) provisionDynamic(workers int, cacheAddr string) error {
+func (f *CaddySnake) provisionDynamic(workers int, cacheAddr string, startTimeout time.Duration) error {
 	autoreload := f.Autoreload == "on"
 	pythonPath := f.PythonPath
 	envFilePatterns := cloneEnvFiles(f.EnvFiles)
 	envVarPatterns := cloneEnvVars(f.EnvVars)
+	logger := f.logger
 
 	if f.ModuleWsgi != "" {
 		lifespan := f.Lifespan
 		rt := effectivePythonRuntime("wsgi", f.Runtime)
 		factory := func(module, dir, venv string, envFiles []string, envVars map[string]string) (AppServer, error) {
 			pythonBin := resolvePythonInterpreter(pythonPath, venv)
-			return NewPythonWorkerGroup("wsgi", module, dir, venv, lifespan, rt, workers, pythonBin, cacheAddr, envFiles, envVars)
+			return NewPythonWorkerGroup("wsgi", module, dir, venv, lifespan, rt, workers, pythonBin, cacheAddr, envFiles, envVars, startTimeout, logger)
 		}
 		var err error
 		f.app, err = NewDynamicApp(f.ModuleWsgi, f.WorkingDir, f.VenvPath, envFilePatterns, envVarPatterns, factory, f.logger, autoreload, nil)
@@ -362,7 +416,7 @@ func (f *CaddySnake) provisionDynamic(workers int, cacheAddr string) error {
 		rt := effectivePythonRuntime("asgi", f.Runtime)
 		factory := func(module, dir, venv string, envFiles []string, envVars map[string]string) (AppServer, error) {
 			pythonBin := resolvePythonInterpreter(pythonPath, venv)
-			return NewPythonWorkerGroup("asgi", module, dir, venv, lifespan, rt, workers, pythonBin, cacheAddr, envFiles, envVars)
+			return NewPythonWorkerGroup("asgi", module, dir, venv, lifespan, rt, workers, pythonBin, cacheAddr, envFiles, envVars, startTimeout, logger)
 		}
 		var err error
 		f.app, err = NewDynamicApp(f.ModuleAsgi, f.WorkingDir, f.VenvPath, envFilePatterns, envVarPatterns, factory, f.logger, autoreload, nil)
@@ -378,7 +432,7 @@ func (f *CaddySnake) provisionDynamic(workers int, cacheAddr string) error {
 		rt := effectivePythonRuntime("esgi", f.Runtime)
 		factory := func(module, dir, venv string, envFiles []string, envVars map[string]string) (AppServer, error) {
 			pythonBin := resolvePythonInterpreter(pythonPath, venv)
-			return NewPythonWorkerGroup("esgi", module, dir, venv, "", rt, workers, pythonBin, cacheAddr, envFiles, envVars)
+			return NewPythonWorkerGroup("esgi", module, dir, venv, "", rt, workers, pythonBin, cacheAddr, envFiles, envVars, startTimeout, logger)
 		}
 		var err error
 		f.app, err = NewDynamicApp(f.ModuleEsgi, f.WorkingDir, f.VenvPath, envFilePatterns, envVarPatterns, factory, f.logger, autoreload, nil)
@@ -431,6 +485,9 @@ func (m *CaddySnake) Validate() error {
 		if err != nil || w < 0 {
 			return fmt.Errorf("invalid workers value: %s", m.Workers)
 		}
+	}
+	if _, err := parseStartTimeout(m.StartTimeout); err != nil {
+		return err
 	}
 	if m.Lifespan != "" && m.Lifespan != "on" && m.Lifespan != "off" {
 		return fmt.Errorf("lifespan must be 'on' or 'off', got: %s", m.Lifespan)
@@ -553,29 +610,33 @@ func (p *proxyBufferPool) Put(b []byte) {
 var sharedProxyBufferPool = &proxyBufferPool{}
 
 type PythonWorker struct {
-	Interface  string
-	App        string
-	WorkingDir string
-	Venv       string
-	Lifespan   string
-	Runtime    string
-	PythonBin  string
-	Socket     *os.File
-	SockDir    string // private directory containing the socket (Unix only)
-	ScriptPath string
-	DialNet    string // "unix" or "tcp"
-	DialAddr   string // socket path or host:port
-	CacheAddr  string // CADDYSNAKE_CACHE_ADDR: unix://path (Unix) or 127.0.0.1:port (Windows); empty = omit env
-	WorkerID   string // CADDYSNAKE_WORKER_ID: stable index 0..N-1 within the worker group
-	EnvFiles   []string
-	EnvVars    map[string]string
+	Interface    string
+	App          string
+	WorkingDir   string
+	Venv         string
+	Lifespan     string
+	Runtime      string
+	PythonBin    string
+	Socket       *os.File
+	SockDir      string // private directory containing the socket (Unix only)
+	ScriptPath   string
+	DialNet      string // "unix" or "tcp"
+	DialAddr     string // socket path or host:port
+	CacheAddr    string // CADDYSNAKE_CACHE_ADDR: unix://path (Unix) or 127.0.0.1:port (Windows); empty = omit env
+	WorkerID     string // CADDYSNAKE_WORKER_ID: stable index 0..N-1 within the worker group
+	EnvFiles     []string
+	EnvVars      map[string]string
+	StartTimeout time.Duration // 0 = DefaultStartTimeout; <0 = indefinite
+	logger       *zap.Logger
 
 	Cmd       *exec.Cmd
+	cmdWaitCh chan error // receives Cmd.Wait result; only Wait once
+	cmdReaped bool
 	Transport *http.Transport
 	Proxy     *httputil.ReverseProxy
 }
 
-func NewPythonWorker(iface, app, workingDir, venv, lifespan, pyRuntime, pythonBin, scriptPath, cacheAddr, workerID string, envFiles []string, envVars map[string]string) (*PythonWorker, error) {
+func NewPythonWorker(iface, app, workingDir, venv, lifespan, pyRuntime, pythonBin, scriptPath, cacheAddr, workerID string, envFiles []string, envVars map[string]string, startTimeout time.Duration, logger *zap.Logger) (*PythonWorker, error) {
 	var socket *os.File
 	var sockDir string
 	var err error
@@ -609,22 +670,24 @@ func NewPythonWorker(iface, app, workingDir, venv, lifespan, pyRuntime, pythonBi
 	}
 
 	w := &PythonWorker{
-		Interface:  iface,
-		App:        app,
-		WorkingDir: workingDir,
-		Venv:       venv,
-		Lifespan:   lifespan,
-		Runtime:    pyRuntime,
-		PythonBin:  pythonBin,
-		Socket:     socket,
-		SockDir:    sockDir,
-		ScriptPath: scriptPath,
-		DialNet:    dialNet,
-		DialAddr:   dialAddr,
-		CacheAddr:  cacheAddr,
-		WorkerID:   workerID,
-		EnvFiles:   cloneEnvFiles(envFiles),
-		EnvVars:    cloneEnvVars(envVars),
+		Interface:    iface,
+		App:          app,
+		WorkingDir:   workingDir,
+		Venv:         venv,
+		Lifespan:     lifespan,
+		Runtime:      pyRuntime,
+		PythonBin:    pythonBin,
+		Socket:       socket,
+		SockDir:      sockDir,
+		ScriptPath:   scriptPath,
+		DialNet:      dialNet,
+		DialAddr:     dialAddr,
+		CacheAddr:    cacheAddr,
+		WorkerID:     workerID,
+		EnvFiles:     cloneEnvFiles(envFiles),
+		EnvVars:      cloneEnvVars(envVars),
+		StartTimeout: startTimeout,
+		logger:       logger,
 	}
 	err = w.Start()
 	return w, err
@@ -685,26 +748,96 @@ func (w *PythonWorker) Start() error {
 	if err := w.Cmd.Start(); err != nil {
 		return err
 	}
+	w.cmdWaitCh = make(chan error, 1)
+	go func() {
+		w.cmdWaitCh <- w.Cmd.Wait()
+	}()
+
+	timeout := effectiveStartTimeout(w.StartTimeout)
 	if runtime.GOOS == "windows" {
-		port, err := waitForPortFile(w.Socket.Name(), 10*time.Second)
+		port, err := waitForPortFile(w.Socket.Name(), timeout, w.cmdWaitCh, w.logger)
 		if err != nil {
-			_ = w.Cmd.Process.Kill()
-			_ = w.Cmd.Wait()
+			w.reapWorkerAfterStartFailure(err)
 			return fmt.Errorf("waiting for Python worker port file: %w", err)
 		}
 		w.DialAddr = "127.0.0.1:" + strconv.Itoa(port)
-	} else if err := waitForUnixSocket(w.Socket.Name(), 10*time.Second); err != nil {
-		_ = w.Cmd.Process.Kill()
-		_ = w.Cmd.Wait()
+	} else if err := waitForUnixSocket(w.Socket.Name(), timeout, w.cmdWaitCh, w.logger); err != nil {
+		w.reapWorkerAfterStartFailure(err)
 		return fmt.Errorf("waiting for Python worker socket: %w", err)
 	}
 	return nil
 }
 
+// reapWorkerAfterStartFailure ensures the worker process is reaped exactly once
+// after a failed readiness wait.
+func (w *PythonWorker) reapWorkerAfterStartFailure(err error) {
+	if w.cmdReaped {
+		return
+	}
+	if errors.Is(err, errWorkerExited) {
+		// cmdWaitCh was already consumed by the readiness wait.
+		w.cmdReaped = true
+		return
+	}
+	if w.Cmd != nil && w.Cmd.Process != nil {
+		_ = w.Cmd.Process.Kill()
+	}
+	if w.cmdWaitCh != nil {
+		<-w.cmdWaitCh
+	}
+	w.cmdReaped = true
+}
+
+// maybeWarnSlowStart logs once when the app is still loading past startTimeoutWarnAfter
+// and the configured timeout allows waiting longer than that.
+func maybeWarnSlowStart(logger *zap.Logger, warned *bool, start time.Time, timeout time.Duration, path, kind string) {
+	if *warned || logger == nil {
+		return
+	}
+	hasDeadline := timeout >= 0
+	if hasDeadline && timeout <= startTimeoutWarnAfter {
+		return
+	}
+	if time.Since(start) < startTimeoutWarnAfter {
+		return
+	}
+	logger.Warn("Python app is taking a long time to load; still waiting for worker to become ready",
+		zap.String(kind, path),
+		zap.Duration("waited", time.Since(start)),
+	)
+	*warned = true
+}
+
+func checkWorkerExited(exited <-chan error, path, kind string) error {
+	if exited == nil {
+		return nil
+	}
+	select {
+	case err := <-exited:
+		if err != nil {
+			return fmt.Errorf("%w (%s %s): %w", errWorkerExited, kind, path, err)
+		}
+		return fmt.Errorf("%w (%s %s)", errWorkerExited, kind, path)
+	default:
+		return nil
+	}
+}
+
 // waitForPortFile polls the given file path until it contains a valid port number.
-func waitForPortFile(path string, timeout time.Duration) (int, error) {
-	deadline := time.Now().Add(timeout)
-	for time.Now().Before(deadline) {
+// timeout < 0 means wait indefinitely. exited, if non-nil, fails fast when the
+// worker process exits. logger may be nil.
+func waitForPortFile(path string, timeout time.Duration, exited <-chan error, logger *zap.Logger) (int, error) {
+	start := time.Now()
+	var deadline time.Time
+	hasDeadline := timeout >= 0
+	if hasDeadline {
+		deadline = start.Add(timeout)
+	}
+	warned := false
+	for {
+		if err := checkWorkerExited(exited, path, "port file"); err != nil {
+			return 0, err
+		}
 		data, err := os.ReadFile(path)
 		if err == nil && len(data) > 0 {
 			port, err := strconv.Atoi(strings.TrimSpace(string(data)))
@@ -712,23 +845,41 @@ func waitForPortFile(path string, timeout time.Duration) (int, error) {
 				return port, nil
 			}
 		}
+		if hasDeadline && !time.Now().Before(deadline) {
+			return 0, fmt.Errorf("port file %s not ready within %v", path, timeout)
+		}
+		maybeWarnSlowStart(logger, &warned, start, timeout, path, "port_file")
 		time.Sleep(50 * time.Millisecond)
 	}
-	return 0, fmt.Errorf("port file %s not ready within %v", path, timeout)
 }
 
-func waitForUnixSocket(path string, timeout time.Duration) error {
-	deadline := time.Now().Add(timeout)
+// waitForUnixSocket polls until a unix socket at path accepts connections.
+// timeout < 0 means wait indefinitely. exited, if non-nil, fails fast when the
+// worker process exits. logger may be nil.
+func waitForUnixSocket(path string, timeout time.Duration, exited <-chan error, logger *zap.Logger) error {
+	start := time.Now()
+	var deadline time.Time
+	hasDeadline := timeout >= 0
+	if hasDeadline {
+		deadline = start.Add(timeout)
+	}
+	warned := false
 	var dialer net.Dialer
-	for time.Now().Before(deadline) {
+	for {
+		if err := checkWorkerExited(exited, path, "unix socket"); err != nil {
+			return err
+		}
 		conn, err := dialer.DialContext(context.Background(), "unix", path)
 		if err == nil {
 			conn.Close()
 			return nil
 		}
+		if hasDeadline && !time.Now().Before(deadline) {
+			return fmt.Errorf("unix socket %s not ready within %v", path, timeout)
+		}
+		maybeWarnSlowStart(logger, &warned, start, timeout, path, "socket")
 		time.Sleep(50 * time.Millisecond)
 	}
-	return fmt.Errorf("unix socket %s not ready within %v", path, timeout)
 }
 
 // dialWithRetry attempts to establish a connection with retry logic
@@ -763,7 +914,7 @@ func (w *PythonWorker) Cleanup() error {
 	if w.Transport != nil {
 		w.Transport.CloseIdleConnections()
 	}
-	if w.Cmd != nil && w.Cmd.Process != nil {
+	if w.Cmd != nil && w.Cmd.Process != nil && !w.cmdReaped {
 		// On Windows, Signal(SIGTERM) is not supported; only Kill works.
 		// Send SIGTERM on Unix for graceful shutdown (ASGI lifespan), Kill on Windows.
 		if runtime.GOOS == "windows" {
@@ -771,19 +922,29 @@ func (w *PythonWorker) Cleanup() error {
 		} else {
 			_ = w.Cmd.Process.Signal(syscall.SIGTERM)
 		}
-		done := make(chan error, 1)
-		go func() {
-			_, err := w.Cmd.Process.Wait()
-			done <- err
-		}()
-		select {
-		case err := <-done:
-			if err != nil {
-				return err
+		if w.cmdWaitCh != nil {
+			select {
+			case <-w.cmdWaitCh:
+				w.cmdReaped = true
+			case <-time.After(5 * time.Second):
+				_ = w.Cmd.Process.Kill()
+				<-w.cmdWaitCh
+				w.cmdReaped = true
 			}
-		case <-time.After(5 * time.Second):
-			_ = w.Cmd.Process.Kill()
-			<-done
+		} else {
+			done := make(chan error, 1)
+			go func() {
+				_, err := w.Cmd.Process.Wait()
+				done <- err
+			}()
+			select {
+			case <-done:
+				w.cmdReaped = true
+			case <-time.After(5 * time.Second):
+				_ = w.Cmd.Process.Kill()
+				<-done
+				w.cmdReaped = true
+			}
 		}
 	}
 	if w.Socket != nil {
@@ -808,7 +969,7 @@ type PythonWorkerGroup struct {
 	ScriptPath string // path to worker_main.py inside BundleDir
 }
 
-func NewPythonWorkerGroup(iface, app, workingDir, venv, lifespan, runtime string, count int, pythonBin, cacheAddr string, envFiles []string, envVars map[string]string) (*PythonWorkerGroup, error) {
+func NewPythonWorkerGroup(iface, app, workingDir, venv, lifespan, runtime string, count int, pythonBin, cacheAddr string, envFiles []string, envVars map[string]string, startTimeout time.Duration, logger *zap.Logger) (*PythonWorkerGroup, error) {
 	scriptPath, bundleDir, err := writeCaddysnakePyBundle()
 	if err != nil {
 		return nil, fmt.Errorf("failed to write worker bundle: %w", err)
@@ -817,7 +978,7 @@ func NewPythonWorkerGroup(iface, app, workingDir, venv, lifespan, runtime string
 	errs := make([]error, count)
 	workers := make([]*PythonWorker, count)
 	for i := 0; i < count; i++ {
-		workers[i], errs[i] = NewPythonWorker(iface, app, workingDir, venv, lifespan, runtime, pythonBin, scriptPath, cacheAddr, strconv.Itoa(i), envFiles, envVars)
+		workers[i], errs[i] = NewPythonWorker(iface, app, workingDir, venv, lifespan, runtime, pythonBin, scriptPath, cacheAddr, strconv.Itoa(i), envFiles, envVars, startTimeout, logger)
 	}
 	wg := &PythonWorkerGroup{
 		Workers:    workers,
@@ -825,7 +986,9 @@ func NewPythonWorkerGroup(iface, app, workingDir, venv, lifespan, runtime string
 		ScriptPath: scriptPath,
 	}
 	if err := errors.Join(errs...); err != nil {
-		return nil, errors.Join(wg.Cleanup(), err)
+		// Prefer the start/readiness error; discard cleanup noise (e.g. ECHILD).
+		_ = wg.Cleanup()
+		return nil, err
 	}
 	return wg, nil
 }

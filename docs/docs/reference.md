@@ -68,6 +68,7 @@ python {
     env_file <path>
     env_var <name> <value>
     workers <count>
+    start_timeout <duration|-1>
     autoreload
 }
 ```
@@ -229,6 +230,25 @@ python {
     workers 4
 }
 ```
+
+### `start_timeout`
+
+How long Caddy waits for each Python worker to become ready (Unix socket or Windows port file) during provisioning. Optional; defaults to **`120s`**.
+
+Use a Caddy duration (`30s`, `2m`, …) or **`-1`** to wait indefinitely until the worker is ready or the process exits.
+
+If the configured timeout is longer than `120s` (including `-1`) and the app is still loading after 120 seconds, Caddy logs a warning and keeps waiting.
+
+```caddyfile
+python {
+    module_wsgi "mysite.wsgi:application"
+    working_dir "/var/www/myapp"
+    venv "/var/www/myapp/venv"
+    start_timeout 180s
+}
+```
+
+Workers that exit before becoming ready fail immediately with an error (the full timeout is not consumed).
 
 ### `autoreload`
 

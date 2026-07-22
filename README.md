@@ -248,6 +248,7 @@ python {
     env_file "/path/to/.env"            # Dotenv file loaded into worker env (repeatable)
     env_var VARNAME value               # Inline env var; overrides env_file (repeatable)
     workers 4                           # Number of worker processes (default: CPU count)
+    start_timeout 120s                  # Wait for worker readiness (default: 120s; -1 = indefinite)
     lifespan on|off                     # ASGI lifespan events (default: off)
     autoreload                          # Watch .py files and reload on changes
 }
@@ -328,6 +329,10 @@ python {
 ```
 
 **Precedence:** Caddy process environment → `env_file` → `env_var` → internal worker vars (`PYTHONUNBUFFERED`, `CADDYSNAKE_*`). Reserved names (`PYTHONUNBUFFERED`, `CADDYSNAKE_*`) cannot be set from the Caddyfile.
+
+### `start_timeout`
+
+Optional. How long to wait for each worker socket/port to become ready when Caddy loads the config. Defaults to **`120s`**. Use a duration such as `180s` or `2m`, or `-1` to wait indefinitely. If the timeout is greater than 120s (or `-1`) and the app is still starting after 120 seconds, Caddy logs a warning and continues waiting. Workers that crash during startup fail immediately.
 
 ### `workers`
 
