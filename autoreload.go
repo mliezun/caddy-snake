@@ -66,13 +66,15 @@ func handleNewDirEvent(event fsnotify.Event, watcher *fsnotify.Watcher) {
 // and reloads the app after a debounce period to group rapid changes.
 type AutoreloadableApp struct {
 	mu                  sync.RWMutex
+	reloadMu            sync.Mutex
 	app                 AppServer
 	factory             func() (AppServer, error)
 	watcher             *fsnotify.Watcher
 	stopCh              chan struct{}
 	logger              *zap.Logger
 	workingDir          string
-	exitOnReloadFailure func(code int) // if set, process exits on reload failure instead of serving 500
+	exitOnReloadFailure func(code int) // if set, process exits on reload failure instead of serving 503
+	closed              bool
 }
 
 // NewAutoreloadableApp creates an AutoreloadableApp that wraps the given app and
@@ -154,6 +156,12 @@ func (a *AutoreloadableApp) watch() {
 // reload performs the actual app reload by stopping the old worker processes
 // and starting new ones via the factory function.
 func (a *AutoreloadableApp) reload() {
+	a.reloadMu.Lock()
+	defer a.reloadMu.Unlock()
+	if a.closed {
+		return
+	}
+
 	a.logger.Info("reloading python app due to file changes")
 
 	// Create new app OUTSIDE lock to avoid blocking requests
@@ -164,8 +172,12 @@ func (a *AutoreloadableApp) reload() {
 			a.exitOnReloadFailure(1)
 		}
 		a.mu.Lock()
+		oldApp := a.app
 		a.app = &errorApp{err: err}
 		a.mu.Unlock()
+		if cleanupErr := oldApp.Cleanup(); cleanupErr != nil {
+			a.logger.Error("failed to cleanup old python app after reload failure", zap.Error(cleanupErr))
+		}
 		return
 	}
 
@@ -194,8 +206,14 @@ func (a *AutoreloadableApp) HandleRequest(w http.ResponseWriter, r *http.Request
 
 // Cleanup stops the filesystem watcher and cleans up the underlying app.
 func (a *AutoreloadableApp) Cleanup() error {
+	a.reloadMu.Lock()
+	defer a.reloadMu.Unlock()
+	if a.closed {
+		return nil
+	}
+	a.closed = true
 	close(a.stopCh)
-	a.watcher.Close()
+	_ = a.watcher.Close()
 	a.mu.RLock()
 	app := a.app
 	a.mu.RUnlock()

@@ -25,6 +25,11 @@ import click
     default="0",
     help="The number of workers to spawn (default: 0, uses CPU count)",
 )
+@click.option(
+    "--max-dynamic-apps",
+    default="0",
+    help="Maximum cached dynamic apps (default: 0, unlimited)",
+)
 @click.option("--python-path", help="Path to the Python interpreter")
 @click.option("--working-dir", help="Working directory for the Python app")
 @click.option("--venv", help="Path to a Python virtual environment to use")
@@ -72,6 +77,7 @@ def main(
     app,
     listen,
     workers,
+    max_dynamic_apps,
     python_path,
     working_dir,
     venv,
@@ -117,6 +123,8 @@ def main(
         args.extend(["--listen", listen])
     if workers:
         args.extend(["--workers", workers])
+    if max_dynamic_apps:
+        args.extend(["--max-dynamic-apps", max_dynamic_apps])
     if python_path:
         args.extend(["--python-path", python_path])
     if working_dir:

@@ -145,6 +145,9 @@ type CaddySnake struct {
 	VenvPath string `json:"venv_path,omitempty"`
 	// Number of worker processes to spawn. Defaults to GOMAXPROCS (CPU count) when empty or "0".
 	Workers string `json:"workers,omitempty"`
+	// Maximum number of request-resolved dynamic apps cached by this handler.
+	// Empty or "0" keeps the cache unlimited for backward compatibility.
+	MaxDynamicApps string `json:"max_dynamic_apps,omitempty"`
 	// How long Provision waits for each worker to become ready.
 	// Empty uses 120s; "-1", "forever", "none", "inf", or "indefinite" wait indefinitely.
 	// Caddyfile: start_timeout. CLI: --start-timeout (use --start-timeout=-1 or forever).
@@ -280,6 +283,10 @@ func (f *CaddySnake) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 					if !d.Args(&f.Workers) {
 						return d.Errf("expected exactly one argument for workers")
 					}
+				case "max_dynamic_apps":
+					if !d.Args(&f.MaxDynamicApps) {
+						return d.Errf("expected exactly one argument for max_dynamic_apps")
+					}
 				case "start_timeout":
 					if !d.Args(&f.StartTimeout) {
 						return d.Errf("expected exactly one argument for start_timeout")
@@ -349,9 +356,16 @@ func (f *CaddySnake) Provision(ctx caddy.Context) error {
 		}
 	}()
 
-	workers, _ := strconv.Atoi(f.Workers)
+	workers, err := strconv.Atoi(f.Workers)
+	if f.Workers != "" && (err != nil || workers < 0) {
+		return fmt.Errorf("invalid workers value: %s", f.Workers)
+	}
 	if workers <= 0 {
 		workers = runtime.GOMAXPROCS(0)
+	}
+	maxDynamicApps, err := strconv.Atoi(f.MaxDynamicApps)
+	if f.MaxDynamicApps != "" && (err != nil || maxDynamicApps < 0) {
+		return fmt.Errorf("invalid max_dynamic_apps value: %s", f.MaxDynamicApps)
 	}
 
 	startTimeout, err := parseStartTimeout(f.StartTimeout)
@@ -365,7 +379,7 @@ func (f *CaddySnake) Provision(ctx caddy.Context) error {
 		envFilesContainPlaceholder(f.EnvFiles) || envMapContainsPlaceholder(f.EnvVars)
 
 	if isDynamic {
-		if err = f.provisionDynamic(workers, cacheAddr, startTimeout); err != nil {
+		if err = f.provisionDynamic(workers, maxDynamicApps, cacheAddr, startTimeout); err != nil {
 			return err
 		}
 		success = true
@@ -449,7 +463,7 @@ func (f *CaddySnake) Provision(ctx caddy.Context) error {
 
 // provisionDynamic sets up the module in dynamic mode where Caddy placeholders
 // in module_wsgi/module_asgi/module_esgi, working_dir, or venv are resolved per-request.
-func (f *CaddySnake) provisionDynamic(workers int, cacheAddr string, startTimeout time.Duration) error {
+func (f *CaddySnake) provisionDynamic(workers, maxDynamicApps int, cacheAddr string, startTimeout time.Duration) error {
 	autoreload := f.Autoreload == "on"
 	pythonPath := f.PythonPath
 	envFilePatterns := cloneEnvFiles(f.EnvFiles)
@@ -464,7 +478,7 @@ func (f *CaddySnake) provisionDynamic(workers int, cacheAddr string, startTimeou
 			return NewPythonWorkerGroup("wsgi", module, dir, venv, lifespan, rt, workers, pythonBin, cacheAddr, envFiles, envVars, startTimeout, logger)
 		}
 		var err error
-		f.app, err = NewDynamicApp(f.ModuleWsgi, f.WorkingDir, f.VenvPath, envFilePatterns, envVarPatterns, factory, f.logger, autoreload, nil)
+		f.app, err = NewDynamicApp(f.ModuleWsgi, f.WorkingDir, f.VenvPath, envFilePatterns, envVarPatterns, factory, f.logger, autoreload, nil, maxDynamicApps)
 		if err != nil {
 			return err
 		}
@@ -484,7 +498,7 @@ func (f *CaddySnake) provisionDynamic(workers int, cacheAddr string, startTimeou
 			return NewPythonWorkerGroup("asgi", module, dir, venv, lifespan, rt, workers, pythonBin, cacheAddr, envFiles, envVars, startTimeout, logger)
 		}
 		var err error
-		f.app, err = NewDynamicApp(f.ModuleAsgi, f.WorkingDir, f.VenvPath, envFilePatterns, envVarPatterns, factory, f.logger, autoreload, nil)
+		f.app, err = NewDynamicApp(f.ModuleAsgi, f.WorkingDir, f.VenvPath, envFilePatterns, envVarPatterns, factory, f.logger, autoreload, nil, maxDynamicApps)
 		if err != nil {
 			return err
 		}
@@ -500,7 +514,7 @@ func (f *CaddySnake) provisionDynamic(workers int, cacheAddr string, startTimeou
 			return NewPythonWorkerGroup("esgi", module, dir, venv, "", rt, workers, pythonBin, cacheAddr, envFiles, envVars, startTimeout, logger)
 		}
 		var err error
-		f.app, err = NewDynamicApp(f.ModuleEsgi, f.WorkingDir, f.VenvPath, envFilePatterns, envVarPatterns, factory, f.logger, autoreload, nil)
+		f.app, err = NewDynamicApp(f.ModuleEsgi, f.WorkingDir, f.VenvPath, envFilePatterns, envVarPatterns, factory, f.logger, autoreload, nil, maxDynamicApps)
 		if err != nil {
 			return err
 		}
@@ -549,6 +563,12 @@ func (m *CaddySnake) Validate() error {
 		w, err := strconv.Atoi(m.Workers)
 		if err != nil || w < 0 {
 			return fmt.Errorf("invalid workers value: %s", m.Workers)
+		}
+	}
+	if m.MaxDynamicApps != "" {
+		maxApps, err := strconv.Atoi(m.MaxDynamicApps)
+		if err != nil || maxApps < 0 {
+			return fmt.Errorf("invalid max_dynamic_apps value: %s", m.MaxDynamicApps)
 		}
 	}
 	if _, err := parseStartTimeout(m.StartTimeout); err != nil {
@@ -754,8 +774,11 @@ func NewPythonWorker(iface, app, workingDir, venv, lifespan, pyRuntime, pythonBi
 		StartTimeout: startTimeout,
 		logger:       logger,
 	}
-	err = w.Start()
-	return w, err
+	if err = w.Start(); err != nil {
+		_ = w.Cleanup()
+		return nil, err
+	}
+	return w, nil
 }
 
 func (w *PythonWorker) Start() error {
@@ -787,6 +810,7 @@ func (w *PythonWorker) Start() error {
 		"--app", w.App,
 		"--socket", w.Socket.Name(),
 	}
+	timeout := effectiveStartTimeout(w.StartTimeout)
 	if workingDir != "" {
 		args = append(args, "--working-dir", workingDir)
 	}
@@ -795,6 +819,9 @@ func (w *PythonWorker) Start() error {
 	}
 	if w.Lifespan != "" {
 		args = append(args, "--lifespan", w.Lifespan)
+		if w.Lifespan == "on" && timeout >= 0 {
+			args = append(args, "--lifespan-timeout", strconv.FormatFloat(timeout.Seconds(), 'f', -1, 64))
+		}
 	}
 	if w.Runtime != "" {
 		args = append(args, "--runtime", w.Runtime)
@@ -818,7 +845,6 @@ func (w *PythonWorker) Start() error {
 		w.cmdWaitCh <- w.Cmd.Wait()
 	}()
 
-	timeout := effectiveStartTimeout(w.StartTimeout)
 	if runtime.GOOS == "windows" {
 		port, err := waitForPortFile(w.Socket.Name(), timeout, w.cmdWaitCh, w.logger)
 		if err != nil {
@@ -1089,6 +1115,7 @@ func init() {
 		Name: "python-server",
 		Usage: "--server-type wsgi|asgi|esgi --app <module> " +
 			"[--domain <example.com>] [--listen <addr>] [--workers <count>] " +
+			"[--max-dynamic-apps <count>] " +
 			"[--python-path <path>] [--working-dir <path>] [--venv <path>] " +
 			"[--env-file <path>] [--env-var NAME=VALUE] " +
 			"[--start-timeout=<duration|-1|forever>] " +
@@ -1099,7 +1126,7 @@ func init() {
 		Long: `
 A Python WSGI, ASGI, or ESGI server designed for apps and frameworks.
 
-Python-block options mirror the Caddyfile python directive (workers, venv,
+Python-block options mirror the Caddyfile python directive (workers, max_dynamic_apps, venv,
 working_dir, env_file, env_var, start_timeout, runtime, lifespan, autoreload,
 python_path). CLI-only flags cover listen address, HTTPS domain, and static files.
 
@@ -1118,6 +1145,7 @@ Ensure DNS A/AAAA records are correctly set up if using a public domain for secu
 			cmd.Flags().StringP("domain", "d", "", "Domain name at which to serve the files")
 			cmd.Flags().StringP("listen", "l", "", "The address to which to bind the listener")
 			cmd.Flags().StringP("workers", "w", "0", "The number of workers to spawn")
+			cmd.Flags().String("max-dynamic-apps", "0", "Maximum cached dynamic apps (0 = unlimited)")
 			cmd.Flags().String("python-path", "", "Path to the Python interpreter")
 			cmd.Flags().String("working-dir", "", "Working directory for the Python app")
 			cmd.Flags().String("venv", "", "Path to a Python virtual environment to use")
@@ -1144,6 +1172,7 @@ func pythonServer(fs caddycmd.Flags) (int, error) {
 	app := fs.String("app")
 	listen := fs.String("listen")
 	workers := fs.String("workers")
+	maxDynamicApps := fs.String("max-dynamic-apps")
 	debug := fs.Bool("debug")
 	accessLogs := fs.Bool("access-logs")
 	autoreload := fs.Bool("autoreload")
@@ -1210,6 +1239,7 @@ func pythonServer(fs caddycmd.Flags) (int, error) {
 	}
 
 	pythonHandler.Workers = workers
+	pythonHandler.MaxDynamicApps = maxDynamicApps
 	pythonHandler.PythonPath = pythonPath
 	if autoreload {
 		pythonHandler.Autoreload = "on"

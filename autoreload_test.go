@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -42,8 +43,8 @@ func TestAutoreloadableApp_HandleRequest(t *testing.T) {
 }
 
 func TestAutoreloadableApp_Cleanup(t *testing.T) {
-	var cleaned bool
-	mockApp := &mockAppServer{onCleanup: func() { cleaned = true }}
+	var cleanupCount int
+	mockApp := &mockAppServer{onCleanup: func() { cleanupCount++ }}
 
 	tempDir := t.TempDir()
 	a, err := NewAutoreloadableApp(mockApp, tempDir, func() (AppServer, error) { return mockApp, nil }, zap.NewNop(), nil)
@@ -55,8 +56,11 @@ func TestAutoreloadableApp_Cleanup(t *testing.T) {
 	if err != nil {
 		t.Errorf("Cleanup: %v", err)
 	}
-	if !cleaned {
-		t.Error("expected underlying app Cleanup to be called")
+	if err := a.Cleanup(); err != nil {
+		t.Errorf("second Cleanup: %v", err)
+	}
+	if cleanupCount != 1 {
+		t.Errorf("expected one underlying cleanup, got %d", cleanupCount)
 	}
 }
 
@@ -170,7 +174,8 @@ func TestErrorApp_Cleanup(t *testing.T) {
 }
 
 func TestAutoreloadableApp_ReloadFailure_FallsBackToErrorApp(t *testing.T) {
-	mockApp := &mockAppServer{}
+	cleaned := false
+	mockApp := &mockAppServer{onCleanup: func() { cleaned = true }}
 	reloadErr := errors.New("syntax error")
 	a, err := NewAutoreloadableApp(mockApp, t.TempDir(), func() (AppServer, error) {
 		return nil, reloadErr
@@ -191,6 +196,9 @@ func TestAutoreloadableApp_ReloadFailure_FallsBackToErrorApp(t *testing.T) {
 	}
 	if w.statusCode != http.StatusServiceUnavailable {
 		t.Errorf("expected status 503, got %d", w.statusCode)
+	}
+	if !cleaned {
+		t.Error("expected replaced app to be cleaned after reload failure")
 	}
 }
 
@@ -229,6 +237,43 @@ func TestAutoreloadableApp_ReloadRecovery(t *testing.T) {
 	a.HandleRequest(w2, &http.Request{})
 	if w2.statusCode != 200 {
 		t.Errorf("expected 200 after recovery, got %d", w2.statusCode)
+	}
+}
+
+func TestAutoreloadableApp_SerializesReloads(t *testing.T) {
+	var active atomic.Int32
+	var maxActive atomic.Int32
+	factory := func() (AppServer, error) {
+		current := active.Add(1)
+		for {
+			seen := maxActive.Load()
+			if current <= seen || maxActive.CompareAndSwap(seen, current) {
+				break
+			}
+		}
+		time.Sleep(25 * time.Millisecond)
+		active.Add(-1)
+		return &mockAppServer{}, nil
+	}
+
+	a, err := NewAutoreloadableApp(&mockAppServer{}, t.TempDir(), factory, zap.NewNop(), nil)
+	if err != nil {
+		t.Fatalf("NewAutoreloadableApp: %v", err)
+	}
+	defer a.Cleanup()
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+	for range 2 {
+		go func() {
+			defer wg.Done()
+			a.reload()
+		}()
+	}
+	wg.Wait()
+
+	if got := maxActive.Load(); got != 1 {
+		t.Fatalf("expected one factory call at a time, got %d", got)
 	}
 }
 

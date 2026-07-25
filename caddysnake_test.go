@@ -215,6 +215,109 @@ func TestDynamicAppGetOrCreate(t *testing.T) {
 	}
 }
 
+func TestDynamicAppMaxApps(t *testing.T) {
+	d, err := NewDynamicApp("main:app", "/home/test", "", nil, nil,
+		func(module, dir, venv string, envFiles []string, envVars map[string]string) (AppServer, error) {
+			return &mockAppServer{}, nil
+		},
+		zap.NewNop(),
+		false,
+		nil,
+		1,
+	)
+	if err != nil {
+		t.Fatalf("NewDynamicApp: %v", err)
+	}
+	defer d.Cleanup()
+
+	if _, err := d.getOrCreateApp("key1", "main:app", "/home/a", "", nil, nil); err != nil {
+		t.Fatalf("first app: %v", err)
+	}
+	if _, err := d.getOrCreateApp("key2", "main:app", "/home/b", "", nil, nil); err == nil ||
+		!strings.Contains(err.Error(), "dynamic app limit reached") {
+		t.Fatalf("expected dynamic app limit error, got %v", err)
+	}
+}
+
+func TestPathWithinDir(t *testing.T) {
+	root := filepath.Join(string(os.PathSeparator), "srv", "apps", "foo")
+	tests := []struct {
+		name string
+		path string
+		want bool
+	}{
+		{"direct child", filepath.Join(root, "app.py"), true},
+		{"nested child", filepath.Join(root, "pkg", "app.py"), true},
+		{"directory itself", root, true},
+		{"sibling prefix", filepath.Join(string(os.PathSeparator), "srv", "apps", "foobar", "app.py"), false},
+		{"parent", filepath.Join(string(os.PathSeparator), "srv", "apps", "app.py"), false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := pathWithinDir(tt.path, root); got != tt.want {
+				t.Errorf("pathWithinDir(%q, %q) = %v, want %v", tt.path, root, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestDynamicReloadWaitsForInflightRequest(t *testing.T) {
+	dir := t.TempDir()
+	started := make(chan struct{})
+	release := make(chan struct{})
+	cleaned := make(chan struct{})
+	d, err := NewDynamicApp("main:app", dir, "", nil, nil,
+		func(module, resolvedDir, venv string, envFiles []string, envVars map[string]string) (AppServer, error) {
+			return &mockAppServer{
+				onHandleRequest: func(w http.ResponseWriter, r *http.Request) error {
+					close(started)
+					<-release
+					return nil
+				},
+				onCleanup: func() { close(cleaned) },
+			}, nil
+		},
+		zap.NewNop(),
+		true,
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("NewDynamicApp: %v", err)
+	}
+	defer d.Cleanup()
+
+	requestDone := make(chan error, 1)
+	go func() {
+		requestDone <- d.HandleRequest(
+			&mockResponseWriter{headers: make(http.Header)},
+			(&http.Request{}).WithContext(context.Background()),
+		)
+	}()
+	<-started
+
+	absDir, err := filepath.Abs(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d.reloadDir(absDir)
+
+	select {
+	case <-cleaned:
+		t.Fatal("app cleaned while request was still active")
+	default:
+	}
+
+	close(release)
+	if err := <-requestDone; err != nil {
+		t.Fatalf("HandleRequest: %v", err)
+	}
+	select {
+	case <-cleaned:
+	case <-time.After(2 * time.Second):
+		t.Fatal("retired app was not cleaned after request completed")
+	}
+}
+
 func TestDynamicAppCleanup(t *testing.T) {
 	var cleanupCount int
 	d, _ := NewDynamicApp("main:app", "/home/test", "", nil, nil,
@@ -312,6 +415,7 @@ func TestUnmarshalCaddyfile_BlockAllOptions(t *testing.T) {
 		working_dir /tmp
 		venv /tmp/venv
 		workers 4
+		max_dynamic_apps 12
 		start_timeout 180s
 	}`
 	d := caddyfile.NewTestDispenser(input)
@@ -331,6 +435,9 @@ func TestUnmarshalCaddyfile_BlockAllOptions(t *testing.T) {
 	}
 	if cs.Workers != "4" {
 		t.Errorf("expected Workers '4', got %q", cs.Workers)
+	}
+	if cs.MaxDynamicApps != "12" {
+		t.Errorf("expected MaxDynamicApps '12', got %q", cs.MaxDynamicApps)
 	}
 	if cs.StartTimeout != "180s" {
 		t.Errorf("expected StartTimeout '180s', got %q", cs.StartTimeout)
@@ -603,6 +710,15 @@ func TestValidate_NegativeWorkers(t *testing.T) {
 	err := cs.Validate()
 	if err == nil {
 		t.Fatal("expected error for negative workers")
+	}
+}
+
+func TestValidate_InvalidMaxDynamicApps(t *testing.T) {
+	for _, value := range []string{"abc", "-1"} {
+		cs := &CaddySnake{ModuleWsgi: "main:app", MaxDynamicApps: value}
+		if err := cs.Validate(); err == nil {
+			t.Fatalf("expected error for max_dynamic_apps %q", value)
+		}
 	}
 }
 

@@ -459,6 +459,57 @@ class TestReadHttpRequest:
         assert "badheader" not in raw_headers
 
 
+# ==================== _read_http_request_sync (ESGI) ====================
+
+
+class _RecvSocket:
+    def __init__(self, *chunks):
+        self._chunks = [bytearray(chunk) for chunk in chunks]
+        self.recv_calls = 0
+
+    def recv(self, size):
+        self.recv_calls += 1
+        while self._chunks and not self._chunks[0]:
+            self._chunks.pop(0)
+        if not self._chunks:
+            return b""
+        chunk = self._chunks[0]
+        data = bytes(chunk[:size])
+        del chunk[:size]
+        return data
+
+
+class TestReadHttpRequestSync:
+    _headers = b"POST / HTTP/1.1\r\nHost: localhost\r\nTransfer-Encoding: chunked\r\n\r\n"
+
+    def test_chunked_body_consumes_buffered_terminator(self):
+        sock = _RecvSocket(self._headers + b"4\r\ntest\r\n0\r\n\r\n")
+        result = cs._read_http_request_sync(sock)
+
+        assert result is not None
+        body_stream = result[-1]
+        assert body_stream.read() == b"test"
+        assert body_stream.read() == b""
+        assert sock.recv_calls == 1
+
+    def test_chunked_body_consumes_fragmented_terminator(self):
+        sock = _RecvSocket(self._headers + b"4\r\ntest", b"\r\n0\r\n\r\n")
+        result = cs._read_http_request_sync(sock)
+
+        assert result is not None
+        body_stream = result[-1]
+        assert body_stream.read() == b"test"
+        assert body_stream.read() == b""
+
+    def test_chunked_body_rejects_invalid_terminator(self):
+        sock = _RecvSocket(self._headers + b"4\r\ntestXX0\r\n\r\n")
+        result = cs._read_http_request_sync(sock)
+
+        assert result is not None
+        with pytest.raises(ValueError, match="Invalid chunk terminator"):
+            result[-1].read()
+
+
 # ==================== ASGI _handle_asgi_http ====================
 
 
@@ -851,6 +902,32 @@ class TestHandleAsgiLifespan:
         async def app(scope, receive, send):
             _ = await receive()
             await send({"type": "lifespan.startup.failed", "message": "nope"})
+
+        ok, shutdown_fn = await cs._handle_asgi_lifespan(app, {})
+        assert ok is False
+        assert shutdown_fn is None
+
+    async def test_startup_exception_is_failure(self):
+        async def app(scope, receive, send):
+            _ = await receive()
+            raise RuntimeError("startup crash")
+
+        ok, shutdown_fn = await cs._handle_asgi_lifespan(app, {})
+        assert ok is False
+        assert shutdown_fn is None
+
+    async def test_startup_timeout_is_failure(self):
+        async def app(scope, receive, send):
+            _ = await receive()
+            await asyncio.Event().wait()
+
+        ok, shutdown_fn = await cs._handle_asgi_lifespan(app, {}, startup_timeout=0.01)
+        assert ok is False
+        assert shutdown_fn is None
+
+    async def test_return_without_startup_message_is_failure(self):
+        async def app(scope, receive, send):
+            _ = await receive()
 
         ok, shutdown_fn = await cs._handle_asgi_lifespan(app, {})
         assert ok is False

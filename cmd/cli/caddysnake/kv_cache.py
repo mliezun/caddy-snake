@@ -365,7 +365,7 @@ class Cache:
     async def asetnx(self, key: str | bytes, value: str | bytes, ttl: int | None = None) -> bool:
         return await asyncio.to_thread(self.setnx, key, value, ttl)
 
-    async def akeys(self, prefix: str | bytes = "", limit: int = 1000) -> list[bytes]:
+    async def akeys(self, prefix: str | bytes, limit: int = 1000) -> list[bytes]:
         return await asyncio.to_thread(self.keys, prefix, limit)
 
     async def apublish(self, channel: str | bytes, message: str | bytes) -> int:

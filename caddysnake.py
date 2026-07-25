@@ -1385,9 +1385,21 @@ class _SyncHttpBodyStream:
             self._bump_total(len(data))
             self._chunk_remaining -= len(data)
             if self._chunk_remaining == 0:
-                _recv_exact_sock(self._sock, 2)
+                ending = self._readexactly(2)
+                if ending != b"\r\n":
+                    raise ValueError("Invalid chunk terminator")
             if data:
                 return data
+
+    def _readexactly(self, size):
+        while len(self._buf) < size:
+            chunk = self._sock.recv(size - len(self._buf))
+            if not chunk:
+                raise OSError("unexpected EOF reading body")
+            self._buf.extend(chunk)
+        data = bytes(self._buf[:size])
+        del self._buf[:size]
+        return data
 
     def _readline_chunked(self):
         while True:
@@ -1988,7 +2000,7 @@ async def _handle_asgi_connection(reader, writer, app, state):
             pass
 
 
-async def _handle_asgi_lifespan(app, state):
+async def _handle_asgi_lifespan(app, state, startup_timeout=None):
     """Run ASGI lifespan protocol. Returns (success, shutdown_coroutine)."""
     scope = {
         "type": "lifespan",
@@ -2025,20 +2037,39 @@ async def _handle_asgi_lifespan(app, state):
             shutdown_complete.set()
 
     async def run():
+        nonlocal startup_failed
         try:
             await app(scope, receive, send)
         except Exception:
             traceback.print_exc(file=sys.stderr)
             if not startup_complete.is_set():
+                startup_failed = True
                 startup_complete.set()
+            elif not shutdown_complete.is_set():
+                shutdown_complete.set()
+        else:
+            if not startup_complete.is_set():
+                startup_failed = True
+                startup_complete.set()
+            elif not shutdown_complete.is_set():
+                shutdown_complete.set()
 
     lifespan_task = asyncio.create_task(run())
 
     await receive_queue.put({"type": "lifespan.startup"})
-    await startup_complete.wait()
+    try:
+        if startup_timeout is None:
+            await startup_complete.wait()
+        else:
+            await asyncio.wait_for(startup_complete.wait(), timeout=startup_timeout)
+    except TimeoutError:
+        print("Lifespan startup timed out", file=sys.stderr)
+        startup_failed = True
 
     if startup_failed:
         lifespan_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await lifespan_task
         return False, None
 
     async def do_shutdown():
@@ -2054,13 +2085,13 @@ async def _handle_asgi_lifespan(app, state):
     return True, do_shutdown
 
 
-async def run_asgi_server(app, socket_path, lifespan):
+async def run_asgi_server(app, socket_path, lifespan, lifespan_timeout=None):
     """Run an ASGI server. On Unix: Unix socket at socket_path. On Windows: TCP, write port to socket_path."""
     state = {}
     shutdown_fn = None
 
     if lifespan:
-        ok, shutdown_fn = await _handle_asgi_lifespan(app, state)
+        ok, shutdown_fn = await _handle_asgi_lifespan(app, state, lifespan_timeout)
         if not ok:
             print("ASGI lifespan startup failed, exiting", file=sys.stderr)
             sys.exit(1)
@@ -2155,6 +2186,12 @@ def main():
         "--lifespan", default="off", choices=["on", "off"], help="ASGI lifespan events"
     )
     parser.add_argument(
+        "--lifespan-timeout",
+        type=float,
+        default=None,
+        help=argparse.SUPPRESS,
+    )
+    parser.add_argument(
         "--runtime",
         default="",
         help="Worker runtime: wsgi uses sync|gevent; esgi uses gevent only; asgi uses native|uvloop",
@@ -2173,7 +2210,12 @@ def main():
         if loop_factory is not None:
             run_kwargs["loop_factory"] = loop_factory
         asyncio.run(
-            run_asgi_server(app, args.socket, args.lifespan == "on"),
+            run_asgi_server(
+                app,
+                args.socket,
+                args.lifespan == "on",
+                args.lifespan_timeout,
+            ),
             **run_kwargs,
         )
     else:
