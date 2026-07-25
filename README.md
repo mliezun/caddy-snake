@@ -174,6 +174,7 @@ from flask import Flask
 
 app = Flask(__name__)
 
+
 @app.route("/hello-world")
 def hello():
     return "Hello world!"
@@ -207,6 +208,7 @@ curl http://localhost:9080/hello-world
 from fastapi import FastAPI
 
 app = FastAPI()
+
 
 @app.get("/hello-world")
 def hello():
