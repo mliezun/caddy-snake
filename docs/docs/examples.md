@@ -21,19 +21,23 @@ from pydantic import BaseModel
 
 app = FastAPI()
 
+
 class Item(BaseModel):
     name: str
     description: str | None = None
     price: float
     tax: float | None = None
 
+
 @app.get("/")
 def read_root():
     return {"Hello": "World"}
 
+
 @app.get("/items/{item_id}")
 def read_item(item_id: int):
     return {"item_id": item_id}
+
 
 @app.post("/items/")
 def create_item(item: Item):
@@ -83,13 +87,16 @@ from flask import Flask, jsonify, request
 
 app = Flask(__name__)
 
+
 @app.route("/")
 def hello():
     return jsonify({"message": "Hello, World!"})
 
+
 @app.route("/items/<int:item_id>")
 def get_item(item_id):
     return jsonify({"item_id": item_id})
+
 
 @app.route("/items", methods=["POST"])
 def create_item():
@@ -175,26 +182,29 @@ Django is a full-featured web framework with a built-in admin interface and ORM.
 ```python
 # mysite/settings.py
 INSTALLED_APPS = [
-    'django.contrib.admin',
-    'django.contrib.auth',
-    'django.contrib.contenttypes',
-    'django.contrib.sessions',
-    'django.contrib.messages',
-    'django.contrib.staticfiles',
-    'items',
+    "django.contrib.admin",
+    "django.contrib.auth",
+    "django.contrib.contenttypes",
+    "django.contrib.sessions",
+    "django.contrib.messages",
+    "django.contrib.staticfiles",
+    "items",
 ]
 
 # items/models.py
 from django.db import models
+
 
 class Item(models.Model):
     name = models.CharField(max_length=100)
     description = models.TextField(blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
+
 # items/views.py
 from django.http import JsonResponse
 from .models import Item
+
 
 def item_list(request):
     items = Item.objects.all()
@@ -241,7 +251,7 @@ Django Channels extends Django with WebSocket support and other async protocols.
 import os
 from django.core.asgi import get_asgi_application
 
-os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'mysite.settings')
+os.environ.setdefault("DJANGO_SETTINGS_MODULE", "mysite.settings")
 application = get_asgi_application()
 ```
 
@@ -278,22 +288,26 @@ from socketio import AsyncServer
 from socketio.asgi import ASGIApp
 
 app = FastAPI()
-sio = AsyncServer(async_mode='asgi')
+sio = AsyncServer(async_mode="asgi")
 socket_app = ASGIApp(sio)
+
 
 @sio.event
 async def connect(sid, environ):
     print(f"Client connected: {sid}")
 
+
 @sio.event
 async def disconnect(sid):
     print(f"Client disconnected: {sid}")
 
+
 @sio.event
 async def message(sid, data):
-    await sio.emit('message', data, skip_sid=sid)
+    await sio.emit("message", data, skip_sid=sid)
 
-app.mount('/', socket_app)
+
+app.mount("/", socket_app)
 ```
 
 ```caddyfile
@@ -341,6 +355,7 @@ Enable hot-reloading during development so your app reloads automatically when y
 from flask import Flask
 
 app = Flask(__name__)
+
 
 @app.route("/")
 def hello():
@@ -401,6 +416,7 @@ from fastapi import FastAPI
 
 app = FastAPI()
 
+
 @app.get("/")
 def index():
     return {"app": "app1", "message": "Hello from App 1!"}
@@ -411,6 +427,7 @@ def index():
 from fastapi import FastAPI
 
 app = FastAPI()
+
 
 @app.get("/")
 def index():

@@ -1260,9 +1260,9 @@ func TestDynamicAppExpiresIdleApps(t *testing.T) {
 
 func TestAcquireCaddysnakePyBundleShared(t *testing.T) {
 	sharedBundleMu.Lock()
+	beforeRefs := 0
 	if sharedBundle != nil {
-		sharedBundleMu.Unlock()
-		t.Fatal("shared bundle already held; test isolation broken")
+		beforeRefs = sharedBundle.refs
 	}
 	sharedBundleMu.Unlock()
 
@@ -1277,13 +1277,37 @@ func TestAcquireCaddysnakePyBundleShared(t *testing.T) {
 	if p1 != p2 || d1 != d2 {
 		t.Fatalf("expected shared bundle paths, got %q/%q vs %q/%q", p1, d1, p2, d2)
 	}
+
+	sharedBundleMu.Lock()
+	midRefs := 0
+	if sharedBundle != nil {
+		midRefs = sharedBundle.refs
+	}
+	sharedBundleMu.Unlock()
+	if midRefs != beforeRefs+2 {
+		t.Fatalf("expected refs %d after two acquires, got %d", beforeRefs+2, midRefs)
+	}
+
 	releaseCaddysnakePyBundle()
 	if _, err := os.Stat(p1); err != nil {
 		t.Fatalf("bundle should remain after first release: %v", err)
 	}
 	releaseCaddysnakePyBundle()
-	if _, err := os.Stat(p1); !os.IsNotExist(err) {
-		t.Fatalf("expected bundle removed after final release, err=%v", err)
+
+	sharedBundleMu.Lock()
+	afterRefs := 0
+	alive := sharedBundle != nil
+	if alive {
+		afterRefs = sharedBundle.refs
+	}
+	sharedBundleMu.Unlock()
+	if afterRefs != beforeRefs {
+		t.Fatalf("expected refs restored to %d, got %d (alive=%v)", beforeRefs, afterRefs, alive)
+	}
+	if beforeRefs == 0 {
+		if _, err := os.Stat(p1); !os.IsNotExist(err) {
+			t.Fatalf("expected bundle removed after final release, err=%v", err)
+		}
 	}
 }
 
