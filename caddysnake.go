@@ -355,6 +355,9 @@ func (f *CaddySnake) Provision(ctx caddy.Context) error {
 	if workers <= 0 {
 		workers = runtime.GOMAXPROCS(0)
 	}
+	if workers > maxPythonWorkers {
+		workers = maxPythonWorkers
+	}
 
 	startTimeout, err := parseStartTimeout(f.StartTimeout)
 	if err != nil {

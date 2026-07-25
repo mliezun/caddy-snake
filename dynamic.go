@@ -191,6 +191,24 @@ func NewDynamicApp(modulePattern, workingDir, venvPath string, envFilePatterns [
 	return d, nil
 }
 
+// pruneExpiredFailuresLocked removes expired negative-cache entries.
+// Caller must hold d.mu for writing.
+func (d *DynamicApp) pruneExpiredFailuresLocked(now time.Time) {
+	for key, f := range d.failed {
+		if !now.Before(f.expiresAt) {
+			delete(d.failed, key)
+		}
+	}
+}
+
+// rememberFailedCreateLocked records a failed create and drops expired entries.
+// Caller must hold d.mu for writing.
+func (d *DynamicApp) rememberFailedCreateLocked(key string, err error) {
+	now := time.Now()
+	d.pruneExpiredFailuresLocked(now)
+	d.failed[key] = failedAppCreate{err: err, expiresAt: now.Add(dynamicCreateFailureTTL)}
+}
+
 // resolve uses the Caddy replacer from the request context to substitute
 // placeholders in the module pattern, working directory, venv path, env files,
 // and env_var values.
@@ -256,6 +274,7 @@ func (d *DynamicApp) getOrCreateApp(key, module, dir, venv string, envFiles []st
 		d.mu.Unlock()
 		return nil, errors.New("dynamic app shutting down")
 	}
+	d.pruneExpiredFailuresLocked(time.Now())
 	app, ok = d.apps[key]
 	if ok {
 		d.mu.Unlock()
@@ -291,7 +310,7 @@ func (d *DynamicApp) getOrCreateApp(key, module, dir, venv string, envFiles []st
 				delete(d.inflight, key)
 				c.app = nil
 				c.err = fmt.Errorf("panic creating dynamic app: %v", r)
-				d.failed[key] = failedAppCreate{err: c.err, expiresAt: time.Now().Add(dynamicCreateFailureTTL)}
+				d.rememberFailedCreateLocked(key, c.err)
 				close(c.done)
 				d.mu.Unlock()
 				panic(r)
@@ -322,7 +341,7 @@ func (d *DynamicApp) getOrCreateApp(key, module, dir, venv string, envFiles []st
 			d.startWatchingDir(dir, key)
 		}
 	} else {
-		d.failed[key] = failedAppCreate{err: err, expiresAt: time.Now().Add(dynamicCreateFailureTTL)}
+		d.rememberFailedCreateLocked(key, err)
 	}
 	c.app = app
 	c.err = err
