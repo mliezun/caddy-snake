@@ -352,6 +352,9 @@ func (d *DynamicApp) getOrCreateApp(key, module, dir, venv string, envFiles []st
 		return nil, err
 	}
 	if err == nil {
+		// Refresh after the out-of-lock factory so idle TTL / LRU and the new
+		// entry's lastUsed reflect eviction-time wall clock, not create-start.
+		now = d.now()
 		evicted := d.makeRoomLocked(key, now)
 		if len(d.apps) >= d.maxApps {
 			d.mu.Unlock()
