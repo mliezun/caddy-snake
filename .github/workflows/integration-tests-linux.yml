@@ -119,8 +119,8 @@ jobs:
         continue-on-error: true
         run: |
           ./caddy run --config Caddyfile > caddy.log 2>&1 &
-          source venv/bin/activate || true
-          python main_test.py || true
+          source venv/bin/activate
+          python main_test.py
       - name: Upload logs and report
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2

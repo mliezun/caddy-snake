@@ -62,8 +62,8 @@ The autoreload feature provides hot-reloading during development without restart
    - The new worker group replaces the old one atomically
    - Old worker processes are terminated after the swap
 5. A read/write lock ensures in-flight requests complete before the swap
-6. If the reload fails (e.g. syntax error in Python code), all subsequent requests return HTTP 500 until the next successful reload
-7. If the app cannot be recreated at all (e.g. the working directory was deleted), the process terminates with exit code 1 to avoid silently serving errors indefinitely
+6. If the reload fails (e.g. syntax error in Python code), all subsequent requests return HTTP 503 until the next successful reload
+7. Reload failures do not terminate Caddy in the normal Caddyfile and CLI wiring
 
 ### Thread safety
 
@@ -85,6 +85,8 @@ The `DynamicApp` struct manages a cache of Python app instances keyed by their r
 2. **Cache lookup** — a composite key (`module|dir|venv|envFiles|envVars`) is used to look up an existing app
 3. **Lazy creation** — if no app exists for the key, one is created via the factory function and cached
 4. **Double-check locking** — a fast-path read lock allows concurrent access, with a write lock only for app creation
+
+The optional `max_dynamic_apps` setting bounds the number of cached request-resolved apps. `0` keeps the cache unlimited for backward compatibility.
 
 ### Example: multi-tenant by subdomain
 
@@ -110,7 +112,7 @@ When `autoreload` is enabled on a dynamic app, each resolved working directory g
 
 - A `dirToKeys` map tracks which cache keys belong to each working directory
 - When a `.py` file changes, only the apps for that directory are evicted
-- Old app instances are cleaned up after a 10-second grace period for in-flight requests
+- Old app instances are retired immediately and cleaned up when their active request count reaches zero
 - The app is lazily reimported on the next request
 - If the reimport fails on the next request, the process terminates (when `exitOnReloadFailure` is configured)
 

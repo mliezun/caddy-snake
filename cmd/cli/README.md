@@ -36,6 +36,7 @@ Python-handler flags mirror the Caddyfile `python` block. Extra flags cover list
 | `--domain` | `-d` | Domain name for HTTPS with automatic certificates | — |
 | `--listen` | `-l` | Custom listen address | `:9080` |
 | `--workers` | `-w` | Number of worker processes (0 = CPU count) | `0` |
+| `--max-dynamic-apps` | | Maximum cached dynamic apps (0 = unlimited) | `0` |
 | `--python-path` | | Path to the Python interpreter | — |
 | `--working-dir` | | Working directory for the Python app | — |
 | `--venv` | | Path to a Python virtual environment | — |

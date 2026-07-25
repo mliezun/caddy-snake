@@ -62,6 +62,7 @@ This starts a server on port `9080` serving your app. See `./caddy python-server
 --domain <example.com>    Enable HTTPS with automatic certificates
 --listen <addr>           Custom listen address (default: :9080)
 --workers <count>         Number of worker processes (default: CPU count)
+--max-dynamic-apps <n>    Maximum cached dynamic apps (default: 0, unlimited)
 --python-path <path>      Path to Python executable (default: embedded Python)
 --working-dir <path>      Working directory for the Python app
 --venv <path>             Path to virtual environment
@@ -251,8 +252,10 @@ python {
     env_file "/path/to/.env"            # Dotenv file loaded into worker env (repeatable)
     env_var VARNAME value               # Inline env var; overrides env_file (repeatable)
     workers 4                           # Number of worker processes (default: CPU count)
+    max_dynamic_apps 32                 # Cap request-resolved app instances (0 = unlimited)
     start_timeout 120s                  # Wait for worker readiness (default: 120s; -1 = indefinite)
     lifespan on|off                     # ASGI lifespan events (default: off)
+    python_path "/usr/bin/python3"       # Explicit Python interpreter
     autoreload                          # Watch .py files and reload on changes
 }
 ```
@@ -339,13 +342,17 @@ Number of worker processes to spawn. Defaults to the number of CPUs (`GOMAXPROCS
 
 When you use **process workers** (more than one worker, or the default multi-worker layout), Caddy Snake may start an **in-process shared cache** in the Go plugin and pass connection details to each worker via environment variables (see [Shared worker cache](#shared-worker-cache)).
 
+### `max_dynamic_apps`
+
+Limits the number of cached app instances created from request-time placeholders. The default `0` preserves unlimited behavior. Set a positive limit for multi-tenant or otherwise untrusted request-derived configurations; once the limit is reached, uncached app keys are rejected until an app is evicted by autoreload or Caddy reloads.
+
 ### `start_timeout`
 
 Optional. How long to wait for each worker socket/port to become ready when Caddy loads the config. Defaults to **`120s`**. Use a duration such as `180s` or `2m`, or `-1` / `forever` to wait indefinitely. On the CLI, prefer `--start-timeout=-1` or `--start-timeout forever`. If the timeout is greater than 120s (or indefinite) and the app is still starting after 120 seconds, Caddy logs a warning and continues waiting. Workers that crash during startup fail immediately.
 
 ### `lifespan`
 
-Enables ASGI [lifespan events](https://asgi.readthedocs.io/en/latest/specs/lifespan.html) (`startup` and `shutdown`). Only applies to ASGI apps. Defaults to `off`.
+Enables ASGI [lifespan events](https://asgi.readthedocs.io/en/latest/specs/lifespan.html) (`startup` and `shutdown`). Only applies to ASGI apps. Defaults to `off`. With lifespan enabled, startup exceptions, missing completion messages, and readiness timeouts fail worker startup.
 
 ### `autoreload`
 
@@ -405,7 +412,7 @@ This is useful for multi-tenant setups where each subdomain or route serves a di
 }
 ```
 
-In this example, a request to `app1.example.com` loads the app from the `app1/` directory, `app2.example.com` loads from `app2/`, and so on. Apps are lazily created on first request and cached for subsequent requests.
+In this example, a request to `app1.example.com` loads the app from the `app1/` directory, `app2.example.com` loads from `app2/`, and so on. Apps are lazily created on first request and cached for subsequent requests. Because each cached app owns worker processes, set `max_dynamic_apps` when placeholder values can be influenced by untrusted requests.
 
 ---
 
@@ -522,7 +529,7 @@ Caddy Snake serves **~60% more requests/sec than Gunicorn** for Flask, **~51% mo
 | Linux (x86_64) | process, thread   | Primary platform, full support           |
 | Linux (arm64)  | process, thread   | Full support                             |
 | macOS          | process, thread   | Full support                             |
-| Windows        | thread only       | Process workers not supported on Windows |
+| Windows        | process           | Worker and cache IPC use loopback TCP    |
 
 **Python versions:** 3.12, 3.13, 3.13-nogil (free-threaded), 3.14, 3.14-nogil (free-threaded)
 

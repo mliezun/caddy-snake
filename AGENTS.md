@@ -70,6 +70,7 @@ Whenever you add or change a `python { ... }` subdirective (or a field on `Caddy
 | `working_dir` | `--working-dir` |
 | `venv` | `--venv` |
 | `workers` | `--workers` |
+| `max_dynamic_apps` | `--max-dynamic-apps` |
 | `start_timeout` | `--start-timeout` (indefinite: `--start-timeout=-1` or `forever`) |
 | `autoreload` | `--autoreload` |
 | `python_path` | `--python-path` |

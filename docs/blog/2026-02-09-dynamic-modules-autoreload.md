@@ -54,7 +54,7 @@ When you save a Python file, the app is automatically reloaded without restartin
 4. The old app is cleaned up and a new one is imported
 5. A read/write lock ensures in-flight requests complete before the swap
 
-If the reload fails (e.g. syntax error), requests return HTTP 500 until the code is fixed.
+If the reload fails (e.g. syntax error), requests return HTTP 503 until the code is fixed.
 
 ## Dynamic Modules + Autoreload
 
@@ -72,7 +72,7 @@ The two features work together. When `autoreload` is enabled on a dynamic app, e
 }
 ```
 
-Old app instances are cleaned up after a 10-second grace period to allow in-flight requests to complete safely.
+Old app instances are retired immediately and cleaned up after their in-flight requests complete.
 
 ## Getting Started
 

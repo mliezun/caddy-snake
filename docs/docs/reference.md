@@ -68,7 +68,9 @@ python {
     env_file <path>
     env_var <name> <value>
     workers <count>
+    max_dynamic_apps <count>
     start_timeout <duration|-1|forever>
+    python_path <path>
     autoreload
 }
 ```
@@ -127,7 +129,7 @@ python {
 
 ### `lifespan`
 
-Controls the ASGI [lifespan protocol](https://asgi.readthedocs.io/en/latest/specs/lifespan.html) (`startup` and `shutdown` events). Only applicable when using `module_asgi`. Can be either `on` or `off`. Defaults to `off`.
+Controls the ASGI [lifespan protocol](https://asgi.readthedocs.io/en/latest/specs/lifespan.html) (`startup` and `shutdown` events). Only applicable when using `module_asgi`. Can be either `on` or `off`. Defaults to `off`. When enabled, startup exceptions, missing completion messages, and readiness timeouts fail worker startup.
 
 ```caddyfile
 python {
@@ -220,6 +222,19 @@ python {
 The venv packages are added to the global `sys.path`, which means all Python apps served by Caddy share the same packages.
 :::
 
+### `python_path`
+
+Path to the Python interpreter used to start workers. It takes precedence over the interpreter in `venv`; when omitted, Caddy Snake uses the venv interpreter or falls back to `python3`.
+
+```caddyfile
+python {
+    module_asgi "main:app"
+    python_path "/usr/local/bin/python3.13"
+}
+```
+
+`python_path` is resolved when the handler is provisioned and does not support request-time placeholders. For per-tenant environments, use placeholders in `venv` instead.
+
 ### `workers`
 
 Number of worker processes to spawn. Defaults to the number of CPUs (`GOMAXPROCS`).
@@ -230,6 +245,20 @@ python {
     workers 4
 }
 ```
+
+### `max_dynamic_apps`
+
+Maximum number of app instances cached by [dynamic module loading](#dynamic-module-loading). `0` (the default) is unlimited for backward compatibility. A positive limit rejects new, uncached dynamic keys after the cap is reached; existing cached apps continue serving.
+
+```caddyfile
+python {
+    module_asgi "{http.request.host.labels.2}:app"
+    working_dir "/srv/apps/{http.request.host.labels.2}"
+    max_dynamic_apps 32
+}
+```
+
+Each dynamic app owns its configured worker processes, so set a limit whenever placeholder values can be influenced by untrusted requests.
 
 ### `start_timeout`
 
@@ -269,8 +298,8 @@ python {
 - The Python module cache (`sys.modules`) is invalidated for all modules in the working directory before reimporting
 - The old app is cleaned up and a new one is created seamlessly
 - In-flight requests complete before the swap happens (thread-safe with read/write locks)
-- If the reload fails (e.g. syntax error in Python code), the app degrades to returning HTTP 500 for all requests until the next file change triggers a successful reload
-- If the app cannot be loaded at all (e.g. app directory deleted), the Caddy process terminates to avoid silently serving errors
+- If a static-app reload fails (e.g. syntax error in Python code), the app returns HTTP 503 until the next file change triggers a successful reload
+- Reload failures do not terminate Caddy in the normal Caddyfile and CLI wiring
 
 ---
 
@@ -304,6 +333,8 @@ When any of the configuration values (`module_wsgi`/`module_asgi`, `working_dir`
 4. Otherwise, lazily imports the Python module and creates a new app instance
 5. Uses double-check locking for thread-safe concurrent access
 
+The cache is unlimited by default for backward compatibility. Configure [`max_dynamic_apps`](#max_dynamic_apps) to bound worker and memory growth when request-derived values are not fully trusted.
+
 ### Dynamic modules + autoreload
 
 Dynamic module loading works with `autoreload`. When enabled, each resolved working directory is independently watched for changes. When a `.py` file changes in a particular directory, only the apps associated with that directory are evicted from the cache and reimported on the next request.
@@ -318,7 +349,7 @@ Dynamic module loading works with `autoreload`. When enabled, each resolved work
 }
 ```
 
-Old app instances are cleaned up after a 10-second grace period to allow in-flight requests to complete safely.
+Old app instances are retired immediately and cleaned up after their in-flight requests complete.
 
 ---
 
@@ -622,6 +653,7 @@ caddy python-server --server-type asgi --app main:app \
 | `working_dir` | `--working-dir` |
 | `venv` | `--venv` |
 | `workers` | `--workers` |
+| `max_dynamic_apps` | `--max-dynamic-apps` |
 | `start_timeout` | `--start-timeout` (use `--start-timeout=-1` or `forever` for indefinite) |
 | `autoreload` | `--autoreload` |
 | `python_path` | `--python-path` |

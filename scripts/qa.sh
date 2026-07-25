@@ -51,6 +51,9 @@ pytest caddysnake_test.py -v
 echo "=== bandit ==="
 bandit -r caddysnake.py cmd/cli/caddysnake cmd/cli/caddysnake_cli.py -ll -q
 
+echo "=== pip-audit ==="
+./scripts/audit-python-deps.sh
+
 echo "=== gosec ==="
 if command -v gosec >/dev/null 2>&1; then
   gosec -exclude-generated -severity medium -quiet ./...
