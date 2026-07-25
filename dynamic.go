@@ -120,6 +120,15 @@ type appCreate struct {
 	err  error
 }
 
+// failedAppCreate caches a failed factory result briefly so repeated requests
+// for a bad dynamic key do not fork/exec Python on every hit (DoS amplifier).
+type failedAppCreate struct {
+	err       error
+	expiresAt time.Time
+}
+
+const dynamicCreateFailureTTL = 5 * time.Second
+
 // DynamicApp implements AppServer by lazily importing Python apps based on
 // Caddy placeholders resolved at request time. For example, when working_dir
 // contains {host.labels.2}, each subdomain gets its own Python app instance
@@ -128,6 +137,7 @@ type DynamicApp struct {
 	mu              sync.RWMutex
 	apps            map[string]AppServer
 	inflight        map[string]*appCreate
+	failed          map[string]failedAppCreate
 	closed          bool
 	modulePattern   string
 	workingDir      string
@@ -154,6 +164,7 @@ func NewDynamicApp(modulePattern, workingDir, venvPath string, envFilePatterns [
 	d := &DynamicApp{
 		apps:                make(map[string]AppServer),
 		inflight:            make(map[string]*appCreate),
+		failed:              make(map[string]failedAppCreate),
 		modulePattern:       modulePattern,
 		workingDir:          workingDir,
 		venvPath:            venvPath,
@@ -229,10 +240,16 @@ func (d *DynamicApp) getOrCreateApp(key, module, dir, venv string, envFiles []st
 		return nil, errors.New("dynamic app shutting down")
 	}
 	app, ok := d.apps[key]
-	d.mu.RUnlock()
 	if ok {
+		d.mu.RUnlock()
 		return app, nil
 	}
+	if f, failed := d.failed[key]; failed && time.Now().Before(f.expiresAt) {
+		err := f.err
+		d.mu.RUnlock()
+		return nil, err
+	}
+	d.mu.RUnlock()
 
 	d.mu.Lock()
 	if d.closed {
@@ -243,6 +260,11 @@ func (d *DynamicApp) getOrCreateApp(key, module, dir, venv string, envFiles []st
 	if ok {
 		d.mu.Unlock()
 		return app, nil
+	}
+	if f, failed := d.failed[key]; failed && time.Now().Before(f.expiresAt) {
+		err := f.err
+		d.mu.Unlock()
+		return nil, err
 	}
 	if c, creating := d.inflight[key]; creating {
 		d.mu.Unlock()
@@ -269,6 +291,7 @@ func (d *DynamicApp) getOrCreateApp(key, module, dir, venv string, envFiles []st
 				delete(d.inflight, key)
 				c.app = nil
 				c.err = fmt.Errorf("panic creating dynamic app: %v", r)
+				d.failed[key] = failedAppCreate{err: c.err, expiresAt: time.Now().Add(dynamicCreateFailureTTL)}
 				close(c.done)
 				d.mu.Unlock()
 				panic(r)
@@ -293,10 +316,13 @@ func (d *DynamicApp) getOrCreateApp(key, module, dir, venv string, envFiles []st
 		return nil, err
 	}
 	if err == nil {
+		delete(d.failed, key)
 		d.apps[key] = app
 		if d.autoreload && dir != "" {
 			d.startWatchingDir(dir, key)
 		}
+	} else {
+		d.failed[key] = failedAppCreate{err: err, expiresAt: time.Now().Add(dynamicCreateFailureTTL)}
 	}
 	c.app = app
 	c.err = err
@@ -415,6 +441,7 @@ func (d *DynamicApp) reloadDir(absDir string) {
 			oldApps = append(oldApps, app)
 			delete(d.apps, key)
 		}
+		delete(d.failed, key)
 	}
 
 	delete(d.dirToKeys, absDir)
@@ -487,6 +514,7 @@ func (d *DynamicApp) Cleanup() error {
 		}
 		delete(d.apps, key)
 	}
+	d.failed = make(map[string]failedAppCreate)
 	d.mu.Unlock()
 	return errors.Join(errs...)
 }
