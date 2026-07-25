@@ -141,6 +141,7 @@ func (e *dynamicAppEntry) cleanup() error {
 // imported from the corresponding directory.
 type DynamicApp struct {
 	mu              sync.RWMutex
+	drain           *sync.Cond
 	apps            map[string]*dynamicAppEntry
 	inflight        map[string]*appCreate
 	retired         map[*dynamicAppEntry]struct{}
@@ -190,6 +191,7 @@ func NewDynamicApp(modulePattern, workingDir, venvPath string, envFilePatterns [
 		autoreload:          autoreload,
 		exitOnReloadFailure: exitOnReloadFailure,
 	}
+	d.drain = sync.NewCond(&d.mu)
 
 	if autoreload {
 		watcher, err := fsnotify.NewWatcher()
@@ -275,7 +277,7 @@ func (d *DynamicApp) getOrCreateEntry(key, module, dir, venv string, envFiles []
 		<-c.done
 		return c.entry, c.err
 	}
-	if d.maxApps > 0 && len(d.apps)+len(d.inflight) >= d.maxApps {
+	if d.maxApps > 0 && len(d.apps)+len(d.inflight)+len(d.retired) >= d.maxApps {
 		d.mu.Unlock()
 		return nil, fmt.Errorf("dynamic app limit reached (%d)", d.maxApps)
 	}
@@ -461,10 +463,11 @@ func (d *DynamicApp) releaseApp(entry *dynamicAppEntry) {
 	var cleanup *dynamicAppEntry
 	d.mu.Lock()
 	entry.active--
-	if entry.active == 0 && entry.retired {
+	if entry.active == 0 && entry.retired && !d.closed {
 		delete(d.retired, entry)
 		cleanup = entry
 	}
+	d.drain.Broadcast()
 	d.mu.Unlock()
 
 	if cleanup != nil {
@@ -582,6 +585,19 @@ func (d *DynamicApp) Cleanup() error {
 	for entry := range d.retired {
 		entries[entry] = struct{}{}
 		delete(d.retired, entry)
+	}
+	for {
+		busy := false
+		for entry := range entries {
+			if entry.active > 0 {
+				busy = true
+				break
+			}
+		}
+		if !busy {
+			break
+		}
+		d.drain.Wait()
 	}
 	d.mu.Unlock()
 
