@@ -174,6 +174,7 @@ from flask import Flask
 
 app = Flask(__name__)
 
+
 @app.route("/hello-world")
 def hello():
     return "Hello world!"
@@ -207,6 +208,7 @@ curl http://localhost:9080/hello-world
 from fastapi import FastAPI
 
 app = FastAPI()
+
 
 @app.get("/hello-world")
 def hello():
@@ -307,7 +309,7 @@ python {
 
 Path to a dotenv-style file whose variables are loaded into each Python worker process for this `python` block. You may specify `env_file` more than once; later files override earlier ones for duplicate keys.
 
-Relative paths are resolved against `working_dir` when set, otherwise against the Caddy process working directory.
+Relative paths are resolved against `working_dir` when set, otherwise against the Caddy process working directory. Relative paths must stay under that directory after symlink resolution. Keys follow the same validation as `env_var` (reserved / `LD_*` / `DYLD_*` names rejected).
 
 ```Caddyfile
 python {
@@ -331,11 +333,11 @@ python {
 }
 ```
 
-**Precedence:** Caddy process environment → `env_file` → `env_var` → internal worker vars (`PYTHONUNBUFFERED`, `CADDYSNAKE_*`). Reserved names (`PYTHONUNBUFFERED`, `CADDYSNAKE_*`) cannot be set from the Caddyfile.
+**Precedence:** Caddy process environment → `env_file` → `env_var` → internal worker vars (`PYTHONUNBUFFERED`, `CADDYSNAKE_*`). Reserved names (`PYTHONUNBUFFERED`, `CADDYSNAKE_*`) and loader hijack names (`LD_*`, `DYLD_*`) cannot be set from the Caddyfile or `env_file`.
 
 ### `workers`
 
-Number of worker processes to spawn. Defaults to the number of CPUs (`GOMAXPROCS`).
+Number of worker processes to spawn. Defaults to the number of CPUs (`GOMAXPROCS`). Maximum: **256**.
 
 When you use **process workers** (more than one worker, or the default multi-worker layout), Caddy Snake may start an **in-process shared cache** in the Go plugin and pass connection details to each worker via environment variables (see [Shared worker cache](#shared-worker-cache)).
 
@@ -394,7 +396,7 @@ Thread workers and single-worker setups do not need this path. See the [configur
 
 You can use [Caddy placeholders](https://caddyserver.com/docs/caddyfile/concepts#placeholders) in `module_wsgi`, `module_asgi`, `working_dir`, `venv`, `env_file`, and `env_var` **values** to dynamically load different Python apps based on the request.
 
-This is useful for multi-tenant setups where each subdomain or route serves a different application:
+This is useful for multi-tenant setups where each subdomain or route serves a different application. Only use placeholders you control (e.g. hostname labels); do not bind `working_dir` / `venv` / `env_file` to untrusted headers.
 
 ```Caddyfile
 *.example.com:9080 {

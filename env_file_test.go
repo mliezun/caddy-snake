@@ -160,6 +160,75 @@ func TestValidateEnvVarName(t *testing.T) {
 	if err := validateEnvVarName("PYTHONUNBUFFERED"); err == nil {
 		t.Error("expected error for reserved name")
 	}
+	if err := validateEnvVarName("LD_PRELOAD"); err == nil {
+		t.Error("expected error for LD_PRELOAD")
+	}
+	if err := validateEnvVarName("LD_LIBRARY_PATH"); err == nil {
+		t.Error("expected error for LD_LIBRARY_PATH")
+	}
+	if err := validateEnvVarName("DYLD_INSERT_LIBRARIES"); err == nil {
+		t.Error("expected error for DYLD_INSERT_LIBRARIES")
+	}
+}
+
+func TestParseEnvFile_RejectsDangerousKeys(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, ".env")
+	if err := os.WriteFile(path, []byte("LD_PRELOAD=/tmp/evil.so\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := parseEnvFile(path)
+	if err == nil || !strings.Contains(err.Error(), "LD_PRELOAD") {
+		t.Fatalf("expected LD_PRELOAD rejection, got %v", err)
+	}
+}
+
+func TestParseEnvFile_RejectsReservedKeys(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, ".env")
+	if err := os.WriteFile(path, []byte("CADDYSNAKE_CACHE_ADDR=evil\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := parseEnvFile(path)
+	if err == nil || !strings.Contains(err.Error(), "CADDYSNAKE_CACHE_ADDR") {
+		t.Fatalf("expected reserved name rejection, got %v", err)
+	}
+}
+
+func TestResolveEnvFilePath_SymlinkEscape(t *testing.T) {
+	root := t.TempDir()
+	working := filepath.Join(root, "tenant")
+	outside := filepath.Join(root, "secret.env")
+	if err := os.Mkdir(working, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(outside, []byte("SECRET=1\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(working, ".env")
+	if err := os.Symlink(outside, link); err != nil {
+		t.Fatal(err)
+	}
+	_, err := resolveEnvFilePath(working, ".env")
+	if err == nil || !strings.Contains(err.Error(), "outside working_dir") {
+		t.Fatalf("expected symlink escape rejection, got %v", err)
+	}
+}
+
+func TestResolveEnvFilePath_RelativeInsideWorkingDir(t *testing.T) {
+	working := t.TempDir()
+	path := filepath.Join(working, ".env")
+	if err := os.WriteFile(path, []byte("OK=1\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	abs, err := resolveEnvFilePath(working, ".env")
+	if err != nil {
+		t.Fatalf("resolveEnvFilePath: %v", err)
+	}
+	want, _ := filepath.Abs(path)
+	if abs != want {
+		t.Errorf("got %q, want %q", abs, want)
+	}
 }
 
 func TestUnmarshalCaddyfile_EnvFile(t *testing.T) {

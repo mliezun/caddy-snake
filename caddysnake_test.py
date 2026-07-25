@@ -1142,6 +1142,16 @@ class TestEsgiHelpers:
         assert "caddy-snake-remote-addr" not in m
         assert m.get("x-custom") == "a, b"
 
+    def test_headers_mapping_drops_proxy(self):
+        headers_list = [
+            (b"host", b"x"),
+            (b"proxy", b"http://evil"),
+            (b"x-custom", b"ok"),
+        ]
+        m = cs._esgi_headers_mapping(headers_list, {"host": "x", "proxy": "http://evil"})
+        assert "proxy" not in m
+        assert m.get("x-custom") == "ok"
+
     def test_build_http_scope(self):
         raw = {"host": "example.com:9443", "x-forwarded-proto": "http"}
         headers_list = [(b"host", b"example.com:9443")]
