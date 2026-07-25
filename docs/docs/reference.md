@@ -207,7 +207,7 @@ Variable names must match `[A-Za-z_][A-Za-z0-9_]*`. Reserved names (`PYTHONUNBUF
 
 ### `venv`
 
-Path to a Python virtual environment. Behind the scenes, this appends `venv/lib/python3.x/site-packages` to `sys.path` so installed packages are available to your app.
+Path to a Python virtual environment. Each Python **worker process** adds that venv’s `site-packages` to its own `sys.path` (via `setup_paths` in the worker), so installed packages are available to your app.
 
 ```caddyfile
 python {
@@ -217,7 +217,7 @@ python {
 ```
 
 :::note
-The venv packages are added to the global `sys.path`, which means all Python apps served by Caddy share the same packages.
+Workers are separate processes: a venv configured for one `python` handler (or one dynamic tenant) does not leak packages into other workers’ interpreters.
 :::
 
 ### `workers`
@@ -269,7 +269,7 @@ python {
 - The Python module cache (`sys.modules`) is invalidated for all modules in the working directory before reimporting
 - The old app is cleaned up and a new one is created seamlessly
 - In-flight requests complete before the swap happens (thread-safe with read/write locks)
-- If the reload fails (e.g. syntax error in Python code), the app degrades to returning HTTP 500 for all requests until the next file change triggers a successful reload
+- If the reload fails (e.g. syntax error in Python code), the app degrades to returning HTTP 503 for all requests until the next file change triggers a successful reload
 - If the app cannot be loaded at all (e.g. app directory deleted), the Caddy process terminates to avoid silently serving errors
 
 ---
@@ -294,6 +294,15 @@ In this example:
 - A request to `app2.example.com` loads the app from the `app2/` directory
 - Apps are **lazily created** on first request and cached for subsequent requests
 
+Cached dynamic apps are bounded to avoid unbounded process growth under multi-tenant Host headers:
+
+| Limit | Default | Override |
+| --- | --- | --- |
+| Max cached apps | **128** | `CADDYSNAKE_MAX_DYNAMIC_APPS` (positive integer) |
+| Idle eviction TTL | **30m** | `CADDYSNAKE_DYNAMIC_APP_IDLE_TTL` (Go duration, e.g. `15m`) |
+
+When the cache is full, the least-recently-used app is evicted (cleaned up after a short grace period). Idle apps past the TTL are expired when a new tenant is created.
+
 ### How it works
 
 When any of the configuration values (`module_wsgi`/`module_asgi`, `working_dir`, `venv`, `env_file`, or `env_var` values) contain Caddy placeholders (e.g. `{http.request.host.labels.2}`), Caddy Snake creates a **DynamicApp** that:
@@ -301,7 +310,7 @@ When any of the configuration values (`module_wsgi`/`module_asgi`, `working_dir`
 1. Resolves the placeholders at request time using the Caddy replacer
 2. Builds a composite cache key from the resolved module, directory, venv, env files, and inline env vars
 3. Returns an existing app if one is cached for that key
-4. Otherwise, lazily imports the Python module and creates a new app instance
+4. Otherwise, lazily imports the Python module and creates a new app instance (evicting LRU/idle entries if needed)
 5. Uses double-check locking for thread-safe concurrent access
 
 ### Dynamic modules + autoreload
@@ -425,12 +434,12 @@ That test requires **Python 3** on `PATH`.
 
 ## Shared worker cache {#shared-worker-cache}
 
-When Caddy Snake runs **Python in process worker mode** (the default multi-process layout), it may start a small **in-process cache server** inside the **Go plugin**. Worker processes talk to it over a **stream socket** using a **RESP2**-shaped line protocol (Redis-compatible enough for simple clients):
+When Caddy Snake provisions a `python` handler, it starts a small **in-process cache server** inside the **Go plugin**. Worker processes talk to it over a **stream socket** using a **RESP2**-shaped line protocol (Redis-compatible enough for simple clients):
 
 - **Linux and macOS:** the listener is a **Unix domain socket** in a private temporary directory. The **`CADDYSNAKE_CACHE_ADDR`** environment variable is set to **`unix:///absolute/path/to/cache.sock`** (three slashes after the scheme: `unix://` plus an absolute path).
 - **Windows:** the listener is **TCP on loopback**; **`CADDYSNAKE_CACHE_ADDR`** is **`127.0.0.1:<port>`**.
 
-Caddy sets these automatically for eligible workers:
+Caddy sets these automatically for each worker:
 
 | Variable | Purpose |
 | --- | --- |
@@ -439,7 +448,7 @@ Caddy sets these automatically for eligible workers:
 | **`CADDYSNAKE_WORKER_ID`** | Stable worker index **`0`…`N-1`** within the worker group (reused after reload; combine with conn/generation in app keys) |
 | **`CADDYSNAKE_CACHE_TIMEOUT`** | Hint for client read/connect timeouts (seconds) |
 
-If **`CADDYSNAKE_CACHE_ADDR`** is unset, the cache client is not available (for example, thread workers or configurations that omit the shared cache).
+If **`CADDYSNAKE_CACHE_ADDR`** is unset (for example, when running Python code outside Caddy), the cache client is not available.
 
 ### How values are stored
 

@@ -28,6 +28,3 @@ issues:
         - errcheck
         - gosimple
         - staticcheck
-    - path: cache_server\.go
-      linters:
-        - unused

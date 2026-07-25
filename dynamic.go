@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -18,6 +19,39 @@ import (
 )
 
 var validModulePattern = regexp.MustCompile(`^[a-zA-Z_][\w.]*:[a-zA-Z_]\w*$`)
+
+const (
+	// defaultMaxDynamicApps caps cached DynamicApp tenants to bound memory/process use.
+	defaultMaxDynamicApps = 128
+	// defaultDynamicAppIdleTTL is how long an unused dynamic app may stay cached.
+	defaultDynamicAppIdleTTL = 30 * time.Minute
+
+	envMaxDynamicApps      = "CADDYSNAKE_MAX_DYNAMIC_APPS"
+	envDynamicAppIdleTTL   = "CADDYSNAKE_DYNAMIC_APP_IDLE_TTL"
+	dynamicAppCleanupGrace = 10 * time.Second
+)
+
+var errDynamicAppLimit = errors.New("dynamic app limit reached")
+
+func parseMaxDynamicApps() int {
+	if v := os.Getenv(envMaxDynamicApps); v != "" {
+		n, err := strconv.Atoi(v)
+		if err == nil && n > 0 {
+			return n
+		}
+	}
+	return defaultMaxDynamicApps
+}
+
+func parseDynamicAppIdleTTL() time.Duration {
+	if v := os.Getenv(envDynamicAppIdleTTL); v != "" {
+		d, err := time.ParseDuration(v)
+		if err == nil && d > 0 {
+			return d
+		}
+	}
+	return defaultDynamicAppIdleTTL
+}
 
 // hasDotDotSegment reports whether the raw (pre-normalization) path contains
 // a ".." segment. Checking before filepath.Abs/Clean is important: those
@@ -124,9 +158,14 @@ type appCreate struct {
 // Caddy placeholders resolved at request time. For example, when working_dir
 // contains {host.labels.2}, each subdomain gets its own Python app instance
 // imported from the corresponding directory.
+//
+// Cached apps are bounded by maxApps (default 128) and idleTTL (default 30m).
+// Override with CADDYSNAKE_MAX_DYNAMIC_APPS and CADDYSNAKE_DYNAMIC_APP_IDLE_TTL.
 type DynamicApp struct {
 	mu              sync.RWMutex
 	apps            map[string]AppServer
+	lastUsed        map[string]time.Time
+	appDirs         map[string]string // cache key -> resolved working dir (for eviction/autoreload)
 	inflight        map[string]*appCreate
 	closed          bool
 	modulePattern   string
@@ -136,6 +175,9 @@ type DynamicApp struct {
 	envVarPatterns  map[string]string
 	factory         appFactory
 	logger          *zap.Logger
+	maxApps         int
+	idleTTL         time.Duration
+	now             func() time.Time // overridable in tests
 
 	// Autoreload fields
 	autoreload          bool
@@ -153,6 +195,8 @@ type DynamicApp struct {
 func NewDynamicApp(modulePattern, workingDir, venvPath string, envFilePatterns []string, envVarPatterns map[string]string, factory appFactory, logger *zap.Logger, autoreload bool, exitOnReloadFailure func(code int)) (*DynamicApp, error) {
 	d := &DynamicApp{
 		apps:                make(map[string]AppServer),
+		lastUsed:            make(map[string]time.Time),
+		appDirs:             make(map[string]string),
 		inflight:            make(map[string]*appCreate),
 		modulePattern:       modulePattern,
 		workingDir:          workingDir,
@@ -161,10 +205,12 @@ func NewDynamicApp(modulePattern, workingDir, venvPath string, envFilePatterns [
 		envVarPatterns:      cloneEnvVars(envVarPatterns),
 		factory:             factory,
 		logger:              logger,
+		maxApps:             parseMaxDynamicApps(),
+		idleTTL:             parseDynamicAppIdleTTL(),
+		now:                 time.Now,
 		autoreload:          autoreload,
 		exitOnReloadFailure: exitOnReloadFailure,
 	}
-
 	if autoreload {
 		watcher, err := fsnotify.NewWatcher()
 		if err != nil {
@@ -223,6 +269,8 @@ func (d *DynamicApp) getOrCreateApp(key, module, dir, venv string, envFiles []st
 		}
 	}
 
+	now := d.now()
+
 	d.mu.RLock()
 	if d.closed {
 		d.mu.RUnlock()
@@ -231,7 +279,17 @@ func (d *DynamicApp) getOrCreateApp(key, module, dir, venv string, envFiles []st
 	app, ok := d.apps[key]
 	d.mu.RUnlock()
 	if ok {
-		return app, nil
+		d.mu.Lock()
+		if d.closed {
+			d.mu.Unlock()
+			return nil, errors.New("dynamic app shutting down")
+		}
+		if _, still := d.apps[key]; still {
+			d.lastUsed[key] = now
+			d.mu.Unlock()
+			return app, nil
+		}
+		d.mu.Unlock()
 	}
 
 	d.mu.Lock()
@@ -241,6 +299,7 @@ func (d *DynamicApp) getOrCreateApp(key, module, dir, venv string, envFiles []st
 	}
 	app, ok = d.apps[key]
 	if ok {
+		d.lastUsed[key] = now
 		d.mu.Unlock()
 		return app, nil
 	}
@@ -293,10 +352,29 @@ func (d *DynamicApp) getOrCreateApp(key, module, dir, venv string, envFiles []st
 		return nil, err
 	}
 	if err == nil {
+		evicted := d.makeRoomLocked(key, now)
+		if len(d.apps) >= d.maxApps {
+			d.mu.Unlock()
+			_ = app.Cleanup()
+			err = fmt.Errorf("%w: max %d cached apps (set %s)", errDynamicAppLimit, d.maxApps, envMaxDynamicApps)
+			c.app = nil
+			c.err = err
+			close(c.done)
+			d.cleanupAppsAsync(evicted)
+			return nil, err
+		}
 		d.apps[key] = app
+		d.lastUsed[key] = now
+		d.appDirs[key] = dir
 		if d.autoreload && dir != "" {
 			d.startWatchingDir(dir, key)
 		}
+		d.mu.Unlock()
+		d.cleanupAppsAsync(evicted)
+		c.app = app
+		c.err = nil
+		close(c.done)
+		return app, nil
 	}
 	c.app = app
 	c.err = err
@@ -306,6 +384,98 @@ func (d *DynamicApp) getOrCreateApp(key, module, dir, venv string, envFiles []st
 	return app, err
 }
 
+// makeRoomLocked expires idle apps and, if still at capacity, evicts the
+// least-recently-used entry (other than excludeKey). Caller holds d.mu.
+func (d *DynamicApp) makeRoomLocked(excludeKey string, now time.Time) []AppServer {
+	var evicted []AppServer
+	for key, used := range d.lastUsed {
+		if key == excludeKey {
+			continue
+		}
+		if now.Sub(used) >= d.idleTTL {
+			if app := d.removeAppLocked(key); app != nil {
+				evicted = append(evicted, app)
+			}
+		}
+	}
+	for len(d.apps) >= d.maxApps {
+		lruKey := ""
+		var lruTime time.Time
+		for key, used := range d.lastUsed {
+			if key == excludeKey {
+				continue
+			}
+			if lruKey == "" || used.Before(lruTime) {
+				lruKey = key
+				lruTime = used
+			}
+		}
+		if lruKey == "" {
+			break
+		}
+		if app := d.removeAppLocked(lruKey); app != nil {
+			evicted = append(evicted, app)
+			d.logger.Info("evicted dynamic python app (cache full)",
+				zap.String("key", lruKey),
+				zap.Int("max_apps", d.maxApps),
+			)
+		} else {
+			break
+		}
+	}
+	return evicted
+}
+
+// removeAppLocked deletes a cached app and its autoreload bookkeeping.
+// Caller holds d.mu. Returns the app for async Cleanup.
+func (d *DynamicApp) removeAppLocked(key string) AppServer {
+	app, ok := d.apps[key]
+	if !ok {
+		return nil
+	}
+	delete(d.apps, key)
+	delete(d.lastUsed, key)
+	dir := d.appDirs[key]
+	delete(d.appDirs, key)
+	if d.autoreload && dir != "" {
+		if absDir, err := filepath.Abs(dir); err == nil {
+			d.untrackKeyLocked(absDir, key)
+		}
+	}
+	return app
+}
+
+func (d *DynamicApp) untrackKeyLocked(absDir, key string) {
+	keys := d.dirToKeys[absDir]
+	if len(keys) == 0 {
+		return
+	}
+	out := keys[:0]
+	for _, k := range keys {
+		if k != key {
+			out = append(out, k)
+		}
+	}
+	if len(out) == 0 {
+		delete(d.dirToKeys, absDir)
+		return
+	}
+	d.dirToKeys[absDir] = out
+}
+
+func (d *DynamicApp) cleanupAppsAsync(apps []AppServer) {
+	if len(apps) == 0 {
+		return
+	}
+	go func() {
+		time.Sleep(dynamicAppCleanupGrace)
+		for _, app := range apps {
+			if err := app.Cleanup(); err != nil {
+				d.logger.Error("failed to cleanup old dynamic app", zap.Error(err))
+			}
+		}
+	}()
+}
 func (d *DynamicApp) startWatchingDir(dir, key string) {
 	absDir, err := filepath.Abs(dir)
 	if err != nil {
@@ -411,9 +581,8 @@ func (d *DynamicApp) reloadDir(absDir string) {
 
 	var oldApps []AppServer
 	for _, key := range keys {
-		if app, exists := d.apps[key]; exists {
+		if app := d.removeAppLocked(key); app != nil {
 			oldApps = append(oldApps, app)
-			delete(d.apps, key)
 		}
 	}
 
@@ -426,18 +595,7 @@ func (d *DynamicApp) reloadDir(absDir string) {
 		zap.Int("apps_evicted", len(oldApps)),
 	)
 
-	if len(oldApps) > 0 {
-		go func() {
-			time.Sleep(10 * time.Second)
-			for _, app := range oldApps {
-				if err := app.Cleanup(); err != nil {
-					d.logger.Error("failed to cleanup old dynamic app",
-						zap.Error(err),
-					)
-				}
-			}
-		}()
-	}
+	d.cleanupAppsAsync(oldApps)
 }
 
 // HandleRequest resolves placeholders from the request, gets or creates the
@@ -486,6 +644,8 @@ func (d *DynamicApp) Cleanup() error {
 			errs = append(errs, err)
 		}
 		delete(d.apps, key)
+		delete(d.lastUsed, key)
+		delete(d.appDirs, key)
 	}
 	d.mu.Unlock()
 	return errors.Join(errs...)
