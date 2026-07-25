@@ -1,8 +1,7 @@
 from unittest import mock
 
-from click.testing import CliRunner
-
 from caddysnake_cli import main
+from click.testing import CliRunner
 
 
 def test_max_dynamic_apps_is_forwarded():

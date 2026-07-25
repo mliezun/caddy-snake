@@ -123,6 +123,7 @@ from fastapi import FastAPI
 
 app = FastAPI()
 
+
 @app.get("/hello-world")
 def hello():
     return "Hello world!"
@@ -163,6 +164,7 @@ It's possible to enable/disable [lifespan events](https://fastapi.tiangolo.com/a
 from flask import Flask
 
 app = Flask(__name__)
+
 
 @app.route("/hello-world")
 def hello():
