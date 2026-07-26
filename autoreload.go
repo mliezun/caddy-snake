@@ -72,7 +72,7 @@ type AutoreloadableApp struct {
 	stopCh              chan struct{}
 	logger              *zap.Logger
 	workingDir          string
-	exitOnReloadFailure func(code int) // if set, process exits on reload failure instead of serving 500
+	exitOnReloadFailure func(code int) // if set, process exits on reload failure instead of serving 503
 }
 
 // NewAutoreloadableApp creates an AutoreloadableApp that wraps the given app and

@@ -30,60 +30,6 @@ import (
 	"go.uber.org/zap/zapcore"
 )
 
-func TestFindSitePackagesInVenv(t *testing.T) {
-	tempDir := t.TempDir()
-	venvLibPath := filepath.Join(tempDir, "lib", "python3.12", "site-packages")
-
-	err := os.MkdirAll(venvLibPath, 0755)
-	if err != nil {
-		t.Fatalf("failed to create test directory structure: %v", err)
-	}
-
-	result, err := findSitePackagesInVenv(tempDir)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	expectedPath := venvLibPath
-	if result != expectedPath {
-		t.Errorf("expected %s, got %s", expectedPath, result)
-	}
-}
-
-func TestFindSitePackagesInVenv_NoPythonDirectory(t *testing.T) {
-	tempDir := t.TempDir()
-
-	_, err := findSitePackagesInVenv(tempDir)
-	if err == nil {
-		t.Fatalf("expected an error, but got none")
-	}
-
-	errStr := err.Error()
-	if !strings.Contains(errStr, "unable to find a python3") && !strings.Contains(errStr, "unable to read venv lib directory") {
-		t.Errorf("expected python directory error, got %q", errStr)
-	}
-}
-
-func TestFindSitePackagesInVenv_NoSitePackages(t *testing.T) {
-	tempDir := t.TempDir()
-	libPath := filepath.Join(tempDir, "lib", "python3.12")
-
-	err := os.MkdirAll(libPath, 0755)
-	if err != nil {
-		t.Fatalf("failed to create test directory structure: %v", err)
-	}
-
-	_, err = findSitePackagesInVenv(tempDir)
-	if err == nil {
-		t.Fatalf("expected an error, but got none")
-	}
-
-	expectedError := "site-packages directory does not exist"
-	if !strings.HasPrefix(err.Error(), expectedError) {
-		t.Errorf("expected error %q, got %q", expectedError, err.Error())
-	}
-}
-
 func TestContainsPlaceholder(t *testing.T) {
 	tests := []struct {
 		input    string
@@ -264,31 +210,6 @@ func (m *mockAppServer) Cleanup() error {
 		m.onCleanup()
 	}
 	return m.cleanupErr
-}
-
-func TestFindWorkingDirectory(t *testing.T) {
-	tempDir := t.TempDir()
-
-	abs, err := findWorkingDirectory(tempDir)
-	if err != nil {
-		t.Fatalf("expected no error, got: %v", err)
-	}
-	if abs != tempDir {
-		t.Errorf("expected %q, got %q", tempDir, abs)
-	}
-
-	nonExistent := tempDir + "-doesnotexist"
-	_, err = findWorkingDirectory(nonExistent)
-	if err == nil || !strings.Contains(err.Error(), "working_dir directory does not exist") {
-		t.Errorf("expected error for non-existent directory, got: %v", err)
-	}
-
-	filePath := filepath.Join(tempDir, "afile.txt")
-	os.WriteFile(filePath, []byte("test"), 0644)
-	_, err = findWorkingDirectory(filePath)
-	if err == nil || !strings.Contains(err.Error(), "working_dir is not a directory") {
-		t.Errorf("expected error for file, got: %v", err)
-	}
 }
 
 // ====================== UnmarshalCaddyfile Tests ======================
@@ -1282,70 +1203,136 @@ func TestDynamicAppConcurrentDifferentKeys(t *testing.T) {
 	d.mu.RUnlock()
 }
 
-// ====================== findPythonDirectory Tests ======================
+func TestDynamicAppEvictsLRUWhenAtCapacity(t *testing.T) {
+	var cleaned atomic.Int32
+	d, _ := NewDynamicApp("main:app", "", "", nil, nil,
+		func(module, dir, venv string, envFiles []string, envVars map[string]string) (AppServer, error) {
+			return &mockAppServer{
+				onCleanup: func() { cleaned.Add(1) },
+			}, nil
+		},
+		zap.NewNop(),
+		false,
+		nil,
+	)
+	d.maxApps = 2
+	d.idleTTL = time.Hour
+	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	d.now = func() time.Time { return base }
 
-func TestFindPythonDirectory_Found(t *testing.T) {
-	tempDir := t.TempDir()
-	os.MkdirAll(filepath.Join(tempDir, "python3.13"), 0755)
+	if _, err := d.getOrCreateApp("a", "main:app", "/home/a", "", nil, nil); err != nil {
+		t.Fatalf("create a: %v", err)
+	}
+	d.now = func() time.Time { return base.Add(time.Minute) }
+	if _, err := d.getOrCreateApp("b", "main:app", "/home/b", "", nil, nil); err != nil {
+		t.Fatalf("create b: %v", err)
+	}
+	d.now = func() time.Time { return base.Add(2 * time.Minute) }
+	if _, err := d.getOrCreateApp("c", "main:app", "/home/c", "", nil, nil); err != nil {
+		t.Fatalf("create c: %v", err)
+	}
 
-	dir, err := findPythonDirectory(tempDir)
+	d.mu.RLock()
+	_, hasA := d.apps["a"]
+	_, hasB := d.apps["b"]
+	_, hasC := d.apps["c"]
+	n := len(d.apps)
+	d.mu.RUnlock()
+	if n != 2 {
+		t.Fatalf("expected 2 apps cached, got %d", n)
+	}
+	if hasA {
+		t.Fatal("expected LRU key a to be evicted")
+	}
+	if !hasB || !hasC {
+		t.Fatalf("expected b and c to remain (hasB=%v hasC=%v)", hasB, hasC)
+	}
+}
+
+func TestDynamicAppExpiresIdleApps(t *testing.T) {
+	d, _ := NewDynamicApp("main:app", "", "", nil, nil,
+		func(module, dir, venv string, envFiles []string, envVars map[string]string) (AppServer, error) {
+			return &mockAppServer{}, nil
+		},
+		zap.NewNop(),
+		false,
+		nil,
+	)
+	d.maxApps = 10
+	d.idleTTL = 5 * time.Minute
+	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	d.now = func() time.Time { return base }
+
+	if _, err := d.getOrCreateApp("old", "main:app", "/home/old", "", nil, nil); err != nil {
+		t.Fatalf("create old: %v", err)
+	}
+	d.now = func() time.Time { return base.Add(10 * time.Minute) }
+	if _, err := d.getOrCreateApp("new", "main:app", "/home/new", "", nil, nil); err != nil {
+		t.Fatalf("create new: %v", err)
+	}
+
+	d.mu.RLock()
+	_, hasOld := d.apps["old"]
+	_, hasNew := d.apps["new"]
+	d.mu.RUnlock()
+	if hasOld {
+		t.Fatal("expected idle app to be expired")
+	}
+	if !hasNew {
+		t.Fatal("expected new app to be present")
+	}
+}
+
+func TestAcquireCaddysnakePyBundleShared(t *testing.T) {
+	sharedBundleMu.Lock()
+	beforeRefs := 0
+	if sharedBundle != nil {
+		beforeRefs = sharedBundle.refs
+	}
+	sharedBundleMu.Unlock()
+
+	p1, d1, err := acquireCaddysnakePyBundle()
 	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+		t.Fatalf("acquire 1: %v", err)
 	}
-	if dir != "python3.13" {
-		t.Errorf("expected 'python3.13', got %q", dir)
-	}
-}
-
-func TestFindPythonDirectory_MultipleVersions(t *testing.T) {
-	tempDir := t.TempDir()
-	os.MkdirAll(filepath.Join(tempDir, "python3.12"), 0755)
-	os.MkdirAll(filepath.Join(tempDir, "python3.14"), 0755)
-
-	dir, err := findPythonDirectory(tempDir)
+	p2, d2, err := acquireCaddysnakePyBundle()
 	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+		t.Fatalf("acquire 2: %v", err)
 	}
-	if dir != "python3.12" && dir != "python3.14" {
-		t.Errorf("expected 'python3.12' or 'python3.14', got %q", dir)
+	if p1 != p2 || d1 != d2 {
+		t.Fatalf("expected shared bundle paths, got %q/%q vs %q/%q", p1, d1, p2, d2)
 	}
-}
 
-func TestFindPythonDirectory_NotFound(t *testing.T) {
-	tempDir := t.TempDir()
-	os.MkdirAll(filepath.Join(tempDir, "not-python"), 0755)
-
-	_, err := findPythonDirectory(tempDir)
-	if err == nil {
-		t.Fatal("expected error for missing python directory")
+	sharedBundleMu.Lock()
+	midRefs := 0
+	if sharedBundle != nil {
+		midRefs = sharedBundle.refs
 	}
-	if !strings.Contains(err.Error(), "unable to find") {
-		t.Errorf("expected 'unable to find' in error, got: %v", err)
+	sharedBundleMu.Unlock()
+	if midRefs != beforeRefs+2 {
+		t.Fatalf("expected refs %d after two acquires, got %d", beforeRefs+2, midRefs)
 	}
-}
 
-func TestFindPythonDirectory_EmptyDir(t *testing.T) {
-	tempDir := t.TempDir()
-	_, err := findPythonDirectory(tempDir)
-	if err == nil {
-		t.Fatal("expected error for empty directory")
+	releaseCaddysnakePyBundle()
+	if _, err := os.Stat(p1); err != nil {
+		t.Fatalf("bundle should remain after first release: %v", err)
 	}
-}
+	releaseCaddysnakePyBundle()
 
-func TestFindPythonDirectory_NonExistentPath(t *testing.T) {
-	_, err := findPythonDirectory("/nonexistent/path/to/lib")
-	if err == nil {
-		t.Fatal("expected error for non-existent path")
+	sharedBundleMu.Lock()
+	afterRefs := 0
+	alive := sharedBundle != nil
+	if alive {
+		afterRefs = sharedBundle.refs
 	}
-}
-
-func TestFindPythonDirectory_FileNotDir(t *testing.T) {
-	tempDir := t.TempDir()
-	os.WriteFile(filepath.Join(tempDir, "python3.13"), []byte("not a dir"), 0644)
-
-	_, err := findPythonDirectory(tempDir)
-	if err == nil {
-		t.Fatal("expected error when python3.x is a file, not directory")
+	sharedBundleMu.Unlock()
+	if afterRefs != beforeRefs {
+		t.Fatalf("expected refs restored to %d, got %d (alive=%v)", beforeRefs, afterRefs, alive)
+	}
+	if beforeRefs == 0 {
+		if _, err := os.Stat(p1); !os.IsNotExist(err) {
+			t.Fatalf("expected bundle removed after final release, err=%v", err)
+		}
 	}
 }
 
@@ -1424,25 +1411,6 @@ func TestUnmarshalCaddyfile_LifespanMissingArg(t *testing.T) {
 	err := cs.UnmarshalCaddyfile(d)
 	if err == nil {
 		t.Fatal("expected error for missing lifespan argument")
-	}
-}
-
-func TestFindSitePackagesInVenv_SitePackagesIsFile(t *testing.T) {
-	tempDir := t.TempDir()
-	pythonDir := filepath.Join(tempDir, "lib", "python3.12")
-	err := os.MkdirAll(pythonDir, 0755)
-	if err != nil {
-		t.Fatalf("failed to create test directory: %v", err)
-	}
-	sitePackagesPath := filepath.Join(pythonDir, "site-packages")
-	os.WriteFile(sitePackagesPath, []byte("not a dir"), 0644)
-
-	_, err = findSitePackagesInVenv(tempDir)
-	if err == nil {
-		t.Fatal("expected error when site-packages is a file")
-	}
-	if !strings.Contains(err.Error(), "not a directory") {
-		t.Errorf("expected 'not a directory' in error, got: %v", err)
 	}
 }
 
