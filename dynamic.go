@@ -33,6 +33,11 @@ const (
 	defaultMaxDynamicApps        = 128
 	defaultDynamicMaxConcurrency = 4
 	defaultDynamicFailureTTL     = 5 * time.Second
+	defaultDynamicAppIdleTTL     = 30 * time.Minute
+
+	envMaxDynamicApps      = "CADDYSNAKE_MAX_DYNAMIC_APPS"
+	envDynamicAppIdleTTL   = "CADDYSNAKE_DYNAMIC_APP_IDLE_TTL"
+	dynamicAppCleanupGrace = 10 * time.Second
 )
 
 // DynamicAppLimits configures capacity and backoff for dynamic app loading.
@@ -88,6 +93,26 @@ func parseDynamicAppLimits(maxApps, maxConcurrency, failureTTL string) (DynamicA
 		lim.FailureTTL = d
 	}
 	return lim, nil
+}
+
+func effectiveMaxDynamicApps(limits DynamicAppLimits) int {
+	if v := os.Getenv(envMaxDynamicApps); v != "" {
+		n, err := strconv.Atoi(v)
+		if err == nil && n > 0 {
+			return n
+		}
+	}
+	return limits.MaxApps
+}
+
+func parseDynamicAppIdleTTL() time.Duration {
+	if v := os.Getenv(envDynamicAppIdleTTL); v != "" {
+		d, err := time.ParseDuration(v)
+		if err == nil && d > 0 {
+			return d
+		}
+	}
+	return defaultDynamicAppIdleTTL
 }
 
 // hasDotDotSegment reports whether the raw (pre-normalization) path contains
@@ -234,9 +259,17 @@ type failedAppCreate struct {
 // Caddy placeholders resolved at request time. For example, when working_dir
 // contains {host.labels.2}, each subdomain gets its own Python app instance
 // imported from the corresponding directory.
+//
+// Live apps (cached + in-flight creates) are bounded by maxApps (default 128)
+// and idleTTL (default 30m). Override with CADDYSNAKE_MAX_DYNAMIC_APPS and
+// CADDYSNAKE_DYNAMIC_APP_IDLE_TTL. Apps with active requests are not idle/LRU
+// evicted.
 type DynamicApp struct {
 	mu              sync.RWMutex
 	apps            map[string]AppServer
+	lastUsed        map[string]time.Time
+	inUse           map[string]int    // active HandleRequest refs; blocks idle/LRU eviction
+	appDirs         map[string]string // cache key -> resolved working dir (for eviction/autoreload)
 	inflight        map[string]*appCreate
 	failed          map[string]failedAppCreate
 	closed          bool
@@ -248,7 +281,10 @@ type DynamicApp struct {
 	factory         appFactory
 	logger          *zap.Logger
 	limits          DynamicAppLimits
+	maxApps         int
+	idleTTL         time.Duration
 	createSem       chan struct{}
+	now             func() time.Time // overridable in tests
 
 	// Autoreload fields
 	autoreload          bool
@@ -270,6 +306,9 @@ func NewDynamicApp(modulePattern, workingDir, venvPath string, envFilePatterns [
 	limits = normalizeDynamicAppLimits(limits)
 	d := &DynamicApp{
 		apps:                make(map[string]AppServer),
+		lastUsed:            make(map[string]time.Time),
+		inUse:               make(map[string]int),
+		appDirs:             make(map[string]string),
 		inflight:            make(map[string]*appCreate),
 		failed:              make(map[string]failedAppCreate),
 		modulePattern:       modulePattern,
@@ -280,11 +319,13 @@ func NewDynamicApp(modulePattern, workingDir, venvPath string, envFilePatterns [
 		factory:             factory,
 		logger:              logger,
 		limits:              limits,
+		maxApps:             effectiveMaxDynamicApps(limits),
+		idleTTL:             parseDynamicAppIdleTTL(),
 		createSem:           make(chan struct{}, limits.MaxConcurrency),
+		now:                 time.Now,
 		autoreload:          autoreload,
 		exitOnReloadFailure: exitOnReloadFailure,
 	}
-
 	if autoreload {
 		watcher, err := fsnotify.NewWatcher()
 		if err != nil {
@@ -371,6 +412,8 @@ func (d *DynamicApp) getOrCreateApp(key, module, dir, venv string, envFiles []st
 		}
 	}
 
+	now := d.now()
+
 	d.mu.RLock()
 	if d.closed {
 		d.mu.RUnlock()
@@ -379,14 +422,26 @@ func (d *DynamicApp) getOrCreateApp(key, module, dir, venv string, envFiles []st
 	app, ok := d.apps[key]
 	if ok {
 		d.mu.RUnlock()
-		return app, nil
-	}
-	if f, failed := d.failed[key]; failed && time.Now().Before(f.expiresAt) {
-		err := f.err
+		d.mu.Lock()
+		if d.closed {
+			d.mu.Unlock()
+			return nil, errors.New("dynamic app shutting down")
+		}
+		if app2, still := d.apps[key]; still {
+			d.lastUsed[key] = now
+			d.mu.Unlock()
+			return app2, nil
+		}
+		d.mu.Unlock()
+		// key disappeared between locks; fall through to create path
+	} else {
+		if f, failed := d.failed[key]; failed && time.Now().Before(f.expiresAt) {
+			err := f.err
+			d.mu.RUnlock()
+			return nil, err
+		}
 		d.mu.RUnlock()
-		return nil, err
 	}
-	d.mu.RUnlock()
 
 	d.mu.Lock()
 	if d.closed {
@@ -396,6 +451,7 @@ func (d *DynamicApp) getOrCreateApp(key, module, dir, venv string, envFiles []st
 	d.pruneExpiredFailuresLocked(time.Now())
 	app, ok = d.apps[key]
 	if ok {
+		d.lastUsed[key] = now
 		d.mu.Unlock()
 		return app, nil
 	}
@@ -409,19 +465,26 @@ func (d *DynamicApp) getOrCreateApp(key, module, dir, venv string, envFiles []st
 		<-c.done
 		return c.app, c.err
 	}
-	if len(d.apps)+d.pendingCreateCountLocked() >= d.limits.MaxApps {
+	// Reserve capacity before running the factory so concurrent first-time
+	// tenants cannot spawn more live worker groups than maxApps.
+	now = d.now()
+	evicted := d.makeRoomLocked(key, now)
+	if len(d.apps)+len(d.inflight) >= d.maxApps {
 		d.mu.Unlock()
+		d.cleanupAppsAsync(evicted)
 		return nil, ErrDynamicAppCapacity
 	}
 	select {
 	case d.createSem <- struct{}{}:
 	default:
 		d.mu.Unlock()
+		d.cleanupAppsAsync(evicted)
 		return nil, ErrDynamicCreateLimit
 	}
 	c := &appCreate{done: make(chan struct{})}
 	d.inflight[key] = c
 	d.mu.Unlock()
+	d.cleanupAppsAsync(evicted)
 
 	releaseCreate := func() { <-d.createSem }
 
@@ -470,7 +533,12 @@ func (d *DynamicApp) getOrCreateApp(key, module, dir, venv string, envFiles []st
 	}
 	if err == nil {
 		delete(d.failed, key)
+		// Refresh after the out-of-lock factory so lastUsed uses wall clock
+		// at insert time, not create-start.
+		now = d.now()
 		d.apps[key] = app
+		d.lastUsed[key] = now
+		d.appDirs[key] = dir
 		if d.autoreload && dir != "" {
 			d.startWatchingDir(dir, key)
 		}
@@ -485,6 +553,117 @@ func (d *DynamicApp) getOrCreateApp(key, module, dir, venv string, envFiles []st
 	return app, err
 }
 
+// makeRoomLocked expires idle apps and, if still at capacity, evicts the
+// least-recently-used entry (other than excludeKey). Apps with active
+// requests are never evicted here. Caller holds d.mu.
+func (d *DynamicApp) makeRoomLocked(excludeKey string, now time.Time) []AppServer {
+	var evicted []AppServer
+	for key, used := range d.lastUsed {
+		if key == excludeKey || d.inUse[key] > 0 {
+			continue
+		}
+		if now.Sub(used) >= d.idleTTL {
+			if app := d.removeAppLocked(key); app != nil {
+				evicted = append(evicted, app)
+			}
+		}
+	}
+	for len(d.apps) >= d.maxApps {
+		lruKey := ""
+		var lruTime time.Time
+		for key, used := range d.lastUsed {
+			if key == excludeKey || d.inUse[key] > 0 {
+				continue
+			}
+			if lruKey == "" || used.Before(lruTime) {
+				lruKey = key
+				lruTime = used
+			}
+		}
+		if lruKey == "" {
+			break
+		}
+		if app := d.removeAppLocked(lruKey); app != nil {
+			evicted = append(evicted, app)
+			d.logger.Info("evicted dynamic python app (cache full)",
+				zap.String("key", lruKey),
+				zap.Int("max_apps", d.maxApps),
+			)
+		} else {
+			break
+		}
+	}
+	return evicted
+}
+
+// removeAppLocked deletes a cached app and its autoreload bookkeeping.
+// Caller holds d.mu. Returns the app for async Cleanup.
+func (d *DynamicApp) removeAppLocked(key string) AppServer {
+	app, ok := d.apps[key]
+	if !ok {
+		return nil
+	}
+	delete(d.apps, key)
+	delete(d.lastUsed, key)
+	// Leave inUse intact so a still-running handler's releaseApp cannot
+	// accidentally unpin a replacement app created for the same key.
+	dir := d.appDirs[key]
+	delete(d.appDirs, key)
+	if d.autoreload && dir != "" {
+		if absDir, err := filepath.Abs(dir); err == nil {
+			d.untrackKeyLocked(absDir, key)
+		}
+	}
+	return app
+}
+
+// releaseApp decrements the active-request refcount for key and refreshes
+// lastUsed when the last request finishes so idle TTL starts after real use.
+func (d *DynamicApp) releaseApp(key string) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	n := d.inUse[key]
+	if n <= 1 {
+		delete(d.inUse, key)
+		if _, ok := d.apps[key]; ok {
+			d.lastUsed[key] = d.now()
+		}
+		return
+	}
+	d.inUse[key] = n - 1
+}
+
+func (d *DynamicApp) untrackKeyLocked(absDir, key string) {
+	keys := d.dirToKeys[absDir]
+	if len(keys) == 0 {
+		return
+	}
+	out := keys[:0]
+	for _, k := range keys {
+		if k != key {
+			out = append(out, k)
+		}
+	}
+	if len(out) == 0 {
+		delete(d.dirToKeys, absDir)
+		return
+	}
+	d.dirToKeys[absDir] = out
+}
+
+func (d *DynamicApp) cleanupAppsAsync(apps []AppServer) {
+	if len(apps) == 0 {
+		return
+	}
+	go func() {
+		time.Sleep(dynamicAppCleanupGrace)
+		for _, app := range apps {
+			if err := app.Cleanup(); err != nil {
+				d.logger.Error("failed to cleanup old dynamic app", zap.Error(err))
+			}
+		}
+	}()
+}
 func (d *DynamicApp) startWatchingDir(dir, key string) {
 	absDir, err := filepath.Abs(dir)
 	if err != nil {
@@ -599,9 +778,8 @@ func (d *DynamicApp) reloadDir(absDir string) {
 
 	var oldApps []AppServer
 	for _, key := range keys {
-		if app, exists := d.apps[key]; exists {
+		if app := d.removeAppLocked(key); app != nil {
 			oldApps = append(oldApps, app)
-			delete(d.apps, key)
 		}
 		delete(d.failed, key)
 	}
@@ -617,56 +795,47 @@ func (d *DynamicApp) reloadDir(absDir string) {
 		zap.Int("apps_evicted", len(oldApps)),
 	)
 
-	if len(oldApps) > 0 {
-		ctx, cancel := context.WithCancel(context.Background())
-		d.cleanupMu.Lock()
-		d.pendingCleanups = append(d.pendingCleanups, cancel)
-		d.cleanupMu.Unlock()
-		go func() {
-			defer cancel()
-			select {
-			case <-time.After(10 * time.Second):
-				for _, app := range oldApps {
-					if err := app.Cleanup(); err != nil {
-						d.logger.Error("failed to cleanup old dynamic app",
-							zap.Error(err),
-						)
-					}
-				}
-			case <-ctx.Done():
-				for _, app := range oldApps {
-					if err := app.Cleanup(); err != nil {
-						d.logger.Error("failed to cleanup cancelled dynamic app",
-							zap.Error(err),
-						)
-					}
-				}
-			}
-		}()
-	}
+	d.cleanupAppsAsync(oldApps)
 }
 
 // HandleRequest resolves placeholders from the request, gets or creates the
-// appropriate app, and forwards the request.
+// appropriate app, and forwards the request. The app is pinned for the
+// duration of the handler so idle/LRU eviction cannot tear down workers
+// serving long-lived connections (e.g. WebSockets).
 func (d *DynamicApp) HandleRequest(w http.ResponseWriter, r *http.Request) error {
 	key, module, dir, venv, envFiles, envVars := d.resolve(r)
-	app, err := d.getOrCreateApp(key, module, dir, venv, envFiles, envVars)
-	if err != nil {
-		if errors.Is(err, ErrDynamicAppCapacity) || errors.Is(err, ErrDynamicCreateLimit) {
-			http.Error(w, err.Error(), http.StatusServiceUnavailable)
-			return nil
+	for {
+		app, err := d.getOrCreateApp(key, module, dir, venv, envFiles, envVars)
+		if err != nil {
+			if errors.Is(err, ErrDynamicAppCapacity) || errors.Is(err, ErrDynamicCreateLimit) {
+				http.Error(w, err.Error(), http.StatusServiceUnavailable)
+				return nil
+			}
+			if d.autoreload && d.exitOnReloadFailure != nil {
+				d.logger.Error("failed to load python app (autoreload); terminating",
+					zap.String("module", module),
+					zap.String("working_dir", dir),
+					zap.Error(err),
+				)
+				d.exitOnReloadFailure(1)
+			}
+			return err
 		}
-		if d.autoreload && d.exitOnReloadFailure != nil {
-			d.logger.Error("failed to load python app (autoreload); terminating",
-				zap.String("module", module),
-				zap.String("working_dir", dir),
-				zap.Error(err),
-			)
-			d.exitOnReloadFailure(1)
+		d.mu.Lock()
+		if d.closed {
+			d.mu.Unlock()
+			return errors.New("dynamic app shutting down")
 		}
-		return err
+		if cur, ok := d.apps[key]; ok && cur == app {
+			d.inUse[key]++
+			d.mu.Unlock()
+			err := app.HandleRequest(w, r)
+			d.releaseApp(key)
+			return err
+		}
+		d.mu.Unlock()
+		// Evicted between lookup and pin; retry get-or-create.
 	}
-	return app.HandleRequest(w, r)
 }
 
 // Cleanup frees all dynamically created apps and stops the autoreload watcher.
@@ -702,6 +871,9 @@ func (d *DynamicApp) Cleanup() error {
 			errs = append(errs, err)
 		}
 		delete(d.apps, key)
+		delete(d.lastUsed, key)
+		delete(d.inUse, key)
+		delete(d.appDirs, key)
 	}
 	d.failed = make(map[string]failedAppCreate)
 	d.mu.Unlock()

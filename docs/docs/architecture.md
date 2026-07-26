@@ -62,7 +62,7 @@ The autoreload feature provides hot-reloading during development without restart
    - The new worker group replaces the old one atomically
    - Old worker processes are terminated after the swap
 5. A read/write lock ensures in-flight requests complete before the swap
-6. If the reload fails (e.g. syntax error in Python code), all subsequent requests return HTTP 500 until the next successful reload
+6. If the reload fails (e.g. syntax error in Python code), all subsequent requests return HTTP 503 until the next successful reload
 7. If the app cannot be recreated at all (e.g. the working directory was deleted), the process terminates with exit code 1 to avoid silently serving errors indefinitely
 
 ### Thread safety
@@ -139,9 +139,13 @@ The ASGI implementation in [`caddysnake.py`](https://github.com/mliezun/caddy-sn
 
 ## Current Limitations
 
-### Virtual Environment Sharing
+### Shared cache has no tenant isolation
 
-When a `venv` is specified, the packages are added to the global `sys.path`. This means all Python apps served by the same Caddy instance have access to those packages, regardless of which app the venv was configured for.
+The in-process shared cache is visible to every worker attached to the same `python` handler. Use key prefixes per app/tenant, or an external store, when isolation is required.
+
+### Dynamic app cache is bounded, not infinite
+
+Multi-tenant `DynamicApp` caches are capped (default 128 apps, 30m idle TTL). Very large tenant counts need higher limits via env vars or an external routing design.
 
 ---
 

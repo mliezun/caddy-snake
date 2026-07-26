@@ -46,6 +46,7 @@ This starts a server on port `9080` serving your app. See `caddysnake --help` fo
 | `--domain <example.com>` | Enable HTTPS with automatic certificates | — |
 | `--listen <addr>` | Custom listen address | `:9080` |
 | `--workers <count>` | Number of worker processes | CPU count |
+| `--python-path <path>` | Path to the Python interpreter | system/venv python |
 | `--venv <path>` | Path to a Python virtual environment | — |
 | `--working-dir <path>` | Working directory for the Python app | — |
 | `--env-file <path>` | Dotenv file for worker env (repeatable) | — |
@@ -238,10 +239,10 @@ python {
 }
 ```
 
-Behind the scenes, this appends `venv/lib/python3.x/site-packages` to `sys.path` so installed packages are available to your app.
+Each Python worker process adds that venv’s `site-packages` to its own `sys.path` so installed packages are available to your app.
 
 :::note
-The venv packages are added to the global `sys.path`, which means all Python apps served by Caddy share the same packages.
+Workers are separate processes: a venv configured for one `python` handler (or one dynamic tenant) does not leak packages into other workers’ interpreters.
 :::
 
 ---
