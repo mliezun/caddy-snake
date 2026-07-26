@@ -39,9 +39,9 @@ Key aspects of the integration:
 
 ## Worker Model
 
-Caddy-Snake uses process-based workers. Each worker runs in a separate OS process with its own Python interpreter:
+Caddy-Snake uses process-based workers by default. Each worker runs in a separate OS process with its own Python interpreter. With **`isolation docker`**, each worker runs in its own Docker container instead (Linux only); see [isolation](reference.md#isolation).
 
-- **True parallelism** — each process has its own GIL, so CPU-bound work runs in parallel
+- **True parallelism** — each worker unit has its own GIL, so CPU-bound work runs in parallel
 - **Isolation** — a crash in one worker doesn't affect others
 - **Higher memory usage** — each process loads its own copy of the Python interpreter and application
 - **Best for** — production deployments, CPU-bound workloads

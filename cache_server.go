@@ -875,6 +875,13 @@ func startCacheServer() (*cacheServer, error) {
 	return startCacheServerUnixSocket()
 }
 
+func startCacheServerForIsolation(isolation *IsolationConfig) (*cacheServer, error) {
+	if isolation != nil && isolation.usesDocker() {
+		return startCacheServerTCPOnly()
+	}
+	return startCacheServer()
+}
+
 func startCacheServerTCPOnly() (*cacheServer, error) {
 	token, err := generateSecretToken()
 	if err != nil {

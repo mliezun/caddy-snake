@@ -12,14 +12,12 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
-	"syscall"
 	"time"
 
 	"github.com/caddyserver/caddy/v2"
@@ -170,6 +168,8 @@ type CaddySnake struct {
 	// Individual environment variables for workers. Applied after env_files (overrides file values).
 	// Caddyfile: repeatable "env_var NAME value". Cannot set PYTHONUNBUFFERED or CADDYSNAKE_*.
 	EnvVars map[string]string `json:"env_vars,omitempty"`
+	// Worker isolation backend. Omit or "none" for local subprocess workers; "docker" runs each worker in a container.
+	Isolation *IsolationConfig `json:"isolation,omitempty"`
 	// Dynamic mode limits (ignored when module/working_dir/venv have no placeholders).
 	// MaxDynamicApps: empty uses env/default (CADDYSNAKE_MAX_DYNAMIC_APPS, usually 128);
 	// a positive value sets the site cap (0 is rejected).
@@ -325,6 +325,10 @@ func (f *CaddySnake) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 						f.EnvVars = make(map[string]string)
 					}
 					f.EnvVars[name] = value
+				case "isolation":
+					if err := parseIsolationCaddyfile(d, &f.Isolation); err != nil {
+						return err
+					}
 				case "max_dynamic_apps":
 					if !d.Args(&f.MaxDynamicApps) {
 						return d.Errf("expected exactly one argument for max_dynamic_apps")
@@ -353,7 +357,7 @@ func (f *CaddySnake) Provision(ctx caddy.Context) error {
 	var err error
 	f.logger = ctx.Logger(f)
 
-	cs, err := startCacheServer()
+	cs, err := startCacheServerForIsolation(f.Isolation)
 	if err != nil {
 		return fmt.Errorf("in-process cache: %w", err)
 	}
@@ -405,6 +409,7 @@ func (f *CaddySnake) Provision(ctx caddy.Context) error {
 
 	envFiles := cloneEnvFiles(f.EnvFiles)
 	envVars := cloneEnvVars(f.EnvVars)
+	isolation := cloneIsolationConfig(f.Isolation)
 
 	iface, module, err := f.pythonInterfaceAndModule()
 	if err != nil {
@@ -421,7 +426,7 @@ func (f *CaddySnake) Provision(ctx caddy.Context) error {
 		}
 	}
 	rt := effectivePythonRuntime(iface, f.Runtime)
-	f.app, err = NewPythonWorkerGroup(iface, module, f.WorkingDir, f.VenvPath, lifespan, rt, workers, pythonBin, cacheAddr, cacheToken, envFiles, envVars, startTimeout, f.logger)
+	f.app, err = NewPythonWorkerGroup(iface, module, f.WorkingDir, f.VenvPath, lifespan, rt, workers, pythonBin, cacheAddr, cacheToken, envFiles, envVars, startTimeout, isolation, f.logger)
 	if err != nil {
 		return err
 	}
@@ -444,7 +449,7 @@ func (f *CaddySnake) Provision(ctx caddy.Context) error {
 		}
 
 		factory := func() (AppServer, error) {
-			return NewPythonWorkerGroup(iface, module, f.WorkingDir, f.VenvPath, lifespan, rt, workers, pythonBin, cacheAddr, cacheToken, envFiles, envVars, startTimeout, f.logger)
+			return NewPythonWorkerGroup(iface, module, f.WorkingDir, f.VenvPath, lifespan, rt, workers, pythonBin, cacheAddr, cacheToken, envFiles, envVars, startTimeout, isolation, f.logger)
 		}
 
 		// Keep Caddy running on reload errors; failed app serves 503 until recovery.
@@ -479,6 +484,7 @@ func (f *CaddySnake) provisionDynamic(workers int, cacheAddr, cacheToken string,
 	pythonPath := f.PythonPath
 	envFilePatterns := cloneEnvFiles(f.EnvFiles)
 	envVarPatterns := cloneEnvVars(f.EnvVars)
+	isolation := cloneIsolationConfig(f.Isolation)
 	logger := f.logger
 	limits, err := parseDynamicAppLimits(f.MaxDynamicApps)
 	if err != nil {
@@ -502,7 +508,7 @@ func (f *CaddySnake) provisionDynamic(workers int, cacheAddr, cacheToken string,
 	rt := effectivePythonRuntime(iface, f.Runtime)
 	factory := func(module, dir, venv string, envFiles []string, envVars map[string]string) (AppServer, error) {
 		pythonBin := resolvePythonInterpreter(pythonPath, venv)
-		return NewPythonWorkerGroup(iface, module, dir, venv, lifespan, rt, workers, pythonBin, cacheAddr, cacheToken, envFiles, envVars, startTimeout, logger)
+		return NewPythonWorkerGroup(iface, module, dir, venv, lifespan, rt, workers, pythonBin, cacheAddr, cacheToken, envFiles, envVars, startTimeout, isolation, logger)
 	}
 	f.app, err = NewDynamicApp(modulePattern, f.WorkingDir, f.VenvPath, envFilePatterns, envVarPatterns, factory, f.logger, autoreload, nil, limits)
 	if err != nil {
@@ -560,6 +566,12 @@ func (m *CaddySnake) Validate() error {
 	}
 	if err := validateEnvVars(m.EnvVars); err != nil {
 		return err
+	}
+	if err := m.validateIsolation(); err != nil {
+		return err
+	}
+	if m.Isolation != nil && m.Isolation.usesDocker() && runtime.GOOS == "windows" {
+		return fmt.Errorf("isolation docker is not supported on windows")
 	}
 	if _, err := parseDynamicAppLimits(m.MaxDynamicApps); err != nil {
 		return err
@@ -727,9 +739,8 @@ type PythonWorker struct {
 	Lifespan     string
 	Runtime      string
 	PythonBin    string
-	Socket       *os.File
-	SockDir      string // private directory containing the socket (Unix only)
 	ScriptPath   string
+	ScriptDir    string
 	DialNet      string // "unix" or "tcp"
 	DialAddr     string // socket path or host:port
 	CacheAddr    string // CADDYSNAKE_CACHE_ADDR: unix://path (Unix) or 127.0.0.1:port (Windows); empty = omit env
@@ -739,48 +750,16 @@ type PythonWorker struct {
 	EnvFiles     []string
 	EnvVars      map[string]string
 	StartTimeout time.Duration // 0 = DefaultStartTimeout; <0 = indefinite
+	Isolation    *IsolationConfig
 	logger       *zap.Logger
 
-	Cmd       *exec.Cmd
-	cmdWaitCh chan error // receives Cmd.Wait result; only Wait once
-	cmdReaped bool
+	backend   WorkerBackend
+	handle    WorkerHandle
 	Transport *http.Transport
 	Proxy     *httputil.ReverseProxy
 }
 
-func NewPythonWorker(iface, app, workingDir, venv, lifespan, pyRuntime, pythonBin, scriptPath, cacheAddr, cacheToken, workerToken, workerID string, envFiles []string, envVars map[string]string, startTimeout time.Duration, logger *zap.Logger) (*PythonWorker, error) {
-	var socket *os.File
-	var sockDir string
-	var err error
-	if runtime.GOOS == "windows" {
-		socket, err = os.CreateTemp("", "caddysnake-worker.port*")
-	} else {
-		sockDir, err = os.MkdirTemp("", "caddysnake-*")
-		if err != nil {
-			return nil, err
-		}
-		if chErr := os.Chmod(sockDir, 0700); chErr != nil {
-			os.RemoveAll(sockDir)
-			return nil, chErr
-		}
-		socket, err = os.Create(filepath.Join(sockDir, "worker.sock"))
-	}
-	if err != nil {
-		if sockDir != "" {
-			os.RemoveAll(sockDir)
-		}
-		return nil, err
-	}
-	path := socket.Name()
-	socket.Close()
-
-	dialNet := "unix"
-	dialAddr := path
-	if runtime.GOOS == "windows" {
-		dialNet = "tcp"
-		dialAddr = "" // set after Python writes port to path
-	}
-
+func NewPythonWorker(iface, app, workingDir, venv, lifespan, pyRuntime, pythonBin, scriptPath, cacheAddr, cacheToken, workerToken, workerID string, envFiles []string, envVars map[string]string, startTimeout time.Duration, isolation *IsolationConfig, logger *zap.Logger) (*PythonWorker, error) {
 	w := &PythonWorker{
 		Interface:    iface,
 		App:          app,
@@ -789,11 +768,8 @@ func NewPythonWorker(iface, app, workingDir, venv, lifespan, pyRuntime, pythonBi
 		Lifespan:     lifespan,
 		Runtime:      pyRuntime,
 		PythonBin:    pythonBin,
-		Socket:       socket,
-		SockDir:      sockDir,
 		ScriptPath:   scriptPath,
-		DialNet:      dialNet,
-		DialAddr:     dialAddr,
+		ScriptDir:    filepath.Dir(scriptPath),
 		CacheAddr:    cacheAddr,
 		CacheToken:   cacheToken,
 		WorkerToken:  workerToken,
@@ -801,7 +777,13 @@ func NewPythonWorker(iface, app, workingDir, venv, lifespan, pyRuntime, pythonBi
 		EnvFiles:     cloneEnvFiles(envFiles),
 		EnvVars:      cloneEnvVars(envVars),
 		StartTimeout: startTimeout,
+		Isolation:    cloneIsolationConfig(isolation),
 		logger:       logger,
+	}
+	var err error
+	w.backend, err = newWorkerBackend(w.Isolation)
+	if err != nil {
+		return nil, err
 	}
 	if err = w.Start(); err != nil {
 		_ = w.Cleanup()
@@ -847,78 +829,35 @@ func (w *PythonWorker) Start() error {
 		workingDir = cwd
 	}
 
-	args := []string{
-		w.ScriptPath,
-		"--interface", w.Interface,
-		"--app", w.App,
-		"--socket", w.Socket.Name(),
-	}
-	if workingDir != "" {
-		args = append(args, "--working-dir", workingDir)
-	}
-	if w.Venv != "" {
-		args = append(args, "--venv", w.Venv)
-	}
-	timeout := effectiveStartTimeout(w.StartTimeout)
-	if w.Lifespan != "" {
-		args = append(args, "--lifespan", w.Lifespan)
-		if w.Lifespan == "on" && timeout >= 0 {
-			args = append(args, "--lifespan-timeout", strconv.FormatFloat(timeout.Seconds(), 'f', -1, 64))
-		}
-	}
-	if w.Runtime != "" {
-		args = append(args, "--runtime", w.Runtime)
+	spec := WorkerSpec{
+		Interface:    w.Interface,
+		App:          w.App,
+		WorkingDir:   workingDir,
+		Venv:         w.Venv,
+		Lifespan:     w.Lifespan,
+		Runtime:      w.Runtime,
+		PythonBin:    w.PythonBin,
+		ScriptPath:   w.ScriptPath,
+		ScriptDir:    w.ScriptDir,
+		EnvFiles:     w.EnvFiles,
+		EnvVars:      w.EnvVars,
+		WorkerID:     w.WorkerID,
+		CacheAddr:    w.CacheAddr,
+		CacheToken:   w.CacheToken,
+		WorkerToken:  w.WorkerToken,
+		StartTimeout: w.StartTimeout,
+		Isolation:    w.Isolation,
+		Logger:       w.logger,
 	}
 
-	w.Cmd = exec.Command(w.PythonBin, args...)
-	w.Cmd.Stdout = os.Stdout
-	w.Cmd.Stderr = os.Stderr
-	fileVars, err := loadEnvFiles(w.WorkingDir, w.EnvFiles)
+	handle, err := w.backend.Start(context.Background(), spec)
 	if err != nil {
 		return err
 	}
-	w.Cmd.Env = buildWorkerEnv(os.Environ(), fileVars, w.EnvVars, workerInternalEnv(w.Interface, w.CacheAddr, w.CacheToken, w.WorkerID, w.WorkerToken)...)
-	setSysProcAttr(w.Cmd)
-
-	if err := w.Cmd.Start(); err != nil {
-		return err
-	}
-	w.cmdWaitCh = make(chan error, 1)
-	go func() {
-		w.cmdWaitCh <- w.Cmd.Wait()
-	}()
-	if runtime.GOOS == "windows" {
-		port, err := waitForPortFile(w.Socket.Name(), timeout, w.cmdWaitCh, w.logger)
-		if err != nil {
-			w.reapWorkerAfterStartFailure(err)
-			return fmt.Errorf("waiting for Python worker port file: %w", err)
-		}
-		w.DialAddr = "127.0.0.1:" + strconv.Itoa(port)
-	} else if err := waitForUnixSocket(w.Socket.Name(), timeout, w.cmdWaitCh, w.logger); err != nil {
-		w.reapWorkerAfterStartFailure(err)
-		return fmt.Errorf("waiting for Python worker socket: %w", err)
-	}
+	w.handle = handle
+	w.DialNet = handle.DialNetwork()
+	w.DialAddr = handle.DialAddress()
 	return nil
-}
-
-// reapWorkerAfterStartFailure ensures the worker process is reaped exactly once
-// after a failed readiness wait.
-func (w *PythonWorker) reapWorkerAfterStartFailure(err error) {
-	if w.cmdReaped {
-		return
-	}
-	if errors.Is(err, errWorkerExited) {
-		// cmdWaitCh was already consumed by the readiness wait.
-		w.cmdReaped = true
-		return
-	}
-	if w.Cmd != nil && w.Cmd.Process != nil {
-		_ = w.Cmd.Process.Kill()
-	}
-	if w.cmdWaitCh != nil {
-		<-w.cmdWaitCh
-	}
-	w.cmdReaped = true
 }
 
 // maybeWarnSlowStart logs once when the app is still loading past startTimeoutWarnAfter
@@ -1047,45 +986,8 @@ func (w *PythonWorker) Cleanup() error {
 	if w.Transport != nil {
 		w.Transport.CloseIdleConnections()
 	}
-	if w.Cmd != nil && w.Cmd.Process != nil && !w.cmdReaped {
-		// On Windows, Signal(SIGTERM) is not supported; only Kill works.
-		// Send SIGTERM on Unix for graceful shutdown (ASGI lifespan), Kill on Windows.
-		if runtime.GOOS == "windows" {
-			_ = w.Cmd.Process.Kill()
-		} else {
-			_ = w.Cmd.Process.Signal(syscall.SIGTERM)
-		}
-		if w.cmdWaitCh != nil {
-			select {
-			case <-w.cmdWaitCh:
-				w.cmdReaped = true
-			case <-time.After(5 * time.Second):
-				_ = w.Cmd.Process.Kill()
-				<-w.cmdWaitCh
-				w.cmdReaped = true
-			}
-		} else {
-			done := make(chan error, 1)
-			go func() {
-				_, err := w.Cmd.Process.Wait()
-				done <- err
-			}()
-			select {
-			case <-done:
-				w.cmdReaped = true
-			case <-time.After(5 * time.Second):
-				_ = w.Cmd.Process.Kill()
-				<-done
-				w.cmdReaped = true
-			}
-		}
-	}
-	if w.Socket != nil {
-		w.Socket.Close()
-		os.Remove(w.Socket.Name())
-		if w.SockDir != "" {
-			os.RemoveAll(w.SockDir)
-		}
+	if w.backend != nil && w.handle != nil {
+		_ = w.backend.Stop(w.handle, 5*time.Second)
 	}
 	return nil
 }
@@ -1102,7 +1004,7 @@ type PythonWorkerGroup struct {
 	ScriptPath string // path to worker_main.py inside BundleDir
 }
 
-func NewPythonWorkerGroup(iface, app, workingDir, venv, lifespan, runtime string, count int, pythonBin, cacheAddr, cacheToken string, envFiles []string, envVars map[string]string, startTimeout time.Duration, logger *zap.Logger) (*PythonWorkerGroup, error) {
+func NewPythonWorkerGroup(iface, app, workingDir, venv, lifespan, runtime string, count int, pythonBin, cacheAddr, cacheToken string, envFiles []string, envVars map[string]string, startTimeout time.Duration, isolation *IsolationConfig, logger *zap.Logger) (*PythonWorkerGroup, error) {
 	scriptPath, bundleDir, err := acquireCaddysnakePyBundle()
 	if err != nil {
 		return nil, fmt.Errorf("failed to write worker bundle: %w", err)
@@ -1117,7 +1019,7 @@ func NewPythonWorkerGroup(iface, app, workingDir, venv, lifespan, runtime string
 	errs := make([]error, count)
 	workers := make([]*PythonWorker, count)
 	for i := 0; i < count; i++ {
-		workers[i], errs[i] = NewPythonWorker(iface, app, workingDir, venv, lifespan, runtime, pythonBin, scriptPath, cacheAddr, cacheToken, workerToken, strconv.Itoa(i), envFiles, envVars, startTimeout, logger)
+		workers[i], errs[i] = NewPythonWorker(iface, app, workingDir, venv, lifespan, runtime, pythonBin, scriptPath, cacheAddr, cacheToken, workerToken, strconv.Itoa(i), envFiles, envVars, startTimeout, isolation, logger)
 	}
 	wg := &PythonWorkerGroup{
 		Workers:    workers,
@@ -1169,6 +1071,7 @@ func init() {
 			"[--start-timeout=<duration|-1|forever>] " +
 			"[--static-path <path>] [--static-route <route>] " +
 			"[--runtime <name>] [--lifespan on|off] " +
+			"[--isolation none|docker] [--isolation-image <image>] " +
 			"[--max-dynamic-apps <count>] " +
 			"[--debug] [--access-logs] [--autoreload]",
 		Short: "Spins up a Python server",
@@ -1207,6 +1110,13 @@ Ensure DNS A/AAAA records are correctly set up if using a public domain for secu
 			cmd.Flags().Bool("autoreload", false, "Watch .py files and reload on changes")
 			cmd.Flags().String("lifespan", "off", "Enable ASGI lifespan support (ignored in WSGI mode)")
 			cmd.Flags().String("runtime", "", "Worker runtime (wsgi: sync|gevent; esgi: gevent only; asgi: native|uvloop); defaults: sync for WSGI, gevent for ESGI, uvloop for ASGI")
+			cmd.Flags().String("isolation", "", "Worker isolation backend: none or docker")
+			cmd.Flags().String("isolation-image", "", "Docker image for --isolation docker")
+			cmd.Flags().String("isolation-network", "", "Docker network mode/name for isolated workers")
+			cmd.Flags().String("isolation-docker-host", "", "DOCKER_HOST for the Docker CLI when using isolation docker")
+			cmd.Flags().String("isolation-memory", "", "Docker memory limit for isolated workers (e.g. 512m)")
+			cmd.Flags().String("isolation-cpus", "", "Docker CPU limit for isolated workers (e.g. 1.0)")
+			cmd.Flags().Bool("isolation-read-only", false, "Mount container root filesystem read-only for isolated workers")
 			cmd.Flags().String("max-dynamic-apps", "", "Max distinct dynamic Python apps (empty = env/default, usually 128)")
 			cmd.RunE = caddycmd.WrapCommandFuncForCobra(pythonServer)
 		},
@@ -1234,6 +1144,13 @@ func pythonServer(fs caddycmd.Flags) (int, error) {
 	runtimeFlag := fs.String("runtime")
 	maxDynamicApps := fs.String("max-dynamic-apps")
 	startTimeout := fs.String("start-timeout")
+	isolationFlag := fs.String("isolation")
+	isolationImage := fs.String("isolation-image")
+	isolationNetwork := fs.String("isolation-network")
+	isolationDockerHost := fs.String("isolation-docker-host")
+	isolationMemory := fs.String("isolation-memory")
+	isolationCPUs := fs.String("isolation-cpus")
+	isolationReadOnly := fs.Bool("isolation-read-only")
 	envFiles, err := fs.GetStringSlice("env-file")
 	if err != nil {
 		return caddy.ExitCodeFailedStartup, err
@@ -1299,6 +1216,11 @@ func pythonServer(fs caddycmd.Flags) (int, error) {
 	pythonHandler.MaxDynamicApps = maxDynamicApps
 	pythonHandler.EnvFiles = cloneEnvFiles(envFiles)
 	pythonHandler.EnvVars = envVars
+	if iso, err := buildIsolationFromCLI(isolationFlag, isolationImage, isolationNetwork, isolationDockerHost, isolationMemory, isolationCPUs, isolationReadOnly); err != nil {
+		return caddy.ExitCodeFailedStartup, err
+	} else if iso != nil {
+		pythonHandler.Isolation = iso
+	}
 
 	if err := pythonHandler.Validate(); err != nil {
 		return caddy.ExitCodeFailedStartup, err

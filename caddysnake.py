@@ -408,7 +408,10 @@ class _WsgiInputStream:
 # ==================== WSGI Server ====================
 
 # Windows does not support Unix domain sockets (AF_UNIX). Use TCP there.
-_USE_TCP = sys.platform == "win32"
+# Docker-isolated workers also use TCP (port file + container IP); bind host is
+# configurable so containers can listen on 0.0.0.0 for host dialing.
+_USE_TCP = sys.platform == "win32" or os.environ.get("CADDYSNAKE_WORKER_TCP") == "1"
+_TCP_HOST = os.environ.get("CADDYSNAKE_WORKER_TCP_HOST", "127.0.0.1")
 
 
 def _call_wsgi_app(app, environ):
@@ -620,7 +623,7 @@ async def _run_wsgi_server_async(app, socket_path):
     if _USE_TCP:
         server = await asyncio.start_server(
             lambda r, w: _handle_wsgi_connection(r, w, app),
-            "127.0.0.1",
+            _TCP_HOST,
             0,
         )
         port = server.sockets[0].getsockname()[1]
@@ -629,7 +632,7 @@ async def _run_wsgi_server_async(app, socket_path):
         except OSError as e:
             print(f"Failed to write port file: {e}", file=sys.stderr)
             sys.exit(1)
-        print(f"WSGI server listening on 127.0.0.1:{port}", file=sys.stderr)
+        print(f"WSGI server listening on {_TCP_HOST}:{port}", file=sys.stderr)
     else:
         if os.path.exists(socket_path):
             os.unlink(socket_path)
@@ -1913,7 +1916,7 @@ def run_esgi_server(app, socket_path: str, runtime: str):
 
     try:
         if _USE_TCP:
-            server = StreamServer(("127.0.0.1", 0), handle)
+            server = StreamServer((_TCP_HOST, 0), handle)
         else:
             if os.path.exists(socket_path):
                 os.unlink(socket_path)
@@ -1930,7 +1933,7 @@ def run_esgi_server(app, socket_path: str, runtime: str):
             except OSError as e:
                 print(f"Failed to write port file: {e}", file=sys.stderr)
                 sys.exit(1)
-            print(f"ESGI server listening on 127.0.0.1:{port}", file=sys.stderr)
+            print(f"ESGI server listening on {_TCP_HOST}:{port}", file=sys.stderr)
         else:
             print(f"ESGI server listening on {socket_path}", file=sys.stderr)
 
@@ -2166,7 +2169,7 @@ async def run_asgi_server(app, socket_path, lifespan, lifespan_timeout=None):
     if _USE_TCP:
         server = await asyncio.start_server(
             lambda r, w: _handle_asgi_connection(r, w, app, state),
-            "127.0.0.1",
+            _TCP_HOST,
             0,
         )
         port = server.sockets[0].getsockname()[1]
@@ -2175,7 +2178,7 @@ async def run_asgi_server(app, socket_path, lifespan, lifespan_timeout=None):
         except OSError as e:
             print(f"Failed to write port file: {e}", file=sys.stderr)
             sys.exit(1)
-        print(f"ASGI server listening on 127.0.0.1:{port}", file=sys.stderr)
+        print(f"ASGI server listening on {_TCP_HOST}:{port}", file=sys.stderr)
     else:
         if os.path.exists(socket_path):
             os.unlink(socket_path)

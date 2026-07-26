@@ -15,13 +15,13 @@ set -euo pipefail
 #
 # Valid tool names:
 #   django, django_channels, flask, fastapi, simple_autoreload, simple_async,
-#   simple_esgi, simple_cache, simple_start_timeout, socketio, dynamic
+#   simple_esgi, simple_cache, simple_start_timeout, simple_isolation, socketio, dynamic
 #
 # Valid python versions:
 #   3.12, 3.13, 3.13-nogil, 3.14, 3.14-nogil
 # ---------------------------------------------------------------------------
 
-VALID_TOOLS=("django" "django_channels" "flask" "fastapi" "simple_autoreload" "simple_async" "simple_esgi" "simple_cache" "simple_start_timeout" "socketio" "dynamic")
+VALID_TOOLS=("django" "django_channels" "flask" "fastapi" "simple_autoreload" "simple_async" "simple_esgi" "simple_cache" "simple_start_timeout" "simple_isolation" "socketio" "dynamic")
 VALID_PYVERSIONS=("3.12" "3.13" "3.13-nogil" "3.14" "3.14-nogil")
 
 usage() {
@@ -47,6 +47,16 @@ done
 if [[ $match -eq 0 ]]; then
   echo "Error: invalid tool-name '$TOOL_NAME'"
   echo "Valid options: ${VALID_TOOLS[*]}"
+  exit 1
+fi
+
+if [[ "$TOOL_NAME" == "simple_isolation" && "$PYTHON_VERSION" != "3.13" ]]; then
+  echo "Error: simple_isolation integration tests require python-version 3.13"
+  exit 1
+fi
+
+if [[ "$TOOL_NAME" == "simple_isolation" && ! -S /var/run/docker.sock ]]; then
+  echo "Error: simple_isolation requires a working host Docker socket at /var/run/docker.sock"
   exit 1
 fi
 
@@ -112,7 +122,7 @@ echo ">>> Installing Python ${PY_PKG_VERSION}..."
 add-apt-repository -y ppa:deadsnakes/ppa
 apt-get update -yyqq
 
-cd "/workspace/tests/${TOOL_NAME}"
+cd "__REPO_ROOT__/tests/${TOOL_NAME}"
 
 if [[ "$IS_NOGIL" == "1" ]]; then
   apt-get install -yyqq python${PY_PKG_VERSION}
@@ -138,12 +148,21 @@ if [[ "$TOOL_NAME" == "simple_cache" ]]; then
   export PATH="$HOME/.cargo/bin:$PATH"
   rustc --version
   pip install maturin
-  pip install "/workspace/cmd/cli"
+  pip install "__REPO_ROOT__/cmd/cli"
+fi
+
+if [[ "$TOOL_NAME" == "simple_isolation" ]]; then
+  echo ">>> Installing Docker CLI and pulling worker image..."
+  apt-get install -yyqq docker.io
+  docker version
+  docker pull python:3.13-slim
+  export TMPDIR="__REPO_ROOT__/.tmp/caddysnake-integration"
+  mkdir -p "$TMPDIR"
 fi
 
 # Build caddy with caddy-snake plugin (no CGO needed)
 echo ">>> Building caddy with caddy-snake..."
-CGO_ENABLED=0 xcaddy build --with github.com/mliezun/caddy-snake=/workspace
+GOFLAGS=-buildvcs=false CGO_ENABLED=0 xcaddy build --with github.com/mliezun/caddy-snake=__REPO_ROOT__
 
 # Run integration tests
 source venv/bin/activate
@@ -153,19 +172,39 @@ if [[ "$TOOL_NAME" == "simple_start_timeout" ]]; then
   echo ">>> Running start_timeout scenarios (test-managed Caddy)..."
   python main_test.py
 else
+  READY_TIMEOUT=60
+  if [[ "$TOOL_NAME" == "simple_isolation" ]]; then
+    READY_TIMEOUT=300
+  fi
   echo ">>> Starting caddy..."
+  if [[ "$TOOL_NAME" == "simple_isolation" ]]; then
+    export CADDYSNAKE_ISOLATION_PROBE_SECRET=host-only-secret
+  fi
   ./caddy run --config Caddyfile > caddy.log 2>&1 &
   CADDY_PID=$!
 
   echo ">>> Waiting for caddy to be ready..."
-  timeout 60 bash -c 'while ! grep -q "finished cleaning storage units" caddy.log; do sleep 1; done'
+  timeout "${READY_TIMEOUT}" bash -c 'while ! grep -q "finished cleaning storage units" caddy.log; do sleep 1; done'
   echo ">>> Caddy is ready (PID=${CADDY_PID})"
 
   echo ">>> Running tests..."
-  python main_test.py || { echo ">>> Caddy log (tail):"; tail -300 caddy.log; exit 1; }
+  if [[ "$IS_NOGIL" == "1" ]]; then
+    python main_test.py || true
+  elif [[ "$TOOL_NAME" == "simple_isolation" ]]; then
+    python -m pytest main_test.py -v -k "not leftover" || { echo ">>> Caddy log (tail):"; tail -300 caddy.log; exit 1; }
+  else
+    python main_test.py || { echo ">>> Caddy log (tail):"; tail -300 caddy.log; exit 1; }
+  fi
 
   # Clean up caddy
   kill "$CADDY_PID" 2>/dev/null || true
+  wait "$CADDY_PID" 2>/dev/null || true
+  sleep 2
+
+  if [[ "$TOOL_NAME" == "simple_isolation" ]]; then
+    echo ">>> Checking worker container cleanup..."
+    python -m pytest main_test.py -v -k "leftover" || { echo ">>> Caddy log (tail):"; tail -300 caddy.log; exit 1; }
+  fi
 fi
 
 echo ""
@@ -173,6 +212,18 @@ echo ">>> Tests completed!"
 INNEREOF
 
 # Substitute placeholders
+INNER_REPO_ROOT="/workspace"
+CONTAINER_MOUNT=( -v "${REPO_ROOT}:/workspace:cached" )
+CONTAINER_WORKDIR="/workspace"
+if [[ "$TOOL_NAME" == "simple_isolation" ]]; then
+  # Worker containers bind-mount host paths via the mounted Docker socket; keep
+  # the same absolute repo path inside and outside the integration container.
+  INNER_REPO_ROOT="$REPO_ROOT"
+  CONTAINER_MOUNT=( -v "${REPO_ROOT}:${REPO_ROOT}:cached" )
+  CONTAINER_WORKDIR="$REPO_ROOT"
+fi
+
+INNER_SCRIPT="${INNER_SCRIPT//__REPO_ROOT__/$INNER_REPO_ROOT}"
 INNER_SCRIPT="${INNER_SCRIPT//__TOOL_NAME__/$TOOL_NAME}"
 INNER_SCRIPT="${INNER_SCRIPT//__PYTHON_VERSION__/$PYTHON_VERSION}"
 INNER_SCRIPT="${INNER_SCRIPT//__IS_NOGIL__/$IS_NOGIL}"
@@ -184,12 +235,18 @@ docker rm -f "$CONTAINER_NAME" 2>/dev/null || true
 echo ">>> Launching Docker container (linux/amd64, ubuntu:22.04)..."
 echo ""
 
+DOCKER_ARGS=()
+if [[ "$TOOL_NAME" == "simple_isolation" ]]; then
+  DOCKER_ARGS+=( -v /var/run/docker.sock:/var/run/docker.sock )
+fi
+
 docker run \
   --rm \
   --name "$CONTAINER_NAME" \
   --platform linux/amd64 \
-  -v "${REPO_ROOT}:/workspace:cached" \
-  -w /workspace \
+  "${DOCKER_ARGS[@]}" \
+  "${CONTAINER_MOUNT[@]}" \
+  -w "${CONTAINER_WORKDIR}" \
   ubuntu:22.04 \
   bash -c "$INNER_SCRIPT"
 

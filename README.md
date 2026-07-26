@@ -259,6 +259,9 @@ python {
     lifespan on|off                     # ASGI lifespan events (default: off)
     python_path "/usr/bin/python3"       # Explicit Python interpreter
     autoreload                          # Watch .py files and reload on changes
+    isolation docker {                  # Run workers in Docker (Linux; requires Docker engine)
+        image "python:3.13-slim"
+    }
 }
 ```
 
