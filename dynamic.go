@@ -341,16 +341,6 @@ func NewDynamicApp(modulePattern, workingDir, venvPath string, envFilePatterns [
 	return d, nil
 }
 
-func (d *DynamicApp) pendingCreateCountLocked() int {
-	pending := 0
-	for k := range d.inflight {
-		if _, exists := d.apps[k]; !exists {
-			pending++
-		}
-	}
-	return pending
-}
-
 // pruneExpiredFailuresLocked removes expired negative-cache entries.
 // Caller must hold d.mu for writing.
 func (d *DynamicApp) pruneExpiredFailuresLocked(now time.Time) {
