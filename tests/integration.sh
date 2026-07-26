@@ -15,13 +15,13 @@ set -euo pipefail
 #
 # Valid tool names:
 #   django, django_channels, flask, fastapi, simple_autoreload, simple_async,
-#   simple_esgi, simple_cache, simple_start_timeout, socketio, dynamic
+#   simple_esgi, simple_cache, simple_start_timeout, simple_isolation, socketio, dynamic
 #
 # Valid python versions:
 #   3.12, 3.13, 3.13-nogil, 3.14, 3.14-nogil
 # ---------------------------------------------------------------------------
 
-VALID_TOOLS=("django" "django_channels" "flask" "fastapi" "simple_autoreload" "simple_async" "simple_esgi" "simple_cache" "simple_start_timeout" "socketio" "dynamic")
+VALID_TOOLS=("django" "django_channels" "flask" "fastapi" "simple_autoreload" "simple_async" "simple_esgi" "simple_cache" "simple_start_timeout" "simple_isolation" "socketio" "dynamic")
 VALID_PYVERSIONS=("3.12" "3.13" "3.13-nogil" "3.14" "3.14-nogil")
 
 usage() {
@@ -47,6 +47,16 @@ done
 if [[ $match -eq 0 ]]; then
   echo "Error: invalid tool-name '$TOOL_NAME'"
   echo "Valid options: ${VALID_TOOLS[*]}"
+  exit 1
+fi
+
+if [[ "$TOOL_NAME" == "simple_isolation" && "$PYTHON_VERSION" != "3.13" ]]; then
+  echo "Error: simple_isolation integration tests require python-version 3.13"
+  exit 1
+fi
+
+if [[ "$TOOL_NAME" == "simple_isolation" && ! -S /var/run/docker.sock ]]; then
+  echo "Error: simple_isolation requires a working host Docker socket at /var/run/docker.sock"
   exit 1
 fi
 
@@ -141,6 +151,13 @@ if [[ "$TOOL_NAME" == "simple_cache" ]]; then
   pip install "/workspace/cmd/cli"
 fi
 
+if [[ "$TOOL_NAME" == "simple_isolation" ]]; then
+  echo ">>> Installing Docker CLI and pulling worker image..."
+  apt-get install -yyqq docker.io
+  docker version
+  docker pull python:3.13-slim
+fi
+
 # Build caddy with caddy-snake plugin (no CGO needed)
 echo ">>> Building caddy with caddy-snake..."
 CGO_ENABLED=0 xcaddy build --with github.com/mliezun/caddy-snake=/workspace
@@ -157,23 +174,39 @@ if [[ "$TOOL_NAME" == "simple_start_timeout" ]]; then
     python main_test.py
   fi
 else
+  READY_TIMEOUT=60
+  if [[ "$TOOL_NAME" == "simple_isolation" ]]; then
+    READY_TIMEOUT=300
+  fi
   echo ">>> Starting caddy..."
+  if [[ "$TOOL_NAME" == "simple_isolation" ]]; then
+    export CADDYSNAKE_ISOLATION_PROBE_SECRET=host-only-secret
+  fi
   ./caddy run --config Caddyfile > caddy.log 2>&1 &
   CADDY_PID=$!
 
   echo ">>> Waiting for caddy to be ready..."
-  timeout 60 bash -c 'while ! grep -q "finished cleaning storage units" caddy.log; do sleep 1; done'
+  timeout "${READY_TIMEOUT}" bash -c 'while ! grep -q "finished cleaning storage units" caddy.log; do sleep 1; done'
   echo ">>> Caddy is ready (PID=${CADDY_PID})"
 
   echo ">>> Running tests..."
   if [[ "$IS_NOGIL" == "1" ]]; then
     python main_test.py || true
+  elif [[ "$TOOL_NAME" == "simple_isolation" ]]; then
+    python -m pytest main_test.py -v -k "not leftover" || { echo ">>> Caddy log (tail):"; tail -300 caddy.log; exit 1; }
   else
     python main_test.py || { echo ">>> Caddy log (tail):"; tail -300 caddy.log; exit 1; }
   fi
 
   # Clean up caddy
   kill "$CADDY_PID" 2>/dev/null || true
+  wait "$CADDY_PID" 2>/dev/null || true
+  sleep 2
+
+  if [[ "$TOOL_NAME" == "simple_isolation" ]]; then
+    echo ">>> Checking worker container cleanup..."
+    python -m pytest main_test.py -v -k "leftover" || { echo ">>> Caddy log (tail):"; tail -300 caddy.log; exit 1; }
+  fi
 fi
 
 echo ""
@@ -192,10 +225,16 @@ docker rm -f "$CONTAINER_NAME" 2>/dev/null || true
 echo ">>> Launching Docker container (linux/amd64, ubuntu:22.04)..."
 echo ""
 
+DOCKER_ARGS=()
+if [[ "$TOOL_NAME" == "simple_isolation" ]]; then
+  DOCKER_ARGS+=( -v /var/run/docker.sock:/var/run/docker.sock )
+fi
+
 docker run \
   --rm \
   --name "$CONTAINER_NAME" \
   --platform linux/amd64 \
+  "${DOCKER_ARGS[@]}" \
   -v "${REPO_ROOT}:/workspace:cached" \
   -w /workspace \
   ubuntu:22.04 \

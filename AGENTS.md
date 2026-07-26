@@ -23,6 +23,7 @@ Or run checks individually:
    - `./tests/integration.sh flask 3.13`
    - `./tests/integration.sh fastapi 3.13`
    - For **shared cache** changes: `./tests/integration.sh simple_cache 3.13`
+   - For **isolation** changes: `./tests/integration.sh simple_isolation 3.13` (requires host Docker socket)
 7. **Embed-app** (optional, requires network): `cd cmd/embed-app && ./build.sh app.zip 3.13 && ./test_embed.sh embed-test`
 
 Install hook once: `pre-commit install`
@@ -75,6 +76,8 @@ Whenever you add or change a `python { ... }` subdirective (or a field on `Caddy
 | `python_path` | `--python-path` |
 | `env_file` | `--env-file` (repeatable) |
 | `env_var <name> <value>` | `--env-var NAME=VALUE` (repeatable) |
+| `isolation docker { image ... }` | `--isolation docker` + `--isolation-image` (+ optional `--isolation-network`, `--isolation-docker-host`, `--isolation-memory`, `--isolation-cpus`, `--isolation-read-only`) |
+| `isolation none` | `--isolation none` |
 
 CLI-only conveniences (no Caddyfile `python` equivalent) are fine to keep separate: `--domain`, `--listen`, `--static-path`, `--static-route`, `--debug`, `--access-logs`.
 
@@ -135,7 +138,7 @@ For full CI-like integration tests without local Python/venv setup:
 ./tests/integration.sh fastapi 3.13
 ```
 
-Valid tools: `django`, `django_channels`, `flask`, `fastapi`, `simple_autoreload`, `simple_async`, `simple_esgi`, `simple_cache`, `simple_start_timeout`, `socketio`, `dynamic`
+Valid tools: `django`, `django_channels`, `flask`, `fastapi`, `simple_autoreload`, `simple_async`, `simple_esgi`, `simple_cache`, `simple_start_timeout`, `simple_isolation`, `socketio`, `dynamic`
 Valid Python versions: `3.12`, `3.13`, `3.13-nogil`, `3.14`, `3.14-nogil`
 
 Requires **Docker** (linux/amd64 container).

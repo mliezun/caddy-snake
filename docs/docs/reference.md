@@ -70,6 +70,7 @@ python {
     workers <count>
     start_timeout <duration|-1|forever>
     autoreload
+    isolation none|docker { ... }
 }
 ```
 
@@ -277,6 +278,46 @@ python {
 - In-flight requests complete before the swap happens (thread-safe with read/write locks)
 - If the reload fails (e.g. syntax error in Python code), the app degrades to returning HTTP 500 for all requests until the next file change triggers a successful reload
 - If the app cannot be loaded at all (e.g. app directory deleted), the Caddy process terminates to avoid silently serving errors
+
+### `isolation`
+
+Runs each Python worker in an isolation backend instead of a host subprocess. Omit the directive or set `isolation none` for the default behavior.
+
+**`isolation docker`** starts one container per worker (`workers N` → N containers). Requires a working Docker engine on the host (`docker` CLI on `PATH`, access to `/var/run/docker.sock` or `DOCKER_HOST`).
+
+```caddyfile
+python {
+    module_wsgi "main:app"
+    working_dir "/var/www/myapp"
+    workers 2
+    isolation docker {
+        image "python:3.13-slim"
+        network "bridge"
+        memory "512m"
+        cpus "1.0"
+        read_only
+        mount /extra/data /data ro
+    }
+}
+```
+
+| Subdirective | Description |
+|--------------|-------------|
+| `image` | **Required.** Docker image for worker containers |
+| `network` | Docker network mode/name (default: bridge) |
+| `docker_host` | `DOCKER_HOST` for the Docker CLI |
+| `memory` | Memory limit (Docker syntax, e.g. `512m`) |
+| `cpus` | CPU limit (e.g. `1.0`) |
+| `read_only` | Mount container root filesystem read-only |
+| `mount` | Extra bind mount: `host container [ro\|rw]` |
+
+**Environment:** Docker workers do **not** inherit the Caddy process environment. Only `env_file`, `env_var`, and internal `CADDYSNAKE_*` vars are passed in.
+
+**Cache:** When Docker isolation is enabled, the in-process cache listens on TCP `127.0.0.1:<port>` and workers connect via `host.docker.internal`. The shared cache is still **not** a tenant isolation boundary — use key prefixes or avoid shared cache across untrusted apps.
+
+**Platform:** Linux only in v1. Not supported on Windows.
+
+See also: [isolation design notes](../design/isolation.md).
 
 ---
 
@@ -639,6 +680,8 @@ caddy python-server --server-type asgi --app main:app \
 | `python_path` | `--python-path` |
 | `env_file` | `--env-file` (repeatable) |
 | `env_var <name> <value>` | `--env-var NAME=VALUE` (repeatable) |
+| `isolation docker { image ... }` | `--isolation docker` + `--isolation-image` (+ optional `--isolation-network`, `--isolation-docker-host`, `--isolation-memory`, `--isolation-cpus`, `--isolation-read-only`) |
+| `isolation none` | `--isolation none` |
 
 CLI-only: `--domain`, `--listen`, `--static-path`, `--static-route`, `--debug`, `--access-logs`.
 

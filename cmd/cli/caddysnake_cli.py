@@ -66,6 +66,21 @@ import click
     "--runtime",
     help="Worker runtime (wsgi: sync|gevent; esgi: gevent only; asgi: native|uvloop)",
 )
+@click.option(
+    "--isolation",
+    type=click.Choice(["none", "docker"], case_sensitive=False),
+    help="Worker isolation backend: none (default) or docker",
+)
+@click.option("--isolation-image", help="Docker image when --isolation docker")
+@click.option("--isolation-network", help="Docker network for isolated workers")
+@click.option("--isolation-docker-host", help="DOCKER_HOST for the Docker CLI")
+@click.option("--isolation-memory", help="Docker memory limit (e.g. 512m)")
+@click.option("--isolation-cpus", help="Docker CPU limit (e.g. 1.0)")
+@click.option(
+    "--isolation-read-only",
+    is_flag=True,
+    help="Mount isolated container root filesystem read-only",
+)
 def main(
     server_type,
     domain,
@@ -85,6 +100,13 @@ def main(
     autoreload,
     lifespan,
     runtime,
+    isolation,
+    isolation_image,
+    isolation_network,
+    isolation_docker_host,
+    isolation_memory,
+    isolation_cpus,
+    isolation_read_only,
 ):
     """
     A Python WSGI, ASGI, or ESGI server designed for apps and frameworks.
@@ -144,6 +166,20 @@ def main(
         args.extend(["--lifespan", lifespan])
     if runtime:
         args.extend(["--runtime", runtime])
+    if isolation:
+        args.extend(["--isolation", isolation])
+    if isolation_image:
+        args.extend(["--isolation-image", isolation_image])
+    if isolation_network:
+        args.extend(["--isolation-network", isolation_network])
+    if isolation_docker_host:
+        args.extend(["--isolation-docker-host", isolation_docker_host])
+    if isolation_memory:
+        args.extend(["--isolation-memory", isolation_memory])
+    if isolation_cpus:
+        args.extend(["--isolation-cpus", isolation_cpus])
+    if isolation_read_only:
+        args.append("--isolation-read-only")
 
     # Execute the binary with the constructed arguments
     os.execv(binary_path, args)

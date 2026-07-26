@@ -50,6 +50,7 @@ jobs:
           - "simple_esgi"
           - "simple_cache"
           - "simple_start_timeout"
+          - "simple_isolation"
           - "socketio"
           - "dynamic"
         python-version: ["3.12", "3.13", "3.13t", "3.14", "3.14t"]
@@ -68,6 +69,19 @@ jobs:
             python-version: "3.14t"
           - tool-name: simple_start_timeout
             python-version: "3.14t"
+          - tool-name: simple_isolation
+            python-version: "3.12"
+          - tool-name: simple_isolation
+            python-version: "3.13t"
+          - tool-name: simple_isolation
+            python-version: "3.14"
+          - tool-name: simple_isolation
+            python-version: "3.14t"
+          - tool-name: simple_isolation
+            os: ubuntu-22.04-arm
+          - tool-name: simple_isolation
+            python-version: "3.12"
+            os: ubuntu-22.04-arm
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
@@ -102,7 +116,7 @@ jobs:
           path: tests/${{ matrix.tool-name }}/
       - name: Run integration tests
         working-directory: tests/${{ matrix.tool-name }}/
-        if: ${{ !endsWith(matrix.python-version, 't') }}
+        if: ${{ !endsWith(matrix.python-version, 't') && matrix.tool-name != 'simple_isolation' }}
         run: |
           chmod +x caddy
           source venv/bin/activate
@@ -113,9 +127,12 @@ jobs:
             timeout 60 bash -c 'while ! grep -q "finished cleaning storage units" caddy.log; do sleep 1; done'
             python main_test.py
           fi
+      - name: Run simple_isolation via integration.sh
+        if: matrix.tool-name == 'simple_isolation' && matrix.python-version == '3.13' && matrix.os == 'ubuntu-22.04'
+        run: ./tests/integration.sh simple_isolation 3.13
       - name: Run integration tests (nogil)
         working-directory: tests/${{ matrix.tool-name }}/
-        if: ${{ endsWith(matrix.python-version, 't') && matrix.tool-name != 'flask' && matrix.tool-name != 'simple_esgi' && matrix.tool-name != 'simple_cache' && matrix.tool-name != 'simple_start_timeout' }}
+        if: ${{ endsWith(matrix.python-version, 't') && matrix.tool-name != 'flask' && matrix.tool-name != 'simple_esgi' && matrix.tool-name != 'simple_cache' && matrix.tool-name != 'simple_start_timeout' && matrix.tool-name != 'simple_isolation' }}
         continue-on-error: true
         run: |
           ./caddy run --config Caddyfile > caddy.log 2>&1 &

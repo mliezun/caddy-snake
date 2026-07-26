@@ -407,7 +407,8 @@ class _WsgiInputStream:
 # ==================== WSGI Server ====================
 
 # Windows does not support Unix domain sockets (AF_UNIX). Use TCP there.
-_USE_TCP = sys.platform == "win32"
+# Docker-isolated workers also use TCP (port file) so Caddy can dial across container boundaries.
+_USE_TCP = sys.platform == "win32" or os.environ.get("CADDYSNAKE_WORKER_TCP") == "1"
 
 
 def _call_wsgi_app(app, environ):

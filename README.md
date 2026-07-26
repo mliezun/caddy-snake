@@ -256,6 +256,9 @@ python {
     start_timeout 120s                  # Wait for worker readiness (default: 120s; -1 = indefinite)
     lifespan on|off                     # ASGI lifespan events (default: off)
     autoreload                          # Watch .py files and reload on changes
+    isolation docker {                  # Run workers in Docker (Linux; requires Docker engine)
+        image "python:3.13-slim"
+    }
 }
 ```
 

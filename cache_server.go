@@ -866,6 +866,13 @@ func startCacheServer() (*cacheServer, error) {
 	return startCacheServerUnixSocket()
 }
 
+func startCacheServerForIsolation(isolation *IsolationConfig) (*cacheServer, error) {
+	if isolation != nil && isolation.usesDocker() {
+		return startCacheServerTCPOnly()
+	}
+	return startCacheServer()
+}
+
 func startCacheServerTCPOnly() (*cacheServer, error) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {

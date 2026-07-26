@@ -1,0 +1,19 @@
+{
+	http_port 9080
+	https_port 9443
+	log {
+		level info
+	}
+}
+localhost:9080 {
+	python {
+		module_wsgi "main:wsgi_app"
+		working_dir "."
+		workers 1
+		start_timeout 300s
+		env_var CADDYSNAKE_ISOLATION_ALLOWED visible
+		isolation docker {
+			image "python:3.13-slim"
+		}
+	}
+}
