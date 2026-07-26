@@ -47,7 +47,7 @@ go version
 
 # Install xcaddy and hey
 echo ">>> Installing xcaddy and hey..."
-go install github.com/caddyserver/xcaddy/cmd/xcaddy@latest
+go install github.com/caddyserver/xcaddy/cmd/xcaddy@v0.4.6
 go install github.com/rakyll/hey@latest
 
 # Set up Python venv

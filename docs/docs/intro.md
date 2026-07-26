@@ -110,7 +110,7 @@ Install on Ubuntu 24.04:
 
 ```bash
 sudo apt-get install python3 golang
-go install github.com/caddyserver/xcaddy/cmd/xcaddy@latest
+go install github.com/caddyserver/xcaddy/cmd/xcaddy@v0.4.6
 ```
 
 ### Example usage: FastAPI

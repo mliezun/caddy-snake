@@ -2,9 +2,9 @@ import json
 import wsgiref.validate
 from collections.abc import Callable
 
-from sqlitedict import SqliteDict
+from kvstore import KVStore
 
-db = SqliteDict("items.db", autocommit=True)
+db = KVStore("items.db")
 
 CHUNK_SIZE = 256 * 2**20
 

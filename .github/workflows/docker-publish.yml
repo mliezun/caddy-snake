@@ -29,6 +29,16 @@ jobs:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           persist-credentials: false
+      - name: Verify release tag is on main
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          git fetch origin main --no-tags
+          TAGSHA="$(git rev-parse "${TAG}^{commit}")"
+          if ! git merge-base --is-ancestor "$TAGSHA" origin/main; then
+            echo "tag commit $TAGSHA is not an ancestor of origin/main"
+            exit 1
+          fi
+          echo "Verified $TAG ($TAGSHA) is on origin/main"
       - uses: ./.github/actions/docker-build-push
         with:
           python-version: ${{ matrix.python-version }}
