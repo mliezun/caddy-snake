@@ -72,7 +72,7 @@ The two features work together. When `autoreload` is enabled on a dynamic app, e
 }
 ```
 
-Old app instances are cleaned up after a 10-second grace period to allow in-flight requests to complete safely.
+Old app instances are retired immediately and cleaned up after their in-flight requests complete.
 
 ## Getting Started
 
