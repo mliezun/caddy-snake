@@ -210,8 +210,14 @@ class Cache:
             raise CacheError("cache authentication failed")
 
     def _open_socket(self, mod, timeout: float | None = None):
+        """Open a cache connection; return ``(sock, read_buf)``.
+
+        ``read_buf`` may already contain bytes read during TCP ``CSAUTH`` (recv can
+        pull the next reply in the same kernel read), so callers must reuse it.
+        """
         addr = _require_addr()
         t = _timeout_sec() if timeout is None else timeout
+        buf = bytearray()
         if addr.startswith("unix://"):
             path = addr[7:]
             # Must use ``mod`` (gevent.socket for ESGI workers), never the stdlib
@@ -226,7 +232,7 @@ class Cache:
             except OSError as e:
                 sock.close()
                 raise CacheError(f"cannot connect to cache unix socket {path!r}: {e}") from e
-            return sock
+            return sock, buf
         host, port = _parse_tcp_host_port(addr)
         sock = mod.socket(mod.AF_INET, mod.SOCK_STREAM)
         sock.settimeout(t)
@@ -235,14 +241,12 @@ class Cache:
         except OSError as e:
             sock.close()
             raise CacheError(f"cannot connect to cache at {host!r}:{port}: {e}") from e
-        buf = bytearray()
         self._authenticate(sock, buf)
-        return sock
+        return sock, buf
 
     def _roundtrip(self, parts: list[bytes]) -> Any:
         mod = _socket_module()
-        sock = self._open_socket(mod)
-        buf = bytearray()
+        sock, buf = self._open_socket(mod)
         try:
             sock.sendall(_encode_cmd(parts))
             return _read_reply(sock, buf)
@@ -252,8 +256,7 @@ class Cache:
     def _roundtrip_blocking(self, parts: list[bytes], wait_sec: float) -> Any:
         mod = _socket_module()
         sock_timeout = max(_timeout_sec(), wait_sec + 5.0)
-        sock = self._open_socket(mod, timeout=sock_timeout)
-        buf = bytearray()
+        sock, buf = self._open_socket(mod, timeout=sock_timeout)
         try:
             sock.sendall(_encode_cmd(parts))
             return _read_reply(sock, buf)

@@ -62,12 +62,17 @@ class _FakeMod:
     @classmethod
     def socket(cls, *a, **_k):
         cls.last_args = a
-        cls.last_sock = _FakeSock(cls._response)
+        data = cls._response
+        # TCP clients send CSAUTH first and expect +OK before the command reply.
+        if a and a[0] == cls.AF_INET:
+            data = b"+OK\r\n" + data
+        cls.last_sock = _FakeSock(data)
         return cls.last_sock
 
 
 def _patch_cache(monkeypatch):
     monkeypatch.setenv("CADDYSNAKE_CACHE_ADDR", "127.0.0.1:19999")
+    monkeypatch.setenv("CADDYSNAKE_CACHE_TOKEN", "test-token")
     monkeypatch.delenv("CADDYSNAKE_WORKER_INTERFACE", raising=False)
     monkeypatch.setattr("caddysnake.kv_cache._socket_module", lambda: _FakeMod)
 
