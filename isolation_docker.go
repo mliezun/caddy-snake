@@ -90,6 +90,9 @@ func (b dockerBackend) Start(ctx context.Context, spec WorkerSpec) (WorkerHandle
 
 	args := []string{
 		"run", "-d", "--rm",
+		// Match the Caddy process identity so the bind-mounted Unix socket is
+		// owned by a UID/GID the host can dial (root-owned sockets are 0700).
+		"--user", fmt.Sprintf("%d:%d", os.Getuid(), os.Getgid()),
 		"--label", dockerWorkerLabel + "=true",
 		"--label", "caddy-snake.worker.id=" + spec.WorkerID,
 		"--name", dockerWorkerContainerName(spec.WorkerID),

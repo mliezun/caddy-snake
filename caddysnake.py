@@ -638,6 +638,8 @@ async def _run_wsgi_server_async(app, socket_path):
             lambda r, w: _handle_wsgi_connection(r, w, app),
             path=socket_path,
         )
+        with contextlib.suppress(OSError):
+            os.chmod(socket_path, 0o666)
         print(f"WSGI server listening on {socket_path}", file=sys.stderr)
 
     stop_event = asyncio.Event()
@@ -1921,6 +1923,8 @@ def run_esgi_server(app, socket_path: str, runtime: str):
             listener_sock = gevent.socket.socket(gevent.socket.AF_UNIX, gevent.socket.SOCK_STREAM)
             listener_sock.bind(socket_path)
             listener_sock.listen(256)
+            with contextlib.suppress(OSError):
+                os.chmod(socket_path, 0o666)
             server = StreamServer(listener_sock, handle)
         server.start()
 
@@ -2184,6 +2188,8 @@ async def run_asgi_server(app, socket_path, lifespan, lifespan_timeout=None):
             lambda r, w: _handle_asgi_connection(r, w, app, state),
             path=socket_path,
         )
+        with contextlib.suppress(OSError):
+            os.chmod(socket_path, 0o666)
         print(f"ASGI server listening on {socket_path}", file=sys.stderr)
 
     stop_event = asyncio.Event()
