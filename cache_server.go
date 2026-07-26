@@ -1042,7 +1042,8 @@ func (s *cacheServer) handleConn(conn net.Conn) {
 			var dl *time.Time
 			if len(parts) == 3 && len(parts[2]) > 0 {
 				sec, err := strconv.ParseFloat(string(parts[2]), 64)
-				if err != nil || sec < 0 {
+				// Allow 0 (immediate) but reject NaN/Inf and cap like CSSUBSCRIBE.
+				if err != nil || math.IsNaN(sec) || math.IsInf(sec, 0) || sec < 0 || sec > maxSubscribeTimeoutSec {
 					_ = respWriteError(w, "invalid timeout")
 					return
 				}

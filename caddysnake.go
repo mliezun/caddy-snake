@@ -47,6 +47,8 @@ var caddysnake_py string
 const (
 	caddySnakeRemoteAddrHeader = "Caddy-Snake-Remote-Addr"
 	caddySnakeRemotePortHeader = "Caddy-Snake-Remote-Port"
+	// maxPythonWorkers caps process spawn at provision / per dynamic key.
+	maxPythonWorkers = 256
 )
 
 // setPythonWorkerOutboundHeaders configures the outbound request to the Python
@@ -360,6 +362,9 @@ func (f *CaddySnake) Provision(ctx caddy.Context) error {
 	if workers <= 0 {
 		workers = runtime.GOMAXPROCS(0)
 	}
+	if workers > maxPythonWorkers {
+		workers = maxPythonWorkers
+	}
 
 	startTimeout, err := parseStartTimeout(f.StartTimeout)
 	if err != nil {
@@ -521,6 +526,9 @@ func (m *CaddySnake) Validate() error {
 		w, err := strconv.Atoi(m.Workers)
 		if err != nil || w < 0 {
 			return fmt.Errorf("invalid workers value: %s", m.Workers)
+		}
+		if w > maxPythonWorkers {
+			return fmt.Errorf("workers value %d exceeds maximum of %d", w, maxPythonWorkers)
 		}
 	}
 	if _, err := parseStartTimeout(m.StartTimeout); err != nil {
