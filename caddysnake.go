@@ -148,7 +148,8 @@ type CaddySnake struct {
 	// Number of worker processes to spawn. Defaults to GOMAXPROCS (CPU count) when empty or "0".
 	Workers string `json:"workers,omitempty"`
 	// Maximum number of request-resolved dynamic apps cached by this handler.
-	// Empty or "0" keeps the cache unlimited for backward compatibility.
+	// Empty or "0" keeps the env/default cap (CADDYSNAKE_MAX_DYNAMIC_APPS, default 128).
+	// A positive value overrides that cap for this site.
 	MaxDynamicApps string `json:"max_dynamic_apps,omitempty"`
 	// How long Provision waits for each worker to become ready.
 	// Empty uses 120s; "-1", "forever", "none", "inf", or "indefinite" wait indefinitely.
@@ -1178,7 +1179,7 @@ Ensure DNS A/AAAA records are correctly set up if using a public domain for secu
 			cmd.Flags().StringP("domain", "d", "", "Domain name at which to serve the files")
 			cmd.Flags().StringP("listen", "l", "", "The address to which to bind the listener")
 			cmd.Flags().StringP("workers", "w", "0", "The number of workers to spawn")
-			cmd.Flags().String("max-dynamic-apps", "0", "Maximum cached dynamic apps (0 = unlimited)")
+			cmd.Flags().String("max-dynamic-apps", "0", "Maximum cached dynamic apps (0 = env/default cap, usually 128)")
 			cmd.Flags().String("python-path", "", "Path to the Python interpreter")
 			cmd.Flags().String("working-dir", "", "Working directory for the Python app")
 			cmd.Flags().String("venv", "", "Path to a Python virtual environment to use")

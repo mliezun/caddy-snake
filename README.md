@@ -254,7 +254,7 @@ python {
     env_file "/path/to/.env"            # Dotenv file loaded into worker env (repeatable)
     env_var VARNAME value               # Inline env var; overrides env_file (repeatable)
     workers 4                           # Number of worker processes (default: CPU count)
-    max_dynamic_apps 32                 # Cap request-resolved app instances (0 = unlimited)
+    max_dynamic_apps 32                 # Cap request-resolved app instances (0 = env/default)
     start_timeout 120s                  # Wait for worker readiness (default: 120s; -1 = indefinite)
     lifespan on|off                     # ASGI lifespan events (default: off)
     python_path "/usr/bin/python3"       # Explicit Python interpreter
@@ -346,7 +346,7 @@ When the `python` handler is provisioned, Caddy Snake starts an **in-process sha
 
 ### `max_dynamic_apps`
 
-Limits the number of cached app instances created from request-time placeholders. The default `0` preserves unlimited behavior. Set a positive limit for multi-tenant or otherwise untrusted request-derived configurations; once the limit is reached, uncached app keys are rejected until an app is evicted by autoreload or Caddy reloads.
+Optional override for the number of cached app instances created from request-time placeholders. Empty or `0` keeps the env/default cap (`CADDYSNAKE_MAX_DYNAMIC_APPS`, default **128**) and idle LRU eviction (`CADDYSNAKE_DYNAMIC_APP_IDLE_TTL`, default **30m**). A positive value overrides the cap for that site; when every slot is busy, uncached keys are rejected until capacity frees.
 
 ### `start_timeout`
 

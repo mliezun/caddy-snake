@@ -86,7 +86,7 @@ The `DynamicApp` struct manages a cache of Python app instances keyed by their r
 3. **Lazy creation** — if no app exists for the key, one is created via the factory function and cached
 4. **Double-check locking** — a fast-path read lock allows concurrent access, with a write lock only for app creation
 
-The optional `max_dynamic_apps` setting bounds the number of cached request-resolved apps. `0` keeps the cache unlimited for backward compatibility.
+The optional `max_dynamic_apps` setting can tighten the number of cached request-resolved apps. Empty or `0` keeps the env/default cap (usually 128) with idle LRU eviction.
 
 ### Example: multi-tenant by subdomain
 

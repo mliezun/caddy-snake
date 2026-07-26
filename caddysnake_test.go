@@ -212,6 +212,45 @@ func TestPathWithinDir(t *testing.T) {
 	}
 }
 
+func TestDynamicAppHandleRequest_ReleasesInUseOnPanic(t *testing.T) {
+	d, err := NewDynamicApp("main:app", "/home/test", "", nil, nil,
+		func(module, dir, venv string, envFiles []string, envVars map[string]string) (AppServer, error) {
+			return &mockAppServer{
+				onHandleRequest: func(w http.ResponseWriter, r *http.Request) error {
+					panic("boom")
+				},
+			}, nil
+		},
+		zap.NewNop(),
+		false,
+		nil,
+		1,
+	)
+	if err != nil {
+		t.Fatalf("NewDynamicApp: %v", err)
+	}
+	defer d.Cleanup()
+
+	func() {
+		defer func() {
+			if recover() == nil {
+				t.Fatal("expected panic from HandleRequest")
+			}
+		}()
+		_ = d.HandleRequest(
+			&mockResponseWriter{headers: make(http.Header)},
+			(&http.Request{}).WithContext(context.Background()),
+		)
+	}()
+
+	d.mu.RLock()
+	remaining := len(d.inUse)
+	d.mu.RUnlock()
+	if remaining != 0 {
+		t.Fatalf("expected inUse cleared after panic, got %d entries: %v", remaining, d.inUse)
+	}
+}
+
 func TestDynamicAppCleanup(t *testing.T) {
 	var cleanupCount int
 	d, _ := NewDynamicApp("main:app", "/home/test", "", nil, nil,

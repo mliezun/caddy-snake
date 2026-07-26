@@ -28,7 +28,7 @@ import click
 @click.option(
     "--max-dynamic-apps",
     default="0",
-    help="Maximum cached dynamic apps (default: 0, unlimited)",
+    help="Maximum cached dynamic apps (0 = env/default cap, usually 128)",
 )
 @click.option("--python-path", help="Path to the Python interpreter")
 @click.option("--working-dir", help="Working directory for the Python app")

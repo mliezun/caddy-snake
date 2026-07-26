@@ -714,9 +714,10 @@ func (d *DynamicApp) HandleRequest(w http.ResponseWriter, r *http.Request) error
 		if cur, ok := d.apps[key]; ok && cur == app {
 			d.inUse[key]++
 			d.mu.Unlock()
-			err := app.HandleRequest(w, r)
-			d.releaseApp(key)
-			return err
+			// defer so a panic in the tenant handler cannot permanently pin the key
+			// out of idle/LRU eviction.
+			defer d.releaseApp(key)
+			return app.HandleRequest(w, r)
 		}
 		d.mu.Unlock()
 		// Evicted between lookup and pin; retry get-or-create.
