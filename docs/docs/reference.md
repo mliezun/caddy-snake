@@ -317,7 +317,7 @@ python {
 
 **Platform:** Linux only in v1. Not supported on Windows.
 
-See also: [isolation design notes](../design/isolation.md).
+See also: [isolation design notes](isolation.md).
 
 ---
 
