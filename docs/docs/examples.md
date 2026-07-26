@@ -373,7 +373,7 @@ http://localhost:9080 {
 }
 ```
 
-Now when you edit `main.py`, the app reloads automatically — no need to restart Caddy. If you introduce a syntax error, requests will return HTTP 500 until you fix the code.
+Now when you edit `main.py`, the app reloads automatically — no need to restart Caddy. If you introduce a syntax error, requests will return HTTP 503 until you fix the code.
 
 :::note
 Changes are debounced (500ms) to handle rapid edits.

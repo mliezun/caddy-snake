@@ -351,7 +351,14 @@ func (f *CaddySnake) Provision(ctx caddy.Context) error {
 		}
 	}()
 
-	workers, _ := strconv.Atoi(f.Workers)
+	workers := 0
+	if f.Workers != "" {
+		var parseErr error
+		workers, parseErr = strconv.Atoi(f.Workers)
+		if parseErr != nil || workers < 0 {
+			return fmt.Errorf("invalid workers value %q: must be a non-negative integer", f.Workers)
+		}
+	}
 	if workers <= 0 {
 		workers = runtime.GOMAXPROCS(0)
 	}
@@ -382,36 +389,32 @@ func (f *CaddySnake) Provision(ctx caddy.Context) error {
 	envFiles := cloneEnvFiles(f.EnvFiles)
 	envVars := cloneEnvVars(f.EnvVars)
 
-	if f.ModuleWsgi != "" {
-		rt := effectivePythonRuntime("wsgi", f.Runtime)
-		f.app, err = NewPythonWorkerGroup("wsgi", f.ModuleWsgi, f.WorkingDir, f.VenvPath, f.Lifespan, rt, workers, pythonBin, cacheAddr, envFiles, envVars, startTimeout, f.logger)
-		if err != nil {
-			return err
-		}
-		if f.Lifespan != "" {
+	iface, module, err := f.pythonInterfaceAndModule()
+	if err != nil {
+		return err
+	}
+	lifespan := ""
+	if iface == "asgi" {
+		lifespan = f.Lifespan
+	} else if f.Lifespan != "" {
+		if iface == "wsgi" {
 			f.logger.Warn("lifespan attribute is ignored in WSGI mode", zap.String("lifespan", f.Lifespan))
-		}
-		f.logger.Info("serving wsgi app", zap.String("module_wsgi", f.ModuleWsgi), zap.String("working_dir", f.WorkingDir), zap.String("venv_path", f.VenvPath), zap.String("python", pythonBin), zap.String("runtime", rt))
-	} else if f.ModuleAsgi != "" {
-		rt := effectivePythonRuntime("asgi", f.Runtime)
-		f.app, err = NewPythonWorkerGroup("asgi", f.ModuleAsgi, f.WorkingDir, f.VenvPath, f.Lifespan, rt, workers, pythonBin, cacheAddr, envFiles, envVars, startTimeout, f.logger)
-		if err != nil {
-			return err
-		}
-		f.logger.Info("serving asgi app", zap.String("module_asgi", f.ModuleAsgi), zap.String("working_dir", f.WorkingDir), zap.String("venv_path", f.VenvPath), zap.String("python", pythonBin), zap.String("runtime", rt))
-	} else if f.ModuleEsgi != "" {
-		rt := effectivePythonRuntime("esgi", f.Runtime)
-		f.app, err = NewPythonWorkerGroup("esgi", f.ModuleEsgi, f.WorkingDir, f.VenvPath, "", rt, workers, pythonBin, cacheAddr, envFiles, envVars, startTimeout, f.logger)
-		if err != nil {
-			return err
-		}
-		if f.Lifespan != "" {
+		} else {
 			f.logger.Warn("lifespan is for ASGI only; ignored in ESGI mode", zap.String("lifespan", f.Lifespan))
 		}
-		f.logger.Info("serving esgi app", zap.String("module_esgi", f.ModuleEsgi), zap.String("working_dir", f.WorkingDir), zap.String("venv_path", f.VenvPath), zap.String("python", pythonBin), zap.String("runtime", rt))
-	} else {
-		return errors.New("a wsgi, asgi, or esgi app must be specified")
 	}
+	rt := effectivePythonRuntime(iface, f.Runtime)
+	f.app, err = NewPythonWorkerGroup(iface, module, f.WorkingDir, f.VenvPath, lifespan, rt, workers, pythonBin, cacheAddr, envFiles, envVars, startTimeout, f.logger)
+	if err != nil {
+		return err
+	}
+	f.logger.Info("serving "+iface+" app",
+		zap.String("module_"+iface, module),
+		zap.String("working_dir", f.WorkingDir),
+		zap.String("venv_path", f.VenvPath),
+		zap.String("python", pythonBin),
+		zap.String("runtime", rt),
+	)
 
 	if f.Autoreload == "on" {
 		watchDir := f.WorkingDir
@@ -423,22 +426,8 @@ func (f *CaddySnake) Provision(ctx caddy.Context) error {
 			return fmt.Errorf("autoreload: %w", absErr)
 		}
 
-		var factory func() (AppServer, error)
-		if f.ModuleWsgi != "" {
-			rt := effectivePythonRuntime("wsgi", f.Runtime)
-			factory = func() (AppServer, error) {
-				return NewPythonWorkerGroup("wsgi", f.ModuleWsgi, f.WorkingDir, f.VenvPath, f.Lifespan, rt, workers, pythonBin, cacheAddr, envFiles, envVars, startTimeout, f.logger)
-			}
-		} else if f.ModuleAsgi != "" {
-			rt := effectivePythonRuntime("asgi", f.Runtime)
-			factory = func() (AppServer, error) {
-				return NewPythonWorkerGroup("asgi", f.ModuleAsgi, f.WorkingDir, f.VenvPath, f.Lifespan, rt, workers, pythonBin, cacheAddr, envFiles, envVars, startTimeout, f.logger)
-			}
-		} else {
-			rt := effectivePythonRuntime("esgi", f.Runtime)
-			factory = func() (AppServer, error) {
-				return NewPythonWorkerGroup("esgi", f.ModuleEsgi, f.WorkingDir, f.VenvPath, "", rt, workers, pythonBin, cacheAddr, envFiles, envVars, startTimeout, f.logger)
-			}
+		factory := func() (AppServer, error) {
+			return NewPythonWorkerGroup(iface, module, f.WorkingDir, f.VenvPath, lifespan, rt, workers, pythonBin, cacheAddr, envFiles, envVars, startTimeout, f.logger)
 		}
 
 		// Keep Caddy running on reload errors; failed app serves 503 until recovery.
@@ -452,6 +441,20 @@ func (f *CaddySnake) Provision(ctx caddy.Context) error {
 	return nil
 }
 
+// pythonInterfaceAndModule returns the configured worker interface and module path.
+func (f *CaddySnake) pythonInterfaceAndModule() (iface, module string, err error) {
+	switch {
+	case f.ModuleWsgi != "":
+		return "wsgi", f.ModuleWsgi, nil
+	case f.ModuleAsgi != "":
+		return "asgi", f.ModuleAsgi, nil
+	case f.ModuleEsgi != "":
+		return "esgi", f.ModuleEsgi, nil
+	default:
+		return "", "", errors.New("a wsgi, asgi, or esgi app must be specified")
+	}
+}
+
 // provisionDynamic sets up the module in dynamic mode where Caddy placeholders
 // in module_wsgi/module_asgi/module_esgi, working_dir, or venv are resolved per-request.
 func (f *CaddySnake) provisionDynamic(workers int, cacheAddr string, startTimeout time.Duration) error {
@@ -461,65 +464,34 @@ func (f *CaddySnake) provisionDynamic(workers int, cacheAddr string, startTimeou
 	envVarPatterns := cloneEnvVars(f.EnvVars)
 	logger := f.logger
 
-	if f.ModuleWsgi != "" {
-		lifespan := f.Lifespan
-		rt := effectivePythonRuntime("wsgi", f.Runtime)
-		factory := func(module, dir, venv string, envFiles []string, envVars map[string]string) (AppServer, error) {
-			pythonBin := resolvePythonInterpreter(pythonPath, venv)
-			return NewPythonWorkerGroup("wsgi", module, dir, venv, lifespan, rt, workers, pythonBin, cacheAddr, envFiles, envVars, startTimeout, logger)
-		}
-		var err error
-		f.app, err = NewDynamicApp(f.ModuleWsgi, f.WorkingDir, f.VenvPath, envFilePatterns, envVarPatterns, factory, f.logger, autoreload, nil)
-		if err != nil {
-			return err
-		}
-		if f.Lifespan != "" {
-			f.logger.Warn("lifespan attribute is ignored in WSGI mode", zap.String("lifespan", f.Lifespan))
-		}
-		f.logger.Info("serving dynamic wsgi app",
-			zap.String("module_wsgi", f.ModuleWsgi),
-			zap.String("working_dir", f.WorkingDir),
-			zap.String("venv_path", f.VenvPath),
-		)
-	} else if f.ModuleAsgi != "" {
-		lifespan := f.Lifespan
-		rt := effectivePythonRuntime("asgi", f.Runtime)
-		factory := func(module, dir, venv string, envFiles []string, envVars map[string]string) (AppServer, error) {
-			pythonBin := resolvePythonInterpreter(pythonPath, venv)
-			return NewPythonWorkerGroup("asgi", module, dir, venv, lifespan, rt, workers, pythonBin, cacheAddr, envFiles, envVars, startTimeout, logger)
-		}
-		var err error
-		f.app, err = NewDynamicApp(f.ModuleAsgi, f.WorkingDir, f.VenvPath, envFilePatterns, envVarPatterns, factory, f.logger, autoreload, nil)
-		if err != nil {
-			return err
-		}
-		f.logger.Info("serving dynamic asgi app",
-			zap.String("module_asgi", f.ModuleAsgi),
-			zap.String("working_dir", f.WorkingDir),
-			zap.String("venv_path", f.VenvPath),
-		)
-	} else if f.ModuleEsgi != "" {
-		rt := effectivePythonRuntime("esgi", f.Runtime)
-		factory := func(module, dir, venv string, envFiles []string, envVars map[string]string) (AppServer, error) {
-			pythonBin := resolvePythonInterpreter(pythonPath, venv)
-			return NewPythonWorkerGroup("esgi", module, dir, venv, "", rt, workers, pythonBin, cacheAddr, envFiles, envVars, startTimeout, logger)
-		}
-		var err error
-		f.app, err = NewDynamicApp(f.ModuleEsgi, f.WorkingDir, f.VenvPath, envFilePatterns, envVarPatterns, factory, f.logger, autoreload, nil)
-		if err != nil {
-			return err
-		}
-		if f.Lifespan != "" {
-			f.logger.Warn("lifespan is for ASGI only; ignored in dynamic ESGI mode", zap.String("lifespan", f.Lifespan))
-		}
-		f.logger.Info("serving dynamic esgi app",
-			zap.String("module_esgi", f.ModuleEsgi),
-			zap.String("working_dir", f.WorkingDir),
-			zap.String("venv_path", f.VenvPath),
-		)
-	} else {
+	iface, modulePattern, err := f.pythonInterfaceAndModule()
+	if err != nil {
 		return errors.New("a wsgi, asgi, or esgi app must be specified for dynamic mode")
 	}
+	lifespan := ""
+	if iface == "asgi" {
+		lifespan = f.Lifespan
+	} else if f.Lifespan != "" {
+		if iface == "wsgi" {
+			f.logger.Warn("lifespan attribute is ignored in WSGI mode", zap.String("lifespan", f.Lifespan))
+		} else {
+			f.logger.Warn("lifespan is for ASGI only; ignored in dynamic ESGI mode", zap.String("lifespan", f.Lifespan))
+		}
+	}
+	rt := effectivePythonRuntime(iface, f.Runtime)
+	factory := func(module, dir, venv string, envFiles []string, envVars map[string]string) (AppServer, error) {
+		pythonBin := resolvePythonInterpreter(pythonPath, venv)
+		return NewPythonWorkerGroup(iface, module, dir, venv, lifespan, rt, workers, pythonBin, cacheAddr, envFiles, envVars, startTimeout, logger)
+	}
+	f.app, err = NewDynamicApp(modulePattern, f.WorkingDir, f.VenvPath, envFilePatterns, envVarPatterns, factory, f.logger, autoreload, nil)
+	if err != nil {
+		return err
+	}
+	f.logger.Info("serving dynamic "+iface+" app",
+		zap.String("module_"+iface, modulePattern),
+		zap.String("working_dir", f.WorkingDir),
+		zap.String("venv_path", f.VenvPath),
+	)
 	return nil
 }
 
@@ -663,6 +635,47 @@ func writeCaddysnakePyBundle() (scriptPath, bundleDir string, err error) {
 	return scriptPath, bundleDir, nil
 }
 
+// Shared worker script bundle: one temp copy of caddysnake.py is reused across
+// worker groups (important for dynamic multi-tenant apps).
+type pyBundle struct {
+	scriptPath string
+	dir        string
+	refs       int
+}
+
+var (
+	sharedBundleMu sync.Mutex
+	sharedBundle   *pyBundle
+)
+
+func acquireCaddysnakePyBundle() (scriptPath, bundleDir string, err error) {
+	sharedBundleMu.Lock()
+	defer sharedBundleMu.Unlock()
+	if sharedBundle != nil {
+		sharedBundle.refs++
+		return sharedBundle.scriptPath, sharedBundle.dir, nil
+	}
+	scriptPath, bundleDir, err = writeCaddysnakePyBundle()
+	if err != nil {
+		return "", "", err
+	}
+	sharedBundle = &pyBundle{scriptPath: scriptPath, dir: bundleDir, refs: 1}
+	return scriptPath, bundleDir, nil
+}
+
+func releaseCaddysnakePyBundle() {
+	sharedBundleMu.Lock()
+	defer sharedBundleMu.Unlock()
+	if sharedBundle == nil {
+		return
+	}
+	sharedBundle.refs--
+	if sharedBundle.refs <= 0 {
+		_ = os.RemoveAll(sharedBundle.dir)
+		sharedBundle = nil
+	}
+}
+
 // proxyBufferPool implements httputil.BufferPool using sync.Pool to reduce GC pressure.
 type proxyBufferPool struct {
 	pool sync.Pool
@@ -782,11 +795,25 @@ func (w *PythonWorker) Start() error {
 		},
 		Transport:  w.Transport,
 		BufferPool: sharedProxyBufferPool,
+		ErrorHandler: func(rw http.ResponseWriter, req *http.Request, err error) {
+			if w.logger != nil {
+				w.logger.Error("python worker proxy error",
+					zap.String("app", w.App),
+					zap.String("interface", w.Interface),
+					zap.Error(err),
+				)
+			}
+			rw.WriteHeader(http.StatusBadGateway)
+		},
 	}
 
 	workingDir := w.WorkingDir
 	if workingDir == "" {
-		workingDir, _ = os.Getwd()
+		cwd, cwdErr := os.Getwd()
+		if cwdErr != nil {
+			return fmt.Errorf("working directory: %w", cwdErr)
+		}
+		workingDir = cwd
 	}
 
 	args := []string{
@@ -1043,7 +1070,7 @@ type PythonWorkerGroup struct {
 }
 
 func NewPythonWorkerGroup(iface, app, workingDir, venv, lifespan, runtime string, count int, pythonBin, cacheAddr string, envFiles []string, envVars map[string]string, startTimeout time.Duration, logger *zap.Logger) (*PythonWorkerGroup, error) {
-	scriptPath, bundleDir, err := writeCaddysnakePyBundle()
+	scriptPath, bundleDir, err := acquireCaddysnakePyBundle()
 	if err != nil {
 		return nil, fmt.Errorf("failed to write worker bundle: %w", err)
 	}
@@ -1077,7 +1104,8 @@ func (wg *PythonWorkerGroup) Cleanup() error {
 		}
 	}
 	if wg.BundleDir != "" {
-		_ = os.RemoveAll(wg.BundleDir)
+		releaseCaddysnakePyBundle()
+		wg.BundleDir = ""
 	}
 	return errors.Join(errs...)
 }
@@ -1346,63 +1374,4 @@ func pythonServer(fs caddycmd.Flags) (int, error) {
 	log.Printf("Serving Python app on %s", listen)
 
 	select {}
-}
-
-// findSitePackagesInVenv searches for the site-packages directory in a given venv.
-func findSitePackagesInVenv(venvPath string) (string, error) {
-	var sitePackagesPath string
-	if runtime.GOOS == "windows" {
-		sitePackagesPath = filepath.Join(venvPath, "Lib\\site-packages")
-	} else {
-		libPath := filepath.Join(venvPath, "lib")
-		pythonDir, err := findPythonDirectory(libPath)
-		if err != nil {
-			return "", err
-		}
-		sitePackagesPath = filepath.Join(libPath, pythonDir, "site-packages")
-	}
-	fileInfo, err := os.Stat(sitePackagesPath)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return "", fmt.Errorf("site-packages directory does not exist in: %s", sitePackagesPath)
-		}
-		return "", err
-	}
-	if !fileInfo.IsDir() {
-		return "", fmt.Errorf("found site-packages is not a directory: %s", sitePackagesPath)
-	}
-	return sitePackagesPath, nil
-}
-
-// findWorkingDirectory checks if the directory exists and returns the absolute path
-func findWorkingDirectory(workingDir string) (string, error) {
-	workingDirAbs, err := filepath.Abs(workingDir)
-	if err != nil {
-		return "", err
-	}
-	fileInfo, err := os.Stat(workingDirAbs)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return "", fmt.Errorf("working_dir directory does not exist in: %s", workingDirAbs)
-		}
-		return "", err
-	}
-	if !fileInfo.IsDir() {
-		return "", fmt.Errorf("working_dir is not a directory: %s", workingDirAbs)
-	}
-	return workingDirAbs, nil
-}
-
-// findPythonDirectory searches for a directory that matches "python3.*" inside the given libPath.
-func findPythonDirectory(libPath string) (string, error) {
-	entries, err := os.ReadDir(libPath)
-	if err != nil {
-		return "", fmt.Errorf("unable to read venv lib directory: %w", err)
-	}
-	for _, e := range entries {
-		if e.IsDir() && strings.HasPrefix(e.Name(), "python3") {
-			return e.Name(), nil
-		}
-	}
-	return "", errors.New("unable to find a python3.* directory in the venv")
 }
