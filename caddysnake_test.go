@@ -55,6 +55,12 @@ func TestContainsPlaceholder(t *testing.T) {
 }
 
 func TestValidateResolvedValues(t *testing.T) {
+	tempDir := t.TempDir()
+	tempVenv := t.TempDir()
+	doubleDotDir := filepath.Join(tempDir, "my..app")
+	if err := os.MkdirAll(doubleDotDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
 	tests := []struct {
 		name    string
 		module  string
@@ -63,17 +69,18 @@ func TestValidateResolvedValues(t *testing.T) {
 		wantErr bool
 	}{
 		{"valid module only", "main:app", "", "", false},
-		{"valid absolute dir and venv", "main:app", "/srv/apps/site", "/srv/venvs/site", false},
-		{"valid relative dir", "main:app", "apps/site", "", false},
-		{"valid dotted module", "pkg.sub:app", "/srv/apps", "", false},
+		{"valid absolute dir and venv", "main:app", tempDir, tempVenv, false},
+		{"valid relative dir", "main:app", tempDir, "", false},
+		{"valid dotted module", "pkg.sub:app", tempDir, "", false},
 		{"invalid module shell injection", "main:app; rm -rf /", "", "", true},
 		{"invalid module missing attr", "main", "", "", true},
 		{"dir traversal", "main:app", "/srv/apps/../../etc", "", true},
 		{"dir traversal relative", "main:app", "../secrets", "", true},
 		{"dir traversal backslash", "main:app", `apps\..\..\secrets`, "", true},
-		{"venv traversal", "main:app", "/srv/apps", "/srv/venvs/../../etc", true},
-		{"dot-prefixed dir allowed", "main:app", "/srv/apps/.hidden", "", false},
-		{"double-dot in name allowed", "main:app", "/srv/apps/my..app", "", false},
+		{"venv traversal", "main:app", tempDir, "/srv/venvs/../../etc", true},
+		{"dot-prefixed dir allowed", "main:app", tempDir, "", false},
+		{"double-dot in name allowed", "main:app", doubleDotDir, "", false},
+		{"missing dir", "main:app", filepath.Join(tempDir, "does-not-exist"), "", true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -93,7 +100,7 @@ func TestDynamicAppResolveWithoutReplacer(t *testing.T) {
 		},
 		zap.NewNop(),
 		false,
-		nil,
+		nil, defaultDynamicAppLimits(),
 	)
 
 	r := &http.Request{}
@@ -110,7 +117,7 @@ func TestDynamicAppResolveWithoutReplacer(t *testing.T) {
 	if venv != "/venvs/{host.labels.0}" {
 		t.Errorf("expected venv '/venvs/{host.labels.0}', got %q", venv)
 	}
-	expectedKey := "main:app|/home/{host.labels.0}|/venvs/{host.labels.0}||"
+	expectedKey := dynamicAppCacheKey("main:app", "/home/{host.labels.0}", "/venvs/{host.labels.0}", nil, nil)
 	if key != expectedKey {
 		t.Errorf("expected key %q, got %q", expectedKey, key)
 	}
@@ -119,18 +126,20 @@ func TestDynamicAppResolveWithoutReplacer(t *testing.T) {
 func TestDynamicAppGetOrCreate(t *testing.T) {
 	var createCount int
 	mockApp := &mockAppServer{}
+	dir := mkdirDynamicTestDir(t, "test")
+	other := mkdirDynamicTestDir(t, "other")
 
-	d, _ := NewDynamicApp("main:app", "/home/test", "", nil, nil,
+	d, _ := NewDynamicApp("main:app", dir, "", nil, nil,
 		func(module, dir, venv string, envFiles []string, envVars map[string]string) (AppServer, error) {
 			createCount++
 			return mockApp, nil
 		},
 		zap.NewNop(),
 		false,
-		nil,
+		nil, defaultDynamicAppLimits(),
 	)
 
-	app1, err := d.getOrCreateApp("key1", "main:app", "/home/test", "", nil, nil)
+	app1, err := d.getOrCreateApp("key1", "main:app", dir, "", nil, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -141,7 +150,7 @@ func TestDynamicAppGetOrCreate(t *testing.T) {
 		t.Errorf("expected factory to be called once, got %d", createCount)
 	}
 
-	app2, err := d.getOrCreateApp("key1", "main:app", "/home/test", "", nil, nil)
+	app2, err := d.getOrCreateApp("key1", "main:app", dir, "", nil, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -152,7 +161,7 @@ func TestDynamicAppGetOrCreate(t *testing.T) {
 		t.Errorf("expected factory to still be called once, got %d", createCount)
 	}
 
-	_, err = d.getOrCreateApp("key2", "main:app", "/home/other", "", nil, nil)
+	_, err = d.getOrCreateApp("key2", "main:app", other, "", nil, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -163,17 +172,19 @@ func TestDynamicAppGetOrCreate(t *testing.T) {
 
 func TestDynamicAppCleanup(t *testing.T) {
 	var cleanupCount int
-	d, _ := NewDynamicApp("main:app", "/home/test", "", nil, nil,
+	dirA := mkdirDynamicTestDir(t, "a")
+	dirB := mkdirDynamicTestDir(t, "b")
+	d, _ := NewDynamicApp("main:app", dirA, "", nil, nil,
 		func(module, dir, venv string, envFiles []string, envVars map[string]string) (AppServer, error) {
 			return &mockAppServer{onCleanup: func() { cleanupCount++ }}, nil
 		},
 		zap.NewNop(),
 		false,
-		nil,
+		nil, defaultDynamicAppLimits(),
 	)
 
-	_, _ = d.getOrCreateApp("key1", "main:app", "/home/a", "", nil, nil)
-	_, _ = d.getOrCreateApp("key2", "main:app", "/home/b", "", nil, nil)
+	_, _ = d.getOrCreateApp("key1", "main:app", dirA, "", nil, nil)
+	_, _ = d.getOrCreateApp("key2", "main:app", dirB, "", nil, nil)
 
 	err := d.Cleanup()
 	if err != nil {
@@ -210,6 +221,40 @@ func (m *mockAppServer) Cleanup() error {
 		m.onCleanup()
 	}
 	return m.cleanupErr
+}
+
+func mkdirDynamicTestDir(t *testing.T, elem ...string) string {
+	t.Helper()
+	p := filepath.Join(append([]string{t.TempDir()}, elem...)...)
+	if err := os.MkdirAll(p, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	abs, err := filepath.Abs(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return abs
+}
+
+func TestValidateResolvedWorkingDirectory(t *testing.T) {
+	tempDir := t.TempDir()
+
+	if err := validateResolvedValues("main:app", tempDir, ""); err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+
+	nonExistent := tempDir + "-doesnotexist"
+	err := validateResolvedValues("main:app", nonExistent, "")
+	if err == nil || !strings.Contains(err.Error(), "working directory does not exist") {
+		t.Errorf("expected error for non-existent directory, got: %v", err)
+	}
+
+	filePath := filepath.Join(tempDir, "afile.txt")
+	os.WriteFile(filePath, []byte("test"), 0644)
+	err = validateResolvedValues("main:app", filePath, "")
+	if err == nil || !strings.Contains(err.Error(), "working directory is not a directory") {
+		t.Errorf("expected error for file, got: %v", err)
+	}
 }
 
 // ====================== UnmarshalCaddyfile Tests ======================
@@ -900,17 +945,18 @@ func TestWriteCaddysnakePyBundle(t *testing.T) {
 func TestDynamicAppGetOrCreate_FactoryError(t *testing.T) {
 	factoryErr := errors.New("import failed")
 	calls := 0
-	d, _ := NewDynamicApp("main:app", "/home/test", "", nil, nil,
+	dir := mkdirDynamicTestDir(t, "test")
+	d, _ := NewDynamicApp("main:app", dir, "", nil, nil,
 		func(module, dir, venv string, envFiles []string, envVars map[string]string) (AppServer, error) {
 			calls++
 			return nil, factoryErr
 		},
 		zap.NewNop(),
 		false,
-		nil,
+		nil, defaultDynamicAppLimits(),
 	)
 
-	app, err := d.getOrCreateApp("key1", "main:app", "/home/test", "", nil, nil)
+	app, err := d.getOrCreateApp("key1", "main:app", dir, "", nil, nil)
 	if err != factoryErr {
 		t.Errorf("expected factory error, got: %v", err)
 	}
@@ -928,7 +974,7 @@ func TestDynamicAppGetOrCreate_FactoryError(t *testing.T) {
 	d.mu.RUnlock()
 
 	// Negative cache: second call must not re-invoke the factory.
-	app, err = d.getOrCreateApp("key1", "main:app", "/home/test", "", nil, nil)
+	app, err = d.getOrCreateApp("key1", "main:app", dir, "", nil, nil)
 	if err != factoryErr {
 		t.Errorf("expected cached factory error, got: %v", err)
 	}
@@ -942,17 +988,19 @@ func TestDynamicAppGetOrCreate_FactoryError(t *testing.T) {
 
 func TestDynamicAppCleanup_WithErrors(t *testing.T) {
 	cleanupErr := errors.New("cleanup failed")
-	d, _ := NewDynamicApp("main:app", "/home/test", "", nil, nil,
+	dirA := mkdirDynamicTestDir(t, "a")
+	dirB := mkdirDynamicTestDir(t, "b")
+	d, _ := NewDynamicApp("main:app", dirA, "", nil, nil,
 		func(module, dir, venv string, envFiles []string, envVars map[string]string) (AppServer, error) {
 			return &mockAppServer{cleanupErr: cleanupErr}, nil
 		},
 		zap.NewNop(),
 		false,
-		nil,
+		nil, defaultDynamicAppLimits(),
 	)
 
-	_, _ = d.getOrCreateApp("key1", "main:app", "/home/a", "", nil, nil)
-	_, _ = d.getOrCreateApp("key2", "main:app", "/home/b", "", nil, nil)
+	_, _ = d.getOrCreateApp("key1", "main:app", dirA, "", nil, nil)
+	_, _ = d.getOrCreateApp("key2", "main:app", dirB, "", nil, nil)
 
 	err := d.Cleanup()
 	if err == nil {
@@ -971,7 +1019,8 @@ func TestDynamicAppHandleRequest(t *testing.T) {
 			return nil
 		},
 	}
-	d, _ := NewDynamicApp("main:app", "/home/test", "", nil, nil,
+	dir := mkdirDynamicTestDir(t, "test")
+	d, _ := NewDynamicApp("main:app", dir, "", nil, nil,
 		func(module, dir, venv string, envFiles []string, envVars map[string]string) (AppServer, error) {
 			handledModule = module
 			handledDir = dir
@@ -979,7 +1028,7 @@ func TestDynamicAppHandleRequest(t *testing.T) {
 		},
 		zap.NewNop(),
 		false,
-		nil,
+		nil, defaultDynamicAppLimits(),
 	)
 
 	w := &mockResponseWriter{headers: make(http.Header)}
@@ -993,20 +1042,21 @@ func TestDynamicAppHandleRequest(t *testing.T) {
 	if handledModule != "main:app" {
 		t.Errorf("expected module 'main:app', got %q", handledModule)
 	}
-	if handledDir != "/home/test" {
-		t.Errorf("expected dir '/home/test', got %q", handledDir)
+	if handledDir != dir {
+		t.Errorf("expected dir %q, got %q", dir, handledDir)
 	}
 }
 
 func TestDynamicAppHandleRequest_FactoryError(t *testing.T) {
 	factoryErr := errors.New("import failed")
-	d, _ := NewDynamicApp("main:app", "/home/test", "", nil, nil,
+	dir := mkdirDynamicTestDir(t, "test")
+	d, _ := NewDynamicApp("main:app", dir, "", nil, nil,
 		func(module, dir, venv string, envFiles []string, envVars map[string]string) (AppServer, error) {
 			return nil, factoryErr
 		},
 		zap.NewNop(),
 		false,
-		nil,
+		nil, defaultDynamicAppLimits(),
 	)
 
 	w := &mockResponseWriter{headers: make(http.Header)}
@@ -1028,13 +1078,14 @@ func TestDynamicAppHandleRequest_AutoreloadFactoryError_TerminatesWhenExitFuncSe
 		close(exitCalled)
 	}
 
-	d, _ := NewDynamicApp("main:app", "/home/test", "", nil, nil,
+	dir := mkdirDynamicTestDir(t, "test")
+	d, _ := NewDynamicApp("main:app", dir, "", nil, nil,
 		func(module, dir, venv string, envFiles []string, envVars map[string]string) (AppServer, error) {
 			return nil, factoryErr
 		},
 		zap.NewNop(),
 		true, // autoreload
-		exitFunc,
+		exitFunc, defaultDynamicAppLimits(),
 	)
 	defer d.Cleanup()
 
@@ -1061,7 +1112,7 @@ func TestDynamicAppResolveWithReplacer(t *testing.T) {
 		},
 		zap.NewNop(),
 		false,
-		nil,
+		nil, defaultDynamicAppLimits(),
 	)
 
 	repl := caddy.NewReplacer()
@@ -1080,7 +1131,7 @@ func TestDynamicAppResolveWithReplacer(t *testing.T) {
 	if venv != "" {
 		t.Errorf("expected empty venv, got %q", venv)
 	}
-	expectedKey := "main:app|/home/sub1.example.com|||"
+	expectedKey := dynamicAppCacheKey("main:app", "/home/sub1.example.com", "", nil, nil)
 	if key != expectedKey {
 		t.Errorf("expected key %q, got %q", expectedKey, key)
 	}
@@ -1093,7 +1144,7 @@ func TestDynamicAppResolveMultiplePlaceholders(t *testing.T) {
 		},
 		zap.NewNop(),
 		false,
-		nil,
+		nil, defaultDynamicAppLimits(),
 	)
 
 	repl := caddy.NewReplacer()
@@ -1113,7 +1164,7 @@ func TestDynamicAppResolveMultiplePlaceholders(t *testing.T) {
 	if venv != "/venvs/tenant1" {
 		t.Errorf("expected venv '/venvs/tenant1', got %q", venv)
 	}
-	expectedKey := "mymod:app|/home/tenant1|/venvs/tenant1||"
+	expectedKey := dynamicAppCacheKey("mymod:app", "/home/tenant1", "/venvs/tenant1", nil, nil)
 	if key != expectedKey {
 		t.Errorf("expected key %q, got %q", expectedKey, key)
 	}
@@ -1122,7 +1173,8 @@ func TestDynamicAppResolveMultiplePlaceholders(t *testing.T) {
 func TestDynamicAppConcurrentAccess(t *testing.T) {
 	var mu sync.Mutex
 	createCount := 0
-	d, _ := NewDynamicApp("main:app", "/home/test", "", nil, nil,
+	dir := mkdirDynamicTestDir(t, "test")
+	d, _ := NewDynamicApp("main:app", dir, "", nil, nil,
 		func(module, dir, venv string, envFiles []string, envVars map[string]string) (AppServer, error) {
 			mu.Lock()
 			createCount++
@@ -1131,7 +1183,7 @@ func TestDynamicAppConcurrentAccess(t *testing.T) {
 		},
 		zap.NewNop(),
 		false,
-		nil,
+		nil, defaultDynamicAppLimits(),
 	)
 
 	const goroutines = 50
@@ -1170,18 +1222,22 @@ func TestDynamicAppConcurrentDifferentKeys(t *testing.T) {
 		},
 		zap.NewNop(),
 		false,
-		nil,
+		nil, defaultDynamicAppLimits(),
 	)
 
 	const goroutines = 10
 	errs := make(chan error, goroutines)
+	dirs := make([]string, goroutines)
+	for i := 0; i < goroutines; i++ {
+		dirs[i] = mkdirDynamicTestDir(t, fmt.Sprintf("dir%d", i))
+	}
 	for i := 0; i < goroutines; i++ {
 		key := fmt.Sprintf("key%d", i)
-		dir := fmt.Sprintf("/home/dir%d", i)
+		dirPath := dirs[i]
 		go func(k, dirPath string) {
 			_, err := d.getOrCreateApp(k, "main:app", dirPath, "", nil, nil)
 			errs <- err
-		}(key, dir)
+		}(key, dirPath)
 	}
 
 	for i := 0; i < goroutines; i++ {
@@ -1213,22 +1269,26 @@ func TestDynamicAppEvictsLRUWhenAtCapacity(t *testing.T) {
 		},
 		zap.NewNop(),
 		false,
-		nil,
+		nil, defaultDynamicAppLimits(),
 	)
 	d.maxApps = 2
 	d.idleTTL = time.Hour
 	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	d.now = func() time.Time { return base }
 
-	if _, err := d.getOrCreateApp("a", "main:app", "/home/a", "", nil, nil); err != nil {
+	dirA := mkdirDynamicTestDir(t, "a")
+	dirB := mkdirDynamicTestDir(t, "b")
+	dirC := mkdirDynamicTestDir(t, "c")
+
+	if _, err := d.getOrCreateApp("a", "main:app", dirA, "", nil, nil); err != nil {
 		t.Fatalf("create a: %v", err)
 	}
 	d.now = func() time.Time { return base.Add(time.Minute) }
-	if _, err := d.getOrCreateApp("b", "main:app", "/home/b", "", nil, nil); err != nil {
+	if _, err := d.getOrCreateApp("b", "main:app", dirB, "", nil, nil); err != nil {
 		t.Fatalf("create b: %v", err)
 	}
 	d.now = func() time.Time { return base.Add(2 * time.Minute) }
-	if _, err := d.getOrCreateApp("c", "main:app", "/home/c", "", nil, nil); err != nil {
+	if _, err := d.getOrCreateApp("c", "main:app", dirC, "", nil, nil); err != nil {
 		t.Fatalf("create c: %v", err)
 	}
 
@@ -1256,18 +1316,21 @@ func TestDynamicAppExpiresIdleApps(t *testing.T) {
 		},
 		zap.NewNop(),
 		false,
-		nil,
+		nil, defaultDynamicAppLimits(),
 	)
 	d.maxApps = 10
 	d.idleTTL = 5 * time.Minute
 	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	d.now = func() time.Time { return base }
 
-	if _, err := d.getOrCreateApp("old", "main:app", "/home/old", "", nil, nil); err != nil {
+	oldDir := mkdirDynamicTestDir(t, "old")
+	newDir := mkdirDynamicTestDir(t, "new")
+
+	if _, err := d.getOrCreateApp("old", "main:app", oldDir, "", nil, nil); err != nil {
 		t.Fatalf("create old: %v", err)
 	}
 	d.now = func() time.Time { return base.Add(10 * time.Minute) }
-	if _, err := d.getOrCreateApp("new", "main:app", "/home/new", "", nil, nil); err != nil {
+	if _, err := d.getOrCreateApp("new", "main:app", newDir, "", nil, nil); err != nil {
 		t.Fatalf("create new: %v", err)
 	}
 
@@ -1417,8 +1480,9 @@ func TestUnmarshalCaddyfile_LifespanMissingArg(t *testing.T) {
 func TestDynamicAppGetOrCreate_DoubleCheckPath(t *testing.T) {
 	factoryCalls := int32(0)
 	mockApp := &mockAppServer{}
+	dir := mkdirDynamicTestDir(t, "test")
 
-	d, _ := NewDynamicApp("main:app", "/home/test", "", nil, nil,
+	d, _ := NewDynamicApp("main:app", dir, "", nil, nil,
 		func(module, dir, venv string, envFiles []string, envVars map[string]string) (AppServer, error) {
 			atomic.AddInt32(&factoryCalls, 1)
 			time.Sleep(10 * time.Millisecond)
@@ -1426,7 +1490,7 @@ func TestDynamicAppGetOrCreate_DoubleCheckPath(t *testing.T) {
 		},
 		zap.NewNop(),
 		false,
-		nil,
+		nil, defaultDynamicAppLimits(),
 	)
 
 	const goroutines = 50
@@ -1437,7 +1501,7 @@ func TestDynamicAppGetOrCreate_DoubleCheckPath(t *testing.T) {
 	for i := 0; i < goroutines; i++ {
 		go func() {
 			barrier.Wait()
-			_, err := d.getOrCreateApp("key1", "main:app", "/home/test", "", nil, nil)
+			_, err := d.getOrCreateApp("key1", "main:app", dir, "", nil, nil)
 			errs <- err
 		}()
 	}
@@ -1462,7 +1526,7 @@ func TestDynamicAppCleanup_EmptyApps(t *testing.T) {
 		},
 		zap.NewNop(),
 		false,
-		nil,
+		nil, defaultDynamicAppLimits(),
 	)
 
 	err := d.Cleanup()
@@ -1763,7 +1827,7 @@ func TestNewPythonWorkerGroup_InvalidPythonPath(t *testing.T) {
 	tempDir := t.TempDir()
 	os.WriteFile(filepath.Join(tempDir, "app.py"), []byte(minimalWSGIApp), 0644)
 
-	_, err := NewPythonWorkerGroup("wsgi", "app:app", tempDir, "", "", "sync", 1, "/nonexistent/python-not-found", "", nil, nil, 0, nil, nil)
+	_, err := NewPythonWorkerGroup("wsgi", "app:app", tempDir, "", "", "sync", 1, "/nonexistent/python-not-found", "", "", nil, nil, 0, nil, nil)
 	if err == nil {
 		t.Fatal("expected error when python path is invalid")
 	}
@@ -1786,7 +1850,7 @@ func TestPythonWorkerCleanup_Timeout(t *testing.T) {
 	tempDir := t.TempDir()
 	os.WriteFile(filepath.Join(tempDir, "app.py"), []byte(minimalWSGIAppIgnoringSIGTERM), 0644)
 
-	wg, err := NewPythonWorkerGroup("wsgi", "app:app", tempDir, "", "", "sync", 1, "python3", "", nil, nil, 0, nil, nil)
+	wg, err := NewPythonWorkerGroup("wsgi", "app:app", tempDir, "", "", "sync", 1, "python3", "", "", nil, nil, 0, nil, nil)
 	if err != nil {
 		t.Fatalf("NewPythonWorkerGroup: %v", err)
 	}
@@ -2066,7 +2130,7 @@ func TestDynamicAppResolveWithNilReplacer(t *testing.T) {
 		},
 		zap.NewNop(),
 		false,
-		nil,
+		nil, defaultDynamicAppLimits(),
 	)
 
 	ctx := context.WithValue(context.Background(), caddy.ReplacerCtxKey, (*caddy.Replacer)(nil))
@@ -2121,7 +2185,7 @@ func TestPythonWorkerGroup_LoadsAndServesWSGI(t *testing.T) {
 		t.Fatalf("failed to write app.py: %v", err)
 	}
 
-	wg, err := NewPythonWorkerGroup("wsgi", "app:app", tempDir, "", "", "sync", 1, "python3", "", nil, nil, 0, nil, nil)
+	wg, err := NewPythonWorkerGroup("wsgi", "app:app", tempDir, "", "", "sync", 1, "python3", "", "", nil, nil, 0, nil, nil)
 	if err != nil {
 		t.Fatalf("NewPythonWorkerGroup failed: %v", err)
 	}
@@ -2173,7 +2237,7 @@ func TestPythonWorkerGroup_LoadsAndServesASGI(t *testing.T) {
 		t.Fatalf("failed to write app.py: %v", err)
 	}
 
-	wg, err := NewPythonWorkerGroup("asgi", "app:app", tempDir, "", "", "uvloop", 1, "python3", "", nil, nil, 0, nil, nil)
+	wg, err := NewPythonWorkerGroup("asgi", "app:app", tempDir, "", "", "uvloop", 1, "python3", "", "", nil, nil, 0, nil, nil)
 	if err != nil {
 		t.Fatalf("NewPythonWorkerGroup failed: %v", err)
 	}
@@ -2232,7 +2296,7 @@ func TestPythonWorkerGroup_LoadsAndServesESGI(t *testing.T) {
 		t.Fatalf("failed to write app.py: %v", err)
 	}
 
-	wg, err := NewPythonWorkerGroup("esgi", "app:application", tempDir, "", "", "gevent", 1, "python3", "", nil, nil, 0, nil, nil)
+	wg, err := NewPythonWorkerGroup("esgi", "app:application", tempDir, "", "", "gevent", 1, "python3", "", "", nil, nil, 0, nil, nil)
 	if err != nil {
 		t.Fatalf("NewPythonWorkerGroup failed: %v", err)
 	}
@@ -2279,7 +2343,7 @@ func TestSetPythonWorkerOutboundHeaders_XForwardedChainAndTrusted(t *testing.T) 
 
 	outReq := inReq.Clone(context.Background())
 	pr := &httputil.ProxyRequest{In: inReq, Out: outReq}
-	setPythonWorkerOutboundHeaders(pr, "127.0.0.1:9999")
+	setPythonWorkerOutboundHeaders(pr, "127.0.0.1:9999", "worker-secret")
 
 	if got := pr.Out.Header.Get("X-Forwarded-For"); got != "198.51.100.1, 203.0.113.5" {
 		t.Fatalf("X-Forwarded-For = %q, want %q", got, "198.51.100.1, 203.0.113.5")
@@ -2301,7 +2365,7 @@ func TestSetPythonWorkerOutboundHeaders_NoPriorXFFIPv6(t *testing.T) {
 	inReq.TLS = &tls.ConnectionState{} // emulate TLS for SetXForwarded proto
 
 	outReq := inReq.Clone(context.Background())
-	setPythonWorkerOutboundHeaders(&httputil.ProxyRequest{In: inReq, Out: outReq}, "/tmp/sock")
+	setPythonWorkerOutboundHeaders(&httputil.ProxyRequest{In: inReq, Out: outReq}, "/tmp/sock", "tok")
 
 	if got := outReq.Header.Get("X-Forwarded-For"); got != "2001:db8::1" {
 		t.Fatalf("X-Forwarded-For = %q", got)
@@ -2324,12 +2388,59 @@ func TestSetPythonWorkerOutboundHeaders_StripsSpoofedTrustedHeaders(t *testing.T
 	inReq.Header.Set(caddySnakeRemotePortHeader, "99999")
 
 	outReq := inReq.Clone(context.Background())
-	setPythonWorkerOutboundHeaders(&httputil.ProxyRequest{In: inReq, Out: outReq}, "127.0.0.1:1")
+	setPythonWorkerOutboundHeaders(&httputil.ProxyRequest{In: inReq, Out: outReq}, "127.0.0.1:1", "")
 
 	if got := outReq.Header.Get(caddySnakeRemoteAddrHeader); got != "192.0.2.1" {
 		t.Fatalf("trusted addr after spoof strip = %q", got)
 	}
 	if got := outReq.Header.Get(caddySnakeRemotePortHeader); got != "80" {
 		t.Fatalf("trusted port after spoof strip = %q", got)
+	}
+}
+
+func TestDynamicAppMaxApps(t *testing.T) {
+	limits := DynamicAppLimits{MaxApps: 1, MaxConcurrency: 4, FailureTTL: time.Second}
+	d, err := NewDynamicApp("main:app", "/tmp", "", nil, nil,
+		func(module, dir, venv string, envFiles []string, envVars map[string]string) (AppServer, error) {
+			return &mockAppServer{}, nil
+		},
+		zap.NewNop(),
+		false,
+		nil,
+		limits,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Cleanup()
+
+	dir1 := mkdirDynamicTestDir(t, "one")
+	dir2 := mkdirDynamicTestDir(t, "two")
+
+	_, err = d.getOrCreateApp("key1", "main:app", dir1, "", nil, nil)
+	if err != nil {
+		t.Fatalf("first app: %v", err)
+	}
+	d.mu.Lock()
+	d.inUse["key1"] = 1
+	d.mu.Unlock()
+	_, err = d.getOrCreateApp("key2", "main:app", dir2, "", nil, nil)
+	if !errors.Is(err, ErrDynamicAppCapacity) {
+		t.Fatalf("expected ErrDynamicAppCapacity, got %v", err)
+	}
+}
+
+func TestDynamicAppCacheKeyCollisionSafe(t *testing.T) {
+	dir := t.TempDir()
+	a := map[string]string{"B": "2", "A": "1"}
+	b := map[string]string{"A": "1", "B": "2"}
+	k1 := dynamicAppCacheKey("main:app", dir, "", nil, a)
+	k2 := dynamicAppCacheKey("main:app", dir, "", nil, b)
+	if k1 != k2 {
+		t.Fatalf("env key order changed cache key: %q vs %q", k1, k2)
+	}
+	k3 := dynamicAppCacheKey("main:app", dir, "", nil, map[string]string{"A": "1", "B": "3"})
+	if k1 == k3 {
+		t.Fatal("different env values must produce different keys")
 	}
 }

@@ -90,7 +90,7 @@ func TestBuildWorkerEnv_Precedence(t *testing.T) {
 }
 
 func TestWorkerInternalEnv_IncludesWorkerID(t *testing.T) {
-	env := workerInternalEnv("wsgi", "unix://cache.sock", "2")
+	env := workerInternalEnv("wsgi", "unix://cache.sock", "", "2", "tok")
 	m := parseEnvSlice(env)
 	if m[EnvCaddysnakeWorkerID] != "2" {
 		t.Errorf("CADDYSNAKE_WORKER_ID = %q, want 2", m[EnvCaddysnakeWorkerID])
@@ -101,7 +101,7 @@ func TestWorkerInternalEnv_IncludesWorkerID(t *testing.T) {
 }
 
 func TestWorkerInternalEnv_OmitsWorkerIDWhenEmpty(t *testing.T) {
-	env := workerInternalEnv("asgi", "", "")
+	env := workerInternalEnv("asgi", "", "", "", "")
 	m := parseEnvSlice(env)
 	if _, ok := m[EnvCaddysnakeWorkerID]; ok {
 		t.Error("expected no worker id without cache")
@@ -110,6 +110,10 @@ func TestWorkerInternalEnv_OmitsWorkerIDWhenEmpty(t *testing.T) {
 
 func TestResolveEnvFilePath(t *testing.T) {
 	dir := t.TempDir()
+	dir, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
 	rel := filepath.Join("configs", "app.env")
 	abs, err := resolveEnvFilePath(dir, rel)
 	if err != nil {

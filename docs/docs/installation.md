@@ -271,7 +271,7 @@ For maximum control, you can build Caddy with the caddy-snake plugin from source
 ```bash
 # Install dependencies (Ubuntu 24.04)
 sudo apt-get install python3 golang
-go install github.com/caddyserver/xcaddy/cmd/xcaddy@latest
+go install github.com/caddyserver/xcaddy/cmd/xcaddy@v0.4.6
 
 # Build Caddy with caddy-snake
 CGO_ENABLED=0 xcaddy build --with github.com/mliezun/caddy-snake

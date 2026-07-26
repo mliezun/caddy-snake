@@ -186,6 +186,8 @@ type WorkerSpec struct {
 	InternalEnv  []string
 	WorkerID     string
 	CacheAddr    string
+	CacheToken   string
+	WorkerToken  string
 	StartTimeout time.Duration
 	Isolation    *IsolationConfig
 	Logger       *zap.Logger
@@ -239,12 +241,12 @@ func cacheAddrForContainer(cacheAddr string) string {
 	return cacheAddr
 }
 
-func workerInternalEnvForIsolation(iface, cacheAddr, workerID string, isolated bool) []string {
+func workerInternalEnvForIsolation(iface, cacheAddr, cacheToken, workerID, workerToken string, isolated bool) []string {
 	addr := cacheAddr
 	if isolated {
 		addr = cacheAddrForContainer(cacheAddr)
 	}
-	extra := workerInternalEnv(iface, addr, workerID)
+	extra := workerInternalEnv(iface, addr, cacheToken, workerID, workerToken)
 	if isolated {
 		extra = append(extra, envCaddysnakeWorkerTCP+"=1")
 	}
@@ -253,7 +255,7 @@ func workerInternalEnvForIsolation(iface, cacheAddr, workerID string, isolated b
 
 func buildWorkerEnvForIsolation(spec WorkerSpec, fileVars map[string]string) []string {
 	isolated := spec.Isolation != nil && spec.Isolation.usesDocker()
-	internal := workerInternalEnvForIsolation(spec.Interface, spec.CacheAddr, spec.WorkerID, isolated)
+	internal := workerInternalEnvForIsolation(spec.Interface, spec.CacheAddr, spec.CacheToken, spec.WorkerID, spec.WorkerToken, isolated)
 	if isolated {
 		return buildWorkerEnv(nil, fileVars, spec.EnvVars, internal...)
 	}

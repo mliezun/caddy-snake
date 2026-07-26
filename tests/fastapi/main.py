@@ -6,8 +6,8 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, UploadFile
 from fastapi.responses import Response, StreamingResponse
+from kvstore import KVStore
 from pydantic import BaseModel
-from sqlitedict import SqliteDict
 
 
 @asynccontextmanager
@@ -19,7 +19,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(lifespan=lifespan)
 
-db = SqliteDict("items.db", autocommit=True)
+db = KVStore("items.db")
 
 
 class Item(BaseModel):

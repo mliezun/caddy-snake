@@ -243,6 +243,14 @@ func dialCacheServer(t *testing.T, srv *cacheServer) net.Conn {
 	if err != nil {
 		t.Fatalf("dial tcp: %v", err)
 	}
+	if token := srv.Token(); token != "" {
+		r := bufio.NewReader(c)
+		_, _ = io.WriteString(c, respStringArrayCmd("CSAUTH", token))
+		line := readProtoLine(t, r)
+		if line != "+OK" {
+			t.Fatalf("CSAUTH want +OK, got %q", line)
+		}
+	}
 	return c
 }
 
@@ -737,5 +745,47 @@ func TestCacheServer_CSGETWrongTypeOnSet(t *testing.T) {
 	line := readProtoLine(t, r)
 	if !strings.HasPrefix(line, "-ERR") || !strings.Contains(line, "wrong type") {
 		t.Fatalf("want wrong type err, got %q", line)
+	}
+}
+
+func TestCacheServerTCPRequiresAuth(t *testing.T) {
+	srv, err := startCacheServerTCPOnly()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer srv.Close()
+
+	conn, err := net.Dial("tcp", srv.Addr())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	r := bufio.NewReader(conn)
+
+	_, _ = io.WriteString(conn, respStringArrayCmd("CSGET", "foo"))
+	line := readProtoLine(t, r)
+	if !strings.HasPrefix(line, "-ERR") || !strings.Contains(line, "NOAUTH") {
+		t.Fatalf("unauthenticated CSGET want NOAUTH, got %q", line)
+	}
+
+	conn2, err := net.Dial("tcp", srv.Addr())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn2.Close()
+	r2 := bufio.NewReader(conn2)
+	_, _ = io.WriteString(conn2, respStringArrayCmd("CSAUTH", "wrong-token"))
+	line = readProtoLine(t, r2)
+	if !strings.HasPrefix(line, "-ERR") {
+		t.Fatalf("bad CSAUTH want -ERR, got %q", line)
+	}
+
+	conn3 := dialCacheServer(t, srv)
+	defer conn3.Close()
+	r3 := bufio.NewReader(conn3)
+	_, _ = io.WriteString(conn3, respStringArrayCmd("CSSET", "k", "v"))
+	line = readProtoLine(t, r3)
+	if line != "+OK" {
+		t.Fatalf("authenticated CSSET want +OK, got %q", line)
 	}
 }

@@ -15,7 +15,7 @@ COPY . /build
 
 ENV PATH=/usr/local/go/bin:$PATH
 
-RUN go install github.com/caddyserver/xcaddy/cmd/xcaddy@latest &&\
+RUN go install github.com/caddyserver/xcaddy/cmd/xcaddy@v0.4.6 &&\
     cd /usr/local/bin &&\
     CGO_ENABLED=0 /root/go/bin/xcaddy build --with github.com/mliezun/caddy-snake=/build &&\
     rm -rf /build

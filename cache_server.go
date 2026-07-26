@@ -2,6 +2,9 @@ package caddysnake
 
 import (
 	"bufio"
+	"crypto/rand"
+	"crypto/subtle"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -20,6 +23,7 @@ import (
 // Env vars passed to Python workers for cache access.
 const (
 	EnvCaddysnakeCacheAddr           = "CADDYSNAKE_CACHE_ADDR"
+	EnvCaddysnakeCacheToken          = "CADDYSNAKE_CACHE_TOKEN"
 	EnvCaddysnakeWorkerInterface     = "CADDYSNAKE_WORKER_INTERFACE"
 	EnvCaddysnakeWorkerID            = "CADDYSNAKE_WORKER_ID"
 	EnvCaddysnakeCacheTimeoutSeconds = "CADDYSNAKE_CACHE_TIMEOUT"
@@ -843,15 +847,25 @@ func respReadArray(r *bufio.Reader) ([][]byte, error) {
 // --- IPC server (Unix socket on unix-like OS; loopback TCP on Windows) ---
 
 type cacheServer struct {
-	store   *cacheStore
-	pubsub  *pubSub
-	ln      net.Listener
-	done    chan struct{}
-	closeMu sync.Mutex
-	closed  bool
+	store       *cacheStore
+	pubsub      *pubSub
+	ln          net.Listener
+	done        chan struct{}
+	closeMu     sync.Mutex
+	closed      bool
+	requireAuth bool
+	token       string
 	// addr is CADDYSNAKE_CACHE_ADDR: "unix://" + filesystem path, or "127.0.0.1:<port>" on Windows.
 	addr    string
 	sockDir string // non-empty when using a Unix socket — removed on Close
+}
+
+func generateSecretToken() (string, error) {
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(b), nil
 }
 
 func startCacheServer() (*cacheServer, error) {
@@ -869,16 +883,22 @@ func startCacheServerForIsolation(isolation *IsolationConfig) (*cacheServer, err
 }
 
 func startCacheServerTCPOnly() (*cacheServer, error) {
+	token, err := generateSecretToken()
+	if err != nil {
+		return nil, err
+	}
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		return nil, err
 	}
 	s := &cacheServer{
-		store:  newCacheStore(),
-		pubsub: newPubSub(),
-		ln:     ln,
-		done:   make(chan struct{}),
-		addr:   ln.Addr().String(),
+		store:       newCacheStore(),
+		pubsub:      newPubSub(),
+		ln:          ln,
+		done:        make(chan struct{}),
+		addr:        ln.Addr().String(),
+		requireAuth: true,
+		token:       token,
 	}
 	go s.acceptLoop()
 	return s, nil
@@ -921,6 +941,9 @@ func startCacheServerUnixSocket() (*cacheServer, error) {
 
 func (s *cacheServer) Addr() string { return s.addr }
 
+// Token returns the shared-secret for TCP cache clients, or empty when auth is not required.
+func (s *cacheServer) Token() string { return s.token }
+
 func (s *cacheServer) Close() error {
 	s.closeMu.Lock()
 	if s.closed {
@@ -957,6 +980,7 @@ func (s *cacheServer) handleConn(conn net.Conn) {
 	defer conn.Close()
 	r := bufio.NewReader(conn)
 	w := bufio.NewWriter(conn)
+	authenticated := !s.requireAuth
 	for {
 		parts, err := respReadArray(r)
 		if err != nil {
@@ -971,6 +995,16 @@ func (s *cacheServer) handleConn(conn net.Conn) {
 			return
 		}
 		cmd := strings.ToUpper(string(parts[0]))
+		if !authenticated {
+			if cmd != "CSAUTH" || len(parts) != 2 || subtle.ConstantTimeCompare(parts[1], []byte(s.token)) != 1 {
+				_ = respWriteError(w, "NOAUTH Authentication required")
+				return
+			}
+			authenticated = true
+			_ = respWriteSimpleString(w, "OK")
+			_ = w.Flush()
+			continue
+		}
 		switch cmd {
 		case "CSQUIT":
 			_ = respWriteSimpleString(w, "OK")

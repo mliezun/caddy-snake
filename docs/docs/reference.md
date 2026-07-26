@@ -328,7 +328,7 @@ You can use [Caddy placeholders](https://caddyserver.com/docs/caddyfile/concepts
 This is useful for multi-tenant setups where each subdomain or route serves a different application.
 
 :::warning Security
-Placeholders may come from Host, path, **headers**, and other request fields. Only use placeholders that you control (for example hostname labels behind a trusted TLS site). Do **not** wire `working_dir`, `venv`, `python_path`, or `env_file` to untrusted headers or query strings — absolute resolved paths are allowed except for literal `..` segments. Prefer a fixed parent directory plus a single safe label (e.g. `{http.request.host.labels.2}/`). Failed dynamic creates are negatively cached for a few seconds to limit fork/exec storms from bad keys.
+Placeholders may come from Host, path, **headers**, and other request fields. Only use placeholders that you control (for example hostname labels behind a trusted TLS site). Do **not** wire `working_dir`, `venv`, `python_path`, or `env_file` to untrusted headers or query strings — resolved `working_dir` and `venv` paths must exist and be directories. Prefer a fixed parent directory plus a single safe label (e.g. `{http.request.host.labels.2}/`). Failed dynamic creates are negatively cached (default **5s**, configurable via `dynamic_failure_ttl`) to limit fork/exec storms from bad keys. Capacity limits (`max_dynamic_apps`, default **128**; `dynamic_max_concurrency`, default **4**) return HTTP **503** when exceeded.
 :::
 
 ```caddyfile
@@ -359,10 +359,18 @@ When the cache is full, the least-recently-used app is evicted (cleaned up after
 When any of the configuration values (`module_wsgi`/`module_asgi`, `working_dir`, `venv`, `env_file`, or `env_var` values) contain Caddy placeholders (e.g. `{http.request.host.labels.2}`), Caddy Snake creates a **DynamicApp** that:
 
 1. Resolves the placeholders at request time using the Caddy replacer
-2. Builds a composite cache key from the resolved module, directory, venv, env files, and inline env vars
+2. Builds a collision-safe cache key (SHA-256 of a JSON object with sorted env keys) from the resolved module, directory, venv, env files, and inline env vars
 3. Returns an existing app if one is cached for that key
 4. Otherwise, lazily imports the Python module and creates a new app instance (evicting LRU/idle entries if needed)
 5. Uses double-check locking for thread-safe concurrent access
+
+Optional limits (Caddyfile block form only; defaults shown):
+
+| Directive | Default | Purpose |
+| --- | --- | --- |
+| `max_dynamic_apps` | `128` | Maximum distinct cached dynamic apps |
+| `dynamic_max_concurrency` | `4` | Maximum concurrent dynamic app creations |
+| `dynamic_failure_ttl` | `5s` | How long to cache failed create errors |
 
 ### Dynamic modules + autoreload
 
@@ -488,16 +496,18 @@ That test requires **Python 3** on `PATH`.
 When Caddy Snake provisions a `python` handler, it starts a small **in-process cache server** inside the **Go plugin**. Worker processes talk to it over a **stream socket** using a **RESP2**-shaped line protocol (Redis-compatible enough for simple clients):
 
 - **Linux and macOS:** the listener is a **Unix domain socket** in a private temporary directory. The **`CADDYSNAKE_CACHE_ADDR`** environment variable is set to **`unix:///absolute/path/to/cache.sock`** (three slashes after the scheme: `unix://` plus an absolute path).
-- **Windows:** the listener is **TCP on loopback**; **`CADDYSNAKE_CACHE_ADDR`** is **`127.0.0.1:<port>`**.
+- **Windows:** the listener is **TCP on loopback**; **`CADDYSNAKE_CACHE_ADDR`** is **`127.0.0.1:<port>`**. TCP clients must send **`CSAUTH <token>`** first; the token is in **`CADDYSNAKE_CACHE_TOKEN`**.
 
 Caddy sets these automatically for each worker:
 
 | Variable | Purpose |
 | --- | --- |
 | **`CADDYSNAKE_CACHE_ADDR`** | Socket path (`unix://…`) or `host:port` for the cache |
+| **`CADDYSNAKE_CACHE_TOKEN`** | Shared secret for TCP cache auth (`CSAUTH`); omitted on Unix sockets |
 | **`CADDYSNAKE_WORKER_INTERFACE`** | Worker kind (`wsgi`, `asgi`, `esgi`, …); selects compatible client socket APIs (e.g. gevent for ESGI) |
 | **`CADDYSNAKE_WORKER_ID`** | Stable worker index **`0`…`N-1`** within the worker group (reused after reload; combine with conn/generation in app keys) |
 | **`CADDYSNAKE_CACHE_TIMEOUT`** | Hint for client read/connect timeouts (seconds) |
+| **`CADDYSNAKE_WORKER_TOKEN`** | Shared secret; Go sets header **`Caddy-Snake-Worker-Token`** on proxy requests and Python rejects mismatches |
 
 If **`CADDYSNAKE_CACHE_ADDR`** is unset (for example, when running Python code outside Caddy), the cache client is not available.
 
@@ -526,7 +536,7 @@ Each key is in one of three shapes:
 
 There is **no tenant isolation** between workers or dynamic apps on the same handler — any worker can read, delete, or enumerate keys. Use app-specific prefixes. **`CSGROUPSEND`** (atomic set fan-out) is not built in; use **`smembers`** + **`append`** in app code with known race trade-offs, or external Redis for full channel-layer semantics.
 
-Access control is **local OS identity**: Unix sockets live under a private `0700` temp directory; on Windows the cache listens on **loopback TCP** (any local process that can dial the port can use the cache). Do not treat the shared cache as a cross-tenant secret store.
+Access control is **local OS identity** plus optional secrets: Unix sockets live under a private `0700` temp directory; on Windows the cache listens on **loopback TCP** and requires **`CSAUTH`**. Worker IPC uses a per-group **`CADDYSNAKE_WORKER_TOKEN`**. Do not treat the shared cache as a cross-tenant secret store.
 
 :::
 
@@ -691,8 +701,11 @@ caddy python-server --server-type asgi --app main:app \
 | `env_var <name> <value>` | `--env-var NAME=VALUE` (repeatable) |
 | `isolation docker { image ... }` | `--isolation docker` + `--isolation-image` (+ optional `--isolation-network`, `--isolation-docker-host`, `--isolation-memory`, `--isolation-cpus`, `--isolation-read-only`) |
 | `isolation none` | `--isolation none` |
+| `max_dynamic_apps` | `--max-dynamic-apps` |
+| `dynamic_max_concurrency` | `--dynamic-max-concurrency` |
+| `dynamic_failure_ttl` | `--dynamic-failure-ttl` |
 
-CLI-only: `--domain`, `--listen`, `--static-path`, `--static-route`, `--debug`, `--access-logs`.
+CLI-only: `--domain`, `--listen` (default **`127.0.0.1:9080`** when no `--domain`), `--static-path`, `--static-route`, `--debug`, `--access-logs`.
 
 ---
 
