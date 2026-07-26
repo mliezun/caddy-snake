@@ -71,8 +71,6 @@ Whenever you add or change a `python { ... }` subdirective (or a field on `Caddy
 | `venv` | `--venv` |
 | `workers` | `--workers` |
 | `max_dynamic_apps` | `--max-dynamic-apps` |
-| `dynamic_max_concurrency` | `--dynamic-max-concurrency` |
-| `dynamic_failure_ttl` | `--dynamic-failure-ttl` |
 | `start_timeout` | `--start-timeout` (indefinite: `--start-timeout=-1` or `forever`) |
 | `autoreload` | `--autoreload` |
 | `python_path` | `--python-path` |

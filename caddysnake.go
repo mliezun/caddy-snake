@@ -173,9 +173,7 @@ type CaddySnake struct {
 	// Dynamic mode limits (ignored when module/working_dir/venv have no placeholders).
 	// MaxDynamicApps: empty uses env/default (CADDYSNAKE_MAX_DYNAMIC_APPS, usually 128);
 	// a positive value sets the site cap (0 is rejected).
-	MaxDynamicApps        string `json:"max_dynamic_apps,omitempty"`
-	DynamicMaxConcurrency string `json:"dynamic_max_concurrency,omitempty"`
-	DynamicFailureTTL     string `json:"dynamic_failure_ttl,omitempty"`
+	MaxDynamicApps string `json:"max_dynamic_apps,omitempty"`
 
 	logger   *zap.Logger
 	app      AppServer
@@ -331,14 +329,6 @@ func (f *CaddySnake) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 					if !d.Args(&f.MaxDynamicApps) {
 						return d.Errf("expected exactly one argument for max_dynamic_apps")
 					}
-				case "dynamic_max_concurrency":
-					if !d.Args(&f.DynamicMaxConcurrency) {
-						return d.Errf("expected exactly one argument for dynamic_max_concurrency")
-					}
-				case "dynamic_failure_ttl":
-					if !d.Args(&f.DynamicFailureTTL) {
-						return d.Errf("expected exactly one argument for dynamic_failure_ttl")
-					}
 				default:
 					return d.Errf("unknown subdirective: %s", d.Val())
 				}
@@ -490,7 +480,7 @@ func (f *CaddySnake) provisionDynamic(workers int, cacheAddr, cacheToken string,
 	envFilePatterns := cloneEnvFiles(f.EnvFiles)
 	envVarPatterns := cloneEnvVars(f.EnvVars)
 	logger := f.logger
-	limits, err := parseDynamicAppLimits(f.MaxDynamicApps, f.DynamicMaxConcurrency, f.DynamicFailureTTL)
+	limits, err := parseDynamicAppLimits(f.MaxDynamicApps)
 	if err != nil {
 		return err
 	}
@@ -571,7 +561,7 @@ func (m *CaddySnake) Validate() error {
 	if err := validateEnvVars(m.EnvVars); err != nil {
 		return err
 	}
-	if _, err := parseDynamicAppLimits(m.MaxDynamicApps, m.DynamicMaxConcurrency, m.DynamicFailureTTL); err != nil {
+	if _, err := parseDynamicAppLimits(m.MaxDynamicApps); err != nil {
 		return err
 	}
 	return nil
@@ -1179,7 +1169,7 @@ func init() {
 			"[--start-timeout=<duration|-1|forever>] " +
 			"[--static-path <path>] [--static-route <route>] " +
 			"[--runtime <name>] [--lifespan on|off] " +
-			"[--max-dynamic-apps <count>] [--dynamic-max-concurrency <count>] [--dynamic-failure-ttl <duration>] " +
+			"[--max-dynamic-apps <count>] " +
 			"[--debug] [--access-logs] [--autoreload]",
 		Short: "Spins up a Python server",
 		Long: `
@@ -1218,8 +1208,6 @@ Ensure DNS A/AAAA records are correctly set up if using a public domain for secu
 			cmd.Flags().String("lifespan", "off", "Enable ASGI lifespan support (ignored in WSGI mode)")
 			cmd.Flags().String("runtime", "", "Worker runtime (wsgi: sync|gevent; esgi: gevent only; asgi: native|uvloop); defaults: sync for WSGI, gevent for ESGI, uvloop for ASGI")
 			cmd.Flags().String("max-dynamic-apps", "", "Max distinct dynamic Python apps (empty = env/default, usually 128)")
-			cmd.Flags().String("dynamic-max-concurrency", "", "Max concurrent dynamic app creations (default: 4)")
-			cmd.Flags().String("dynamic-failure-ttl", "", "Cache failed dynamic create errors for this duration (default: 5s)")
 			cmd.RunE = caddycmd.WrapCommandFuncForCobra(pythonServer)
 		},
 	})
@@ -1245,8 +1233,6 @@ func pythonServer(fs caddycmd.Flags) (int, error) {
 	lifespan := fs.String("lifespan")
 	runtimeFlag := fs.String("runtime")
 	maxDynamicApps := fs.String("max-dynamic-apps")
-	dynamicMaxConcurrency := fs.String("dynamic-max-concurrency")
-	dynamicFailureTTL := fs.String("dynamic-failure-ttl")
 	startTimeout := fs.String("start-timeout")
 	envFiles, err := fs.GetStringSlice("env-file")
 	if err != nil {
@@ -1311,8 +1297,6 @@ func pythonServer(fs caddycmd.Flags) (int, error) {
 	pythonHandler.Runtime = runtimeFlag
 	pythonHandler.StartTimeout = startTimeout
 	pythonHandler.MaxDynamicApps = maxDynamicApps
-	pythonHandler.DynamicMaxConcurrency = dynamicMaxConcurrency
-	pythonHandler.DynamicFailureTTL = dynamicFailureTTL
 	pythonHandler.EnvFiles = cloneEnvFiles(envFiles)
 	pythonHandler.EnvVars = envVars
 

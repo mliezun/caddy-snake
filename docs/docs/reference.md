@@ -316,7 +316,7 @@ You can use [Caddy placeholders](https://caddyserver.com/docs/caddyfile/concepts
 This is useful for multi-tenant setups where each subdomain or route serves a different application.
 
 :::warning Security
-Placeholders may come from Host, path, **headers**, and other request fields. Only use placeholders that you control (for example hostname labels behind a trusted TLS site). Do **not** wire `working_dir`, `venv`, `python_path`, or `env_file` to untrusted headers or query strings — resolved `working_dir` and `venv` paths must exist and be directories. Prefer a fixed parent directory plus a single safe label (e.g. `{http.request.host.labels.2}/`). Failed dynamic creates are negatively cached (default **5s**, configurable via `dynamic_failure_ttl`) to limit fork/exec storms from bad keys. Capacity limits (`max_dynamic_apps`, default **128**; `dynamic_max_concurrency`, default **4**) return HTTP **503** when exceeded.
+Placeholders may come from Host, path, **headers**, and other request fields. Only use placeholders that you control (for example hostname labels behind a trusted TLS site). Do **not** wire `working_dir`, `venv`, `python_path`, or `env_file` to untrusted headers or query strings — resolved `working_dir` and `venv` paths must exist and be directories. Prefer a fixed parent directory plus a single safe label (e.g. `{http.request.host.labels.2}/`). Failed dynamic creates are negatively cached for a short period to limit fork/exec storms from bad keys. When the cached-app capacity (`max_dynamic_apps`, default **128**) is exceeded, requests return HTTP **503**.
 :::
 
 ```caddyfile
@@ -352,13 +352,11 @@ When any of the configuration values (`module_wsgi`/`module_asgi`, `working_dir`
 4. Otherwise, lazily imports the Python module and creates a new app instance (evicting LRU/idle entries if needed)
 5. Uses double-check locking for thread-safe concurrent access
 
-Optional limits (Caddyfile block form only; defaults shown):
+Optional limit (Caddyfile block form only; default shown):
 
 | Directive | Default | Purpose |
 | --- | --- | --- |
 | `max_dynamic_apps` | `128` | Maximum distinct cached dynamic apps |
-| `dynamic_max_concurrency` | `4` | Maximum concurrent dynamic app creations |
-| `dynamic_failure_ttl` | `5s` | How long to cache failed create errors |
 
 ### Dynamic modules + autoreload
 
@@ -683,8 +681,6 @@ caddy python-server --server-type asgi --app main:app \
 | `venv` | `--venv` |
 | `workers` | `--workers` |
 | `max_dynamic_apps` | `--max-dynamic-apps` |
-| `dynamic_max_concurrency` | `--dynamic-max-concurrency` |
-| `dynamic_failure_ttl` | `--dynamic-failure-ttl` |
 | `start_timeout` | `--start-timeout` (use `--start-timeout=-1` or `forever` for indefinite) |
 | `autoreload` | `--autoreload` |
 | `python_path` | `--python-path` |

@@ -67,14 +67,6 @@ import click
     help="Worker runtime (wsgi: sync|gevent; esgi: gevent only; asgi: native|uvloop)",
 )
 @click.option("--max-dynamic-apps", help="Max distinct dynamic Python apps (default: 128)")
-@click.option(
-    "--dynamic-max-concurrency",
-    help="Max concurrent dynamic app creations (default: 4)",
-)
-@click.option(
-    "--dynamic-failure-ttl",
-    help="Cache failed dynamic create errors for this duration (default: 5s)",
-)
 def main(
     server_type,
     domain,
@@ -95,8 +87,6 @@ def main(
     lifespan,
     runtime,
     max_dynamic_apps,
-    dynamic_max_concurrency,
-    dynamic_failure_ttl,
 ):
     """
     A Python WSGI, ASGI, or ESGI server designed for apps and frameworks.
@@ -158,10 +148,6 @@ def main(
         args.extend(["--runtime", runtime])
     if max_dynamic_apps:
         args.extend(["--max-dynamic-apps", max_dynamic_apps])
-    if dynamic_max_concurrency:
-        args.extend(["--dynamic-max-concurrency", dynamic_max_concurrency])
-    if dynamic_failure_ttl:
-        args.extend(["--dynamic-failure-ttl", dynamic_failure_ttl])
 
     # Execute the binary with the constructed arguments
     os.execv(binary_path, args)

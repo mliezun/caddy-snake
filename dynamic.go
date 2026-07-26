@@ -31,7 +31,7 @@ var (
 
 const (
 	defaultMaxDynamicApps        = 128
-	defaultDynamicMaxConcurrency = 4
+	defaultDynamicMaxConcurrency = 64
 	defaultDynamicFailureTTL     = 5 * time.Second
 	defaultDynamicAppIdleTTL     = 30 * time.Minute
 
@@ -40,7 +40,8 @@ const (
 	dynamicAppCleanupGrace = 10 * time.Second
 )
 
-// DynamicAppLimits configures capacity and backoff for dynamic app loading.
+// DynamicAppLimits configures capacity for dynamic app loading.
+// MaxConcurrency and FailureTTL are internal; only MaxApps is user-configurable.
 type DynamicAppLimits struct {
 	MaxApps        int
 	MaxConcurrency int
@@ -69,7 +70,7 @@ func normalizeDynamicAppLimits(l DynamicAppLimits) DynamicAppLimits {
 	return d
 }
 
-func parseDynamicAppLimits(maxApps, maxConcurrency, failureTTL string) (DynamicAppLimits, error) {
+func parseDynamicAppLimits(maxApps string) (DynamicAppLimits, error) {
 	lim := defaultDynamicAppLimits()
 	if maxApps != "" {
 		n, err := strconv.Atoi(maxApps)
@@ -77,20 +78,6 @@ func parseDynamicAppLimits(maxApps, maxConcurrency, failureTTL string) (DynamicA
 			return lim, fmt.Errorf("invalid max_dynamic_apps: %q", maxApps)
 		}
 		lim.MaxApps = n
-	}
-	if maxConcurrency != "" {
-		n, err := strconv.Atoi(maxConcurrency)
-		if err != nil || n <= 0 {
-			return lim, fmt.Errorf("invalid dynamic_max_concurrency: %q", maxConcurrency)
-		}
-		lim.MaxConcurrency = n
-	}
-	if failureTTL != "" {
-		d, err := caddy.ParseDuration(failureTTL)
-		if err != nil || d <= 0 {
-			return lim, fmt.Errorf("invalid dynamic_failure_ttl: %q", failureTTL)
-		}
-		lim.FailureTTL = d
 	}
 	return lim, nil
 }

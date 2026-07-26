@@ -76,8 +76,6 @@ This starts a server on port `9080` serving your app. See `./caddy python-server
 --runtime <name>          WSGI: sync|gevent; ESGI: gevent only; ASGI: native|uvloop (see docs)
 --autoreload              Watch .py files and reload on changes
 --max-dynamic-apps <n>    Max distinct dynamic Python apps (default: 128)
---dynamic-max-concurrency <n>  Max concurrent dynamic app creates (default: 4)
---dynamic-failure-ttl <dur>    Negative-cache TTL for failed dynamic creates (default: 5s)
 ```
 
 ### Option 2: Build from source
