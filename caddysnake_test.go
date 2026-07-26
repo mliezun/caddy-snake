@@ -722,6 +722,14 @@ func TestValidate_InvalidMaxDynamicApps(t *testing.T) {
 	}
 }
 
+func TestValidate_WorkersTooLarge(t *testing.T) {
+	cs := &CaddySnake{ModuleWsgi: "main:app", Workers: "100000"}
+	err := cs.Validate()
+	if err == nil || !strings.Contains(err.Error(), "maximum") {
+		t.Fatalf("expected workers maximum error, got %v", err)
+	}
+}
+
 func TestValidate_InvalidLifespan(t *testing.T) {
 	cs := &CaddySnake{ModuleWsgi: "main:app", Lifespan: "maybe"}
 	err := cs.Validate()
@@ -1086,8 +1094,10 @@ func TestWriteCaddysnakePyBundle(t *testing.T) {
 
 func TestDynamicAppGetOrCreate_FactoryError(t *testing.T) {
 	factoryErr := errors.New("import failed")
+	calls := 0
 	d, _ := NewDynamicApp("main:app", "/home/test", "", nil, nil,
 		func(module, dir, venv string, envFiles []string, envVars map[string]string) (AppServer, error) {
+			calls++
 			return nil, factoryErr
 		},
 		zap.NewNop(),
@@ -1107,7 +1117,22 @@ func TestDynamicAppGetOrCreate_FactoryError(t *testing.T) {
 	if len(d.apps) != 0 {
 		t.Errorf("expected 0 apps after factory error, got %d", len(d.apps))
 	}
+	if len(d.failed) != 1 {
+		t.Errorf("expected 1 failed cache entry, got %d", len(d.failed))
+	}
 	d.mu.RUnlock()
+
+	// Negative cache: second call must not re-invoke the factory.
+	app, err = d.getOrCreateApp("key1", "main:app", "/home/test", "", nil, nil)
+	if err != factoryErr {
+		t.Errorf("expected cached factory error, got: %v", err)
+	}
+	if app != nil {
+		t.Error("expected nil app on cached error")
+	}
+	if calls != 1 {
+		t.Errorf("expected factory called once, got %d", calls)
+	}
 }
 
 func TestDynamicAppCleanup_WithErrors(t *testing.T) {

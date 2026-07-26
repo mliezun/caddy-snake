@@ -168,7 +168,7 @@ The `working_dir` directive also supports [Caddy placeholders](#dynamic-module-l
 
 Path to a dotenv-style file (for example `.env`) loaded into the Python worker environment for this `python` block. Repeat the directive to load multiple files; later files override earlier ones for duplicate keys.
 
-Relative paths are resolved against `working_dir` when set, otherwise against the Caddy process working directory.
+Relative paths are resolved against `working_dir` when set, otherwise against the Caddy process working directory. **Relative** `env_file` paths are confined to that directory after symlink resolution (a `.env` symlink that escapes `working_dir` is rejected). Absolute paths are trusted as configured by the operator.
 
 ```caddyfile
 python {
@@ -184,6 +184,8 @@ Supported file format:
 - Optional double or single quotes around values
 - `#` comments and blank lines
 - Optional `export KEY=VALUE` prefix
+
+Keys must match `[A-Za-z_][A-Za-z0-9_]*`. Reserved names (`PYTHONUNBUFFERED`, `CADDYSNAKE_*`) and dynamic-linker / loader hijack names (`LD_*`, `DYLD_*`, including `LD_PRELOAD`) are rejected — the same rules as [`env_var`](#env_var).
 
 Changes to env files are picked up when workers are restarted or when [autoreload](#autoreload) respawns workers; env files are not watched independently.
 
@@ -203,9 +205,13 @@ python {
 }
 ```
 
-Variable names must match `[A-Za-z_][A-Za-z0-9_]*`. Reserved names (`PYTHONUNBUFFERED`, `CADDYSNAKE_*`) cannot be set from the Caddyfile.
+Variable names must match `[A-Za-z_][A-Za-z0-9_]*`. Reserved names (`PYTHONUNBUFFERED`, `CADDYSNAKE_*`) and dynamic-linker / loader hijack names (`LD_*`, `DYLD_*`) cannot be set from the Caddyfile or from `env_file`.
 
 **Environment precedence:** Caddy process env → `env_file` → `env_var` → internal worker vars (`PYTHONUNBUFFERED`, `CADDYSNAKE_*`).
+
+:::note Trust model
+Workers inherit the Caddy process environment by default. Treat the Caddy config operator and all Python apps on a handler as the same trust domain: do not put mutually untrusted tenants in one process without additional isolation. Prefer `env_file` / `env_var` for app secrets rather than relying on ambient process env alone.
+:::
 
 ### `venv`
 
@@ -237,7 +243,7 @@ python {
 
 ### `workers`
 
-Number of worker processes to spawn. Defaults to the number of CPUs (`GOMAXPROCS`).
+Number of worker processes to spawn. Defaults to the number of CPUs (`GOMAXPROCS`). Maximum value: **256**.
 
 ```caddyfile
 python {
@@ -308,6 +314,10 @@ python {
 You can use [Caddy placeholders](https://caddyserver.com/docs/caddyfile/concepts#placeholders) in `module_wsgi`, `module_asgi`, `working_dir`, `venv`, `env_file`, and `env_var` values to dynamically load different Python apps based on the request.
 
 This is useful for multi-tenant setups where each subdomain or route serves a different application.
+
+:::warning Security
+Placeholders may come from Host, path, **headers**, and other request fields. Only use placeholders that you control (for example hostname labels behind a trusted TLS site). Do **not** wire `working_dir`, `venv`, `python_path`, or `env_file` to untrusted headers or query strings — absolute resolved paths are allowed except for literal `..` segments. Prefer a fixed parent directory plus a single safe label (e.g. `{http.request.host.labels.2}/`). Failed dynamic creates are negatively cached for a few seconds to limit fork/exec storms from bad keys.
+:::
 
 ```caddyfile
 *.example.com:9080 {
@@ -497,6 +507,8 @@ Each key is in one of three shapes:
 
 There is **no tenant isolation** between workers or dynamic apps on the same handler — any worker can read, delete, or enumerate keys. Use app-specific prefixes. **`CSGROUPSEND`** (atomic set fan-out) is not built in; use **`smembers`** + **`append`** in app code with known race trade-offs, or external Redis for full channel-layer semantics.
 
+Access control is **local OS identity**: Unix sockets live under a private `0700` temp directory; on Windows the cache listens on **loopback TCP** (any local process that can dial the port can use the cache). Do not treat the shared cache as a cross-tenant secret store.
+
 :::
 
 ### Wire protocol (CS* commands)
@@ -509,7 +521,7 @@ All commands are RESP2 arrays of bulk strings. Replies are bulk (`$…`), intege
 | **`CSSET`** | key value [ttl_sec] | `+OK` | Overwrites any prior type |
 | **`CSDEL`** | key | `:0` / `:1` | |
 | **`CSAPPEND`** | key chunk | `+OK` | List only; wrong type on sets |
-| **`CSPOP`** | key [timeout_sec] | bulk or `$-1` | FIFO; blocks when timeout set |
+| **`CSPOP`** | key [timeout_sec] | bulk or `$-1` | FIFO; blocks when timeout set; timeout ≤ **300** s (NaN/Inf rejected) |
 | **`CSSADD`** | key member | `:0` / `:1` | Creates set if missing |
 | **`CSSREM`** | key member | `:0` / `:1` | Deletes key when last member removed |
 | **`CSSMEMBERS`** | key | `*N` bulks | `*0` if missing (Redis-aligned) |

@@ -135,6 +135,15 @@ func (e *dynamicAppEntry) cleanup() error {
 	return e.cleanupErr
 }
 
+// failedAppCreate caches a failed factory result briefly so repeated requests
+// for a bad dynamic key do not fork/exec Python on every hit (DoS amplifier).
+type failedAppCreate struct {
+	err       error
+	expiresAt time.Time
+}
+
+const dynamicCreateFailureTTL = 5 * time.Second
+
 // DynamicApp implements AppServer by lazily importing Python apps based on
 // Caddy placeholders resolved at request time. For example, when working_dir
 // contains {host.labels.2}, each subdomain gets its own Python app instance
@@ -145,6 +154,7 @@ type DynamicApp struct {
 	apps            map[string]*dynamicAppEntry
 	inflight        map[string]*appCreate
 	retired         map[*dynamicAppEntry]struct{}
+	failed          map[string]failedAppCreate
 	closed          bool
 	maxApps         int
 	modulePattern   string
@@ -180,6 +190,7 @@ func NewDynamicApp(modulePattern, workingDir, venvPath string, envFilePatterns [
 		apps:                make(map[string]*dynamicAppEntry),
 		inflight:            make(map[string]*appCreate),
 		retired:             make(map[*dynamicAppEntry]struct{}),
+		failed:              make(map[string]failedAppCreate),
 		maxApps:             maxDynamicApps,
 		modulePattern:       modulePattern,
 		workingDir:          workingDir,
@@ -206,6 +217,24 @@ func NewDynamicApp(modulePattern, workingDir, venvPath string, envFilePatterns [
 	}
 
 	return d, nil
+}
+
+// pruneExpiredFailuresLocked removes expired negative-cache entries.
+// Caller must hold d.mu for writing.
+func (d *DynamicApp) pruneExpiredFailuresLocked(now time.Time) {
+	for key, f := range d.failed {
+		if !now.Before(f.expiresAt) {
+			delete(d.failed, key)
+		}
+	}
+}
+
+// rememberFailedCreateLocked records a failed create and drops expired entries.
+// Caller must hold d.mu for writing.
+func (d *DynamicApp) rememberFailedCreateLocked(key string, err error) {
+	now := time.Now()
+	d.pruneExpiredFailuresLocked(now)
+	d.failed[key] = failedAppCreate{err: err, expiresAt: now.Add(dynamicCreateFailureTTL)}
 }
 
 // resolve uses the Caddy replacer from the request context to substitute
@@ -257,20 +286,32 @@ func (d *DynamicApp) getOrCreateEntry(key, module, dir, venv string, envFiles []
 		return nil, errors.New("dynamic app shutting down")
 	}
 	entry, ok := d.apps[key]
-	d.mu.RUnlock()
 	if ok {
+		d.mu.RUnlock()
 		return entry, nil
 	}
+	if f, failed := d.failed[key]; failed && time.Now().Before(f.expiresAt) {
+		err := f.err
+		d.mu.RUnlock()
+		return nil, err
+	}
+	d.mu.RUnlock()
 
 	d.mu.Lock()
 	if d.closed {
 		d.mu.Unlock()
 		return nil, errors.New("dynamic app shutting down")
 	}
+	d.pruneExpiredFailuresLocked(time.Now())
 	entry, ok = d.apps[key]
 	if ok {
 		d.mu.Unlock()
 		return entry, nil
+	}
+	if f, failed := d.failed[key]; failed && time.Now().Before(f.expiresAt) {
+		err := f.err
+		d.mu.Unlock()
+		return nil, err
 	}
 	if c, creating := d.inflight[key]; creating {
 		d.mu.Unlock()
@@ -324,11 +365,14 @@ func (d *DynamicApp) getOrCreateEntry(key, module, dir, venv string, envFiles []
 		return nil, err
 	}
 	if err == nil {
+		delete(d.failed, key)
 		entry = &dynamicAppEntry{app: app}
 		d.apps[key] = entry
 		if d.autoreload && dir != "" {
 			d.startWatchingDir(dir, key)
 		}
+	} else {
+		d.rememberFailedCreateLocked(key, err)
 	}
 	c.entry = entry
 	c.err = err
@@ -586,6 +630,7 @@ func (d *DynamicApp) Cleanup() error {
 		entries[entry] = struct{}{}
 		delete(d.retired, entry)
 	}
+	d.failed = make(map[string]failedAppCreate)
 	for {
 		busy := false
 		for entry := range entries {

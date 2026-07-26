@@ -12,12 +12,36 @@ import (
 
 var validEnvVarName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
+// dangerousEnvVarNames are loader / dynamic-linker variables that must not be
+// set via env_file or env_var (arbitrary code execution / library hijack).
+var dangerousEnvVarNames = map[string]struct{}{
+	"LD_PRELOAD":                 {},
+	"LD_LIBRARY_PATH":            {},
+	"LD_AUDIT":                   {},
+	"LD_DYNAMIC_WEAK":            {},
+	"LD_ORIGIN_PATH":             {},
+	"LD_USE_LOAD_BIAS":           {},
+	"DYLD_INSERT_LIBRARIES":      {},
+	"DYLD_LIBRARY_PATH":          {},
+	"DYLD_FORCE_FLAT_NAMESPACE":  {},
+	"DYLD_FALLBACK_LIBRARY_PATH": {},
+	"DYLD_IMAGE_SUFFIX":          {},
+	"DYLD_PRINT_TO_FILE":         {},
+}
+
 func validateEnvVarName(name string) error {
 	if !validEnvVarName.MatchString(name) {
 		return fmt.Errorf("must match [A-Za-z_][A-Za-z0-9_]*")
 	}
 	if name == "PYTHONUNBUFFERED" || strings.HasPrefix(name, "CADDYSNAKE_") {
 		return fmt.Errorf("reserved environment variable name")
+	}
+	if _, bad := dangerousEnvVarNames[name]; bad {
+		return fmt.Errorf("disallowed environment variable name")
+	}
+	// Catch other LD_* / DYLD_* variants without enumerating every platform quirk.
+	if strings.HasPrefix(name, "LD_") || strings.HasPrefix(name, "DYLD_") {
+		return fmt.Errorf("disallowed environment variable name")
 	}
 	return nil
 }
@@ -76,9 +100,10 @@ func resolveEnvFilePath(workingDir, envFile string) (string, error) {
 	if hasDotDotSegment(envFile) {
 		return "", fmt.Errorf("env_file path contains path traversal: %q", envFile)
 	}
+	relative := !filepath.IsAbs(envFile)
 	path := envFile
-	if !filepath.IsAbs(path) {
-		base := workingDir
+	base := workingDir
+	if relative {
 		if base == "" {
 			var err error
 			base, err = os.Getwd()
@@ -92,7 +117,47 @@ func resolveEnvFilePath(workingDir, envFile string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("invalid env_file path: %w", err)
 	}
+	// Relative env_file paths must stay under the working directory even when
+	// the leaf is a symlink (same containment idea as tls.permission.python_dir).
+	if relative && base != "" {
+		if err := ensureEnvFileInsideWorkingDir(base, abs); err != nil {
+			return "", err
+		}
+	}
 	return abs, nil
+}
+
+func ensureEnvFileInsideWorkingDir(workingDir, envFileAbs string) error {
+	baseAbs, err := filepath.Abs(workingDir)
+	if err != nil {
+		return fmt.Errorf("resolve env_file working_dir: %w", err)
+	}
+	baseAbs = filepath.Clean(baseAbs)
+	baseEval, err := filepath.EvalSymlinks(baseAbs)
+	if err != nil {
+		// working_dir may not exist yet at validate time; fall back to cleaned abs.
+		baseEval = baseAbs
+	} else {
+		baseEval = filepath.Clean(baseEval)
+	}
+	fileAbs := filepath.Clean(envFileAbs)
+	fileEval, err := filepath.EvalSymlinks(fileAbs)
+	if err != nil {
+		// Missing path components: keep containment checks on one filesystem view.
+		// On macOS, EvalSymlinks(base) may yield /private/var/... while a missing
+		// child still has the logical /var/... prefix; rebuild under baseEval.
+		rel, relErr := filepath.Rel(baseAbs, fileAbs)
+		if relErr != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
+			return fmt.Errorf("env_file %q resolves outside working_dir %q", envFileAbs, workingDir)
+		}
+		fileEval = filepath.Join(baseEval, rel)
+	} else {
+		fileEval = filepath.Clean(fileEval)
+	}
+	if !pythonDirTLSPermInsideRoot(baseEval, fileEval) {
+		return fmt.Errorf("env_file %q resolves outside working_dir %q", envFileAbs, workingDir)
+	}
+	return nil
 }
 
 func parseEnvFile(path string) (map[string]string, error) {
@@ -119,6 +184,9 @@ func parseEnvFile(path string) (map[string]string, error) {
 		key = strings.TrimSpace(key)
 		if key == "" {
 			return nil, fmt.Errorf("%s:%d: empty variable name", path, lineNum)
+		}
+		if err := validateEnvVarName(key); err != nil {
+			return nil, fmt.Errorf("%s:%d: invalid variable name %q: %w", path, lineNum, key, err)
 		}
 		value = strings.TrimSpace(value)
 		if len(value) >= 2 {

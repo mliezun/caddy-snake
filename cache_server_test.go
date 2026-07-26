@@ -346,6 +346,25 @@ func TestCacheServer_CSPOPTimeout(t *testing.T) {
 	}
 }
 
+func TestCacheServer_CSPOPInvalidTimeout(t *testing.T) {
+	srv, err := startCacheServer()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer srv.Close()
+
+	for _, bad := range []string{"inf", "nan", "-1", "301"} {
+		conn := dialCacheServer(t, srv)
+		r := bufio.NewReader(conn)
+		_, _ = io.WriteString(conn, respStringArrayCmd("CSPOP", "t", bad))
+		line := readProtoLine(t, r)
+		conn.Close()
+		if !strings.HasPrefix(line, "-") {
+			t.Fatalf("CSPOP timeout %q want error, got %q", bad, line)
+		}
+	}
+}
+
 func TestCacheServer_CSQUIT(t *testing.T) {
 	srv, err := startCacheServer()
 	if err != nil {

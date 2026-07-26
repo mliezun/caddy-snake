@@ -1436,7 +1436,7 @@ def _esgi_headers_mapping(headers_list, raw_headers: dict) -> dict:
     headers_map = {}
     for n, v in headers_list:
         k = _header_name_str(n)
-        if k in ("caddy-snake-remote-addr", "caddy-snake-remote-port"):
+        if k in ("caddy-snake-remote-addr", "caddy-snake-remote-port", "proxy"):
             continue
         val = v.decode("latin-1")
         existing = headers_map.get(k)
@@ -1936,7 +1936,12 @@ async def _handle_asgi_connection(reader, writer, app, state):
             headers_for_scope = [
                 (n, v)
                 for n, v in headers
-                if n not in (b"caddy-snake-remote-addr", b"caddy-snake-remote-port")
+                if n
+                not in (
+                    b"caddy-snake-remote-addr",
+                    b"caddy-snake-remote-port",
+                    b"proxy",
+                )
             ]
             trusted_client = _client_from_caddy_snake_headers(raw_headers)
             if trusted_client is not None:
