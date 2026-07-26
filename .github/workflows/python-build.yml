@@ -36,6 +36,24 @@ jobs:
         with:
           persist-credentials: false
           ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
+      - name: Verify release tag is on main
+        run: | # zizmor: ignore[template-injection]
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            TAG="${{ inputs.tag }}"
+            if ! printf '%s' "$TAG" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+              echo "workflow_dispatch tag must match ^v[0-9]+\\.[0-9]+\\.[0-9]+$, got: $TAG"
+              exit 1
+            fi
+          else
+            TAG="${GITHUB_REF_NAME}"
+          fi
+          git fetch origin main --no-tags
+          TAGSHA="$(git rev-parse "${TAG}^{commit}")"
+          if ! git merge-base --is-ancestor "$TAGSHA" origin/main; then
+            echo "tag commit $TAGSHA is not an ancestor of origin/main"
+            exit 1
+          fi
+          echo "Verified $TAG ($TAGSHA) is on origin/main"
       - name: Set package version from tag
         run: | # zizmor: ignore[template-injection]
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
@@ -64,7 +82,7 @@ jobs:
       - name: Build Caddy with caddy-snake module (native)
         if: ${{ !matrix.use_docker }}
         run: |
-          go install github.com/caddyserver/xcaddy/cmd/xcaddy@latest
+          go install github.com/caddyserver/xcaddy/cmd/xcaddy@v0.4.6
           CGO_ENABLED=0 xcaddy build --with github.com/mliezun/caddy-snake=.
       - name: Install Rust
         if: ${{ !matrix.use_docker }}

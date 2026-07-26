@@ -16,7 +16,7 @@ COPY . /build
 
 ENV PATH=$PATH:/usr/local/go/bin
 
-RUN go install github.com/caddyserver/xcaddy/cmd/xcaddy@latest &&\
+RUN go install github.com/caddyserver/xcaddy/cmd/xcaddy@v0.4.6 &&\
     cd /usr/local/bin &&\
     CGO_ENABLED=0 /root/go/bin/xcaddy build --with github.com/mliezun/caddy-snake=/build
 
@@ -41,4 +41,9 @@ RUN export DEBIAN_FRONTEND=noninteractive &&\
     apt-get clean &&\
     rm -rf /var/lib/apt/lists/* get-pip.py
 
+RUN groupadd -r caddy && useradd -r -g caddy -d /home/caddy -s /usr/sbin/nologin caddy && \
+    mkdir -p /home/caddy && chown caddy:caddy /home/caddy
+
 COPY --from=builder /usr/local/bin/caddy /usr/local/bin/caddy
+
+USER caddy

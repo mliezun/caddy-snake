@@ -31,7 +31,7 @@ jobs:
       - name: Install Rust
         run: rustup toolchain install stable
       - name: Install Xcaddy
-        run: go install github.com/caddyserver/xcaddy/cmd/xcaddy@latest
+        run: go install github.com/caddyserver/xcaddy/cmd/xcaddy@v0.4.6
       - name: Build the CLI binary
         working-directory: cmd/cli
         run: |

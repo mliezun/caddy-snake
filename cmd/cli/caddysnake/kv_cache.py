@@ -19,6 +19,7 @@ import os
 from typing import Any
 
 ENV_ADDR = "CADDYSNAKE_CACHE_ADDR"
+ENV_CACHE_TOKEN = "CADDYSNAKE_CACHE_TOKEN"
 ENV_IFACE = "CADDYSNAKE_WORKER_INTERFACE"
 ENV_TIMEOUT = "CADDYSNAKE_CACHE_TIMEOUT"
 ENV_WORKER_ID = "CADDYSNAKE_WORKER_ID"
@@ -196,6 +197,18 @@ class Cache:
 
     __slots__ = ()
 
+    def _authenticate(self, sock, buf: bytearray) -> None:
+        addr = _require_addr()
+        if addr.startswith("unix://"):
+            return
+        token = os.environ.get(ENV_CACHE_TOKEN)
+        if not token:
+            raise CacheConfigurationError("CADDYSNAKE_CACHE_TOKEN is not set for TCP cache access")
+        sock.sendall(_encode_cmd([b"CSAUTH", token.encode()]))
+        reply = _read_reply(sock, buf)
+        if reply != "OK":
+            raise CacheError("cache authentication failed")
+
     def _open_socket(self, mod, timeout: float | None = None):
         addr = _require_addr()
         t = _timeout_sec() if timeout is None else timeout
@@ -222,6 +235,8 @@ class Cache:
         except OSError as e:
             sock.close()
             raise CacheError(f"cannot connect to cache at {host!r}:{port}: {e}") from e
+        buf = bytearray()
+        self._authenticate(sock, buf)
         return sock
 
     def _roundtrip(self, parts: list[bytes]) -> Any:
