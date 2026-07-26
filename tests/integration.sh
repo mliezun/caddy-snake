@@ -122,7 +122,7 @@ echo ">>> Installing Python ${PY_PKG_VERSION}..."
 add-apt-repository -y ppa:deadsnakes/ppa
 apt-get update -yyqq
 
-cd "/workspace/tests/${TOOL_NAME}"
+cd "__REPO_ROOT__/tests/${TOOL_NAME}"
 
 if [[ "$IS_NOGIL" == "1" ]]; then
   apt-get install -yyqq python${PY_PKG_VERSION}
@@ -148,7 +148,7 @@ if [[ "$TOOL_NAME" == "simple_cache" ]]; then
   export PATH="$HOME/.cargo/bin:$PATH"
   rustc --version
   pip install maturin
-  pip install "/workspace/cmd/cli"
+  pip install "__REPO_ROOT__/cmd/cli"
 fi
 
 if [[ "$TOOL_NAME" == "simple_isolation" ]]; then
@@ -156,11 +156,13 @@ if [[ "$TOOL_NAME" == "simple_isolation" ]]; then
   apt-get install -yyqq docker.io
   docker version
   docker pull python:3.13-slim
+  export TMPDIR="__REPO_ROOT__/.tmp/caddysnake-integration"
+  mkdir -p "$TMPDIR"
 fi
 
 # Build caddy with caddy-snake plugin (no CGO needed)
 echo ">>> Building caddy with caddy-snake..."
-CGO_ENABLED=0 xcaddy build --with github.com/mliezun/caddy-snake=/workspace
+CGO_ENABLED=0 xcaddy build --with github.com/mliezun/caddy-snake=__REPO_ROOT__
 
 # Run integration tests
 source venv/bin/activate
@@ -214,6 +216,18 @@ echo ">>> Tests completed!"
 INNEREOF
 
 # Substitute placeholders
+INNER_REPO_ROOT="/workspace"
+CONTAINER_MOUNT=( -v "${REPO_ROOT}:/workspace:cached" )
+CONTAINER_WORKDIR="/workspace"
+if [[ "$TOOL_NAME" == "simple_isolation" ]]; then
+  # Worker containers bind-mount host paths via the mounted Docker socket; keep
+  # the same absolute repo path inside and outside the integration container.
+  INNER_REPO_ROOT="$REPO_ROOT"
+  CONTAINER_MOUNT=( -v "${REPO_ROOT}:${REPO_ROOT}:cached" )
+  CONTAINER_WORKDIR="$REPO_ROOT"
+fi
+
+INNER_SCRIPT="${INNER_SCRIPT//__REPO_ROOT__/$INNER_REPO_ROOT}"
 INNER_SCRIPT="${INNER_SCRIPT//__TOOL_NAME__/$TOOL_NAME}"
 INNER_SCRIPT="${INNER_SCRIPT//__PYTHON_VERSION__/$PYTHON_VERSION}"
 INNER_SCRIPT="${INNER_SCRIPT//__IS_NOGIL__/$IS_NOGIL}"
@@ -235,8 +249,8 @@ docker run \
   --name "$CONTAINER_NAME" \
   --platform linux/amd64 \
   "${DOCKER_ARGS[@]}" \
-  -v "${REPO_ROOT}:/workspace:cached" \
-  -w /workspace \
+  "${CONTAINER_MOUNT[@]}" \
+  -w "${CONTAINER_WORKDIR}" \
   ubuntu:22.04 \
   bash -c "$INNER_SCRIPT"
 
