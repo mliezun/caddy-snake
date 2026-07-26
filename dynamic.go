@@ -31,7 +31,7 @@ var (
 
 const (
 	defaultMaxDynamicApps        = 128
-	defaultDynamicMaxConcurrency = 4
+	defaultDynamicMaxConcurrency = 64
 	defaultDynamicFailureTTL     = 5 * time.Second
 	defaultDynamicAppIdleTTL     = 30 * time.Minute
 
@@ -40,7 +40,8 @@ const (
 	dynamicAppCleanupGrace = 10 * time.Second
 )
 
-// DynamicAppLimits configures capacity and backoff for dynamic app loading.
+// DynamicAppLimits configures capacity for dynamic app loading.
+// MaxConcurrency and FailureTTL are internal; only MaxApps is user-configurable.
 type DynamicAppLimits struct {
 	MaxApps        int
 	MaxConcurrency int
@@ -69,7 +70,7 @@ func normalizeDynamicAppLimits(l DynamicAppLimits) DynamicAppLimits {
 	return d
 }
 
-func parseDynamicAppLimits(maxApps, maxConcurrency, failureTTL string) (DynamicAppLimits, error) {
+func parseDynamicAppLimits(maxApps string) (DynamicAppLimits, error) {
 	lim := defaultDynamicAppLimits()
 	if maxApps != "" {
 		n, err := strconv.Atoi(maxApps)
@@ -77,20 +78,6 @@ func parseDynamicAppLimits(maxApps, maxConcurrency, failureTTL string) (DynamicA
 			return lim, fmt.Errorf("invalid max_dynamic_apps: %q", maxApps)
 		}
 		lim.MaxApps = n
-	}
-	if maxConcurrency != "" {
-		n, err := strconv.Atoi(maxConcurrency)
-		if err != nil || n <= 0 {
-			return lim, fmt.Errorf("invalid dynamic_max_concurrency: %q", maxConcurrency)
-		}
-		lim.MaxConcurrency = n
-	}
-	if failureTTL != "" {
-		d, err := caddy.ParseDuration(failureTTL)
-		if err != nil || d <= 0 {
-			return lim, fmt.Errorf("invalid dynamic_failure_ttl: %q", failureTTL)
-		}
-		lim.FailureTTL = d
 	}
 	return lim, nil
 }
@@ -678,6 +665,17 @@ func (d *DynamicApp) startWatchingDir(dir, key string) {
 	watchDirRecursive(d.watcher, absDir, d.logger)
 }
 
+// pathWithinDir reports whether path is dir itself or a file/subdir under dir.
+// Unlike strings.HasPrefix, it rejects sibling paths that share a prefix
+// (e.g. /srv/apps/foobar is not within /srv/apps/foo).
+func pathWithinDir(path, dir string) bool {
+	if path == dir {
+		return true
+	}
+	prefix := dir + string(os.PathSeparator)
+	return strings.HasPrefix(path, prefix)
+}
+
 func (d *DynamicApp) watchForChanges() {
 	var debounceTimer *time.Timer
 	const debounceDuration = 500 * time.Millisecond
@@ -703,8 +701,7 @@ func (d *DynamicApp) watchForChanges() {
 
 			d.mu.RLock()
 			for absDir := range d.dirToKeys {
-				if strings.HasPrefix(event.Name, absDir+string(os.PathSeparator)) ||
-					strings.HasPrefix(event.Name, absDir) {
+				if pathWithinDir(event.Name, absDir) {
 					pendingMu.Lock()
 					pendingDirs[absDir] = true
 					pendingMu.Unlock()
@@ -819,9 +816,10 @@ func (d *DynamicApp) HandleRequest(w http.ResponseWriter, r *http.Request) error
 		if cur, ok := d.apps[key]; ok && cur == app {
 			d.inUse[key]++
 			d.mu.Unlock()
-			err := app.HandleRequest(w, r)
-			d.releaseApp(key)
-			return err
+			// defer so a panic in the tenant handler cannot permanently pin the key
+			// out of idle/LRU eviction.
+			defer d.releaseApp(key)
+			return app.HandleRequest(w, r)
 		}
 		d.mu.Unlock()
 		// Evicted between lookup and pin; retry get-or-create.
@@ -850,7 +848,7 @@ func (d *DynamicApp) Cleanup() error {
 		}
 	})
 	if d.autoreload && d.watcher != nil {
-		d.watcher.Close()
+		_ = d.watcher.Close()
 	}
 
 	d.cancelPendingCleanups()

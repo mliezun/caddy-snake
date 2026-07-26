@@ -46,6 +46,7 @@ This starts a server on port `9080` serving your app. See `caddysnake --help` fo
 | `--domain <example.com>` | Enable HTTPS with automatic certificates | — |
 | `--listen <addr>` | Custom listen address | `:9080` |
 | `--workers <count>` | Number of worker processes | CPU count |
+| `--max-dynamic-apps <count>` | Max distinct dynamic Python apps | `128` |
 | `--python-path <path>` | Path to the Python interpreter | system/venv python |
 | `--venv <path>` | Path to a Python virtual environment | — |
 | `--working-dir <path>` | Working directory for the Python app | — |

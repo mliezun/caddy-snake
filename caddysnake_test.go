@@ -170,6 +170,68 @@ func TestDynamicAppGetOrCreate(t *testing.T) {
 	}
 }
 
+func TestPathWithinDir(t *testing.T) {
+	root := filepath.Join(string(os.PathSeparator), "srv", "apps", "foo")
+	tests := []struct {
+		name string
+		path string
+		want bool
+	}{
+		{"direct child", filepath.Join(root, "app.py"), true},
+		{"nested child", filepath.Join(root, "pkg", "app.py"), true},
+		{"directory itself", root, true},
+		{"sibling prefix", filepath.Join(string(os.PathSeparator), "srv", "apps", "foobar", "app.py"), false},
+		{"parent", filepath.Join(string(os.PathSeparator), "srv", "apps", "app.py"), false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := pathWithinDir(tt.path, root); got != tt.want {
+				t.Errorf("pathWithinDir(%q, %q) = %v, want %v", tt.path, root, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestDynamicAppHandleRequest_ReleasesInUseOnPanic(t *testing.T) {
+	dir := mkdirDynamicTestDir(t, "panic")
+	d, err := NewDynamicApp("main:app", dir, "", nil, nil,
+		func(module, resolvedDir, venv string, envFiles []string, envVars map[string]string) (AppServer, error) {
+			return &mockAppServer{
+				onHandleRequest: func(w http.ResponseWriter, r *http.Request) error {
+					panic("boom")
+				},
+			}, nil
+		},
+		zap.NewNop(),
+		false,
+		nil,
+		DynamicAppLimits{MaxApps: 1, MaxConcurrency: 4, FailureTTL: time.Second},
+	)
+	if err != nil {
+		t.Fatalf("NewDynamicApp: %v", err)
+	}
+	defer d.Cleanup()
+
+	func() {
+		defer func() {
+			if recover() == nil {
+				t.Fatal("expected panic from HandleRequest")
+			}
+		}()
+		_ = d.HandleRequest(
+			&mockResponseWriter{headers: make(http.Header)},
+			(&http.Request{}).WithContext(context.Background()),
+		)
+	}()
+
+	d.mu.RLock()
+	remaining := len(d.inUse)
+	d.mu.RUnlock()
+	if remaining != 0 {
+		t.Fatalf("expected inUse cleared after panic, got %d entries: %v", remaining, d.inUse)
+	}
+}
+
 func TestDynamicAppCleanup(t *testing.T) {
 	var cleanupCount int
 	dirA := mkdirDynamicTestDir(t, "a")
@@ -278,6 +340,7 @@ func TestUnmarshalCaddyfile_BlockAllOptions(t *testing.T) {
 		working_dir /tmp
 		venv /tmp/venv
 		workers 4
+		max_dynamic_apps 12
 		start_timeout 180s
 	}`
 	d := caddyfile.NewTestDispenser(input)
@@ -297,6 +360,9 @@ func TestUnmarshalCaddyfile_BlockAllOptions(t *testing.T) {
 	}
 	if cs.Workers != "4" {
 		t.Errorf("expected Workers '4', got %q", cs.Workers)
+	}
+	if cs.MaxDynamicApps != "12" {
+		t.Errorf("expected MaxDynamicApps '12', got %q", cs.MaxDynamicApps)
 	}
 	if cs.StartTimeout != "180s" {
 		t.Errorf("expected StartTimeout '180s', got %q", cs.StartTimeout)
@@ -569,6 +635,15 @@ func TestValidate_NegativeWorkers(t *testing.T) {
 	err := cs.Validate()
 	if err == nil {
 		t.Fatal("expected error for negative workers")
+	}
+}
+
+func TestValidate_InvalidMaxDynamicApps(t *testing.T) {
+	for _, value := range []string{"abc", "-1", "0"} {
+		cs := &CaddySnake{ModuleWsgi: "main:app", MaxDynamicApps: value}
+		if err := cs.Validate(); err == nil {
+			t.Fatalf("expected error for max_dynamic_apps %q", value)
+		}
 	}
 }
 
