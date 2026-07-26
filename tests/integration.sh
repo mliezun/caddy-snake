@@ -162,7 +162,7 @@ fi
 
 # Build caddy with caddy-snake plugin (no CGO needed)
 echo ">>> Building caddy with caddy-snake..."
-CGO_ENABLED=0 xcaddy build --with github.com/mliezun/caddy-snake=__REPO_ROOT__
+GOFLAGS=-buildvcs=false CGO_ENABLED=0 xcaddy build --with github.com/mliezun/caddy-snake=__REPO_ROOT__
 
 # Run integration tests
 source venv/bin/activate
