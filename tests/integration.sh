@@ -170,11 +170,7 @@ source venv/bin/activate
 if [[ "$TOOL_NAME" == "simple_start_timeout" ]]; then
   # This suite starts/stops Caddy itself for each start_timeout scenario.
   echo ">>> Running start_timeout scenarios (test-managed Caddy)..."
-  if [[ "$IS_NOGIL" == "1" ]]; then
-    python main_test.py || true
-  else
-    python main_test.py
-  fi
+  python main_test.py
 else
   READY_TIMEOUT=60
   if [[ "$TOOL_NAME" == "simple_isolation" ]]; then

@@ -76,8 +76,6 @@ This starts a server on port `9080` serving your app. See `./caddy python-server
 --runtime <name>          WSGI: sync|gevent; ESGI: gevent only; ASGI: native|uvloop (see docs)
 --autoreload              Watch .py files and reload on changes
 --max-dynamic-apps <n>    Max distinct dynamic Python apps (default: 128)
---dynamic-max-concurrency <n>  Max concurrent dynamic app creates (default: 4)
---dynamic-failure-ttl <dur>    Negative-cache TTL for failed dynamic creates (default: 5s)
 ```
 
 ### Option 2: Build from source
@@ -256,8 +254,10 @@ python {
     env_file "/path/to/.env"            # Dotenv file loaded into worker env (repeatable)
     env_var VARNAME value               # Inline env var; overrides env_file (repeatable)
     workers 4                           # Number of worker processes (default: CPU count)
+    max_dynamic_apps 32                 # Cap request-resolved app instances (default: 128)
     start_timeout 120s                  # Wait for worker readiness (default: 120s; -1 = indefinite)
     lifespan on|off                     # ASGI lifespan events (default: off)
+    python_path "/usr/bin/python3"       # Explicit Python interpreter
     autoreload                          # Watch .py files and reload on changes
     isolation docker {                  # Run workers in Docker (Linux; requires Docker engine)
         image "python:3.13-slim"
@@ -347,13 +347,17 @@ Number of worker processes to spawn. Defaults to the number of CPUs (`GOMAXPROCS
 
 When the `python` handler is provisioned, Caddy Snake starts an **in-process shared cache** in the Go plugin and passes connection details to each worker via environment variables (see [Shared worker cache](#shared-worker-cache)).
 
+### `max_dynamic_apps`
+
+Maximum distinct cached app instances created from request-time placeholders (default **128**). Must be a positive integer when set. Override with `CADDYSNAKE_MAX_DYNAMIC_APPS` or this directive / `--max-dynamic-apps`. Idle apps are also evicted by LRU (`CADDYSNAKE_DYNAMIC_APP_IDLE_TTL`, default **30m**); when every slot is busy, new keys return HTTP 503.
+
 ### `start_timeout`
 
 Optional. How long to wait for each worker socket/port to become ready when Caddy loads the config. Defaults to **`120s`**. Use a duration such as `180s` or `2m`, or `-1` / `forever` to wait indefinitely. On the CLI, prefer `--start-timeout=-1` or `--start-timeout forever`. If the timeout is greater than 120s (or indefinite) and the app is still starting after 120 seconds, Caddy logs a warning and continues waiting. Workers that crash during startup fail immediately.
 
 ### `lifespan`
 
-Enables ASGI [lifespan events](https://asgi.readthedocs.io/en/latest/specs/lifespan.html) (`startup` and `shutdown`). Only applies to ASGI apps. Defaults to `off`.
+Enables ASGI [lifespan events](https://asgi.readthedocs.io/en/latest/specs/lifespan.html) (`startup` and `shutdown`). Only applies to ASGI apps. Defaults to `off`. With lifespan enabled, startup exceptions, missing completion messages, and readiness timeouts fail worker startup.
 
 ### `autoreload`
 
@@ -413,7 +417,7 @@ This is useful for multi-tenant setups where each subdomain or route serves a di
 }
 ```
 
-In this example, a request to `app1.example.com` loads the app from the `app1/` directory, `app2.example.com` loads from `app2/`, and so on. Apps are lazily created on first request and cached for subsequent requests (default cap: 128 apps, 30m idle TTL; see `CADDYSNAKE_MAX_DYNAMIC_APPS` / `CADDYSNAKE_DYNAMIC_APP_IDLE_TTL`).
+In this example, a request to `app1.example.com` loads the app from the `app1/` directory, `app2.example.com` loads from `app2/`, and so on. Apps are lazily created on first request and cached for subsequent requests (default cap: 128 apps, 30m idle TTL; override with `max_dynamic_apps` / `--max-dynamic-apps`, or `CADDYSNAKE_MAX_DYNAMIC_APPS` / `CADDYSNAKE_DYNAMIC_APP_IDLE_TTL`).
 
 ---
 

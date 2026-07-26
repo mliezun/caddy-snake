@@ -68,7 +68,9 @@ python {
     env_file <path>
     env_var <name> <value>
     workers <count>
+    max_dynamic_apps <count>
     start_timeout <duration|-1|forever>
+    python_path <path>
     autoreload
     isolation none|docker { ... }
 }
@@ -128,7 +130,7 @@ python {
 
 ### `lifespan`
 
-Controls the ASGI [lifespan protocol](https://asgi.readthedocs.io/en/latest/specs/lifespan.html) (`startup` and `shutdown` events). Only applicable when using `module_asgi`. Can be either `on` or `off`. Defaults to `off`.
+Controls the ASGI [lifespan protocol](https://asgi.readthedocs.io/en/latest/specs/lifespan.html) (`startup` and `shutdown` events). Only applicable when using `module_asgi`. Can be either `on` or `off`. Defaults to `off`. When enabled, startup exceptions, missing completion messages, and readiness timeouts fail worker startup.
 
 ```caddyfile
 python {
@@ -227,6 +229,19 @@ python {
 Workers are separate processes: a venv configured for one `python` handler (or one dynamic tenant) does not leak packages into other workers’ interpreters.
 :::
 
+### `python_path`
+
+Path to the Python interpreter used to start workers. It takes precedence over the interpreter in `venv`; when omitted, Caddy Snake uses the venv interpreter or falls back to `python3`.
+
+```caddyfile
+python {
+    module_asgi "main:app"
+    python_path "/usr/local/bin/python3.13"
+}
+```
+
+`python_path` is resolved when the handler is provisioned and does not support request-time placeholders. For per-tenant environments, use placeholders in `venv` instead.
+
 ### `workers`
 
 Number of worker processes to spawn. Defaults to the number of CPUs (`GOMAXPROCS`). Maximum value: **256**.
@@ -237,6 +252,20 @@ python {
     workers 4
 }
 ```
+
+### `max_dynamic_apps`
+
+Maximum number of app instances cached by [dynamic module loading](#dynamic-module-loading). Default **128**. When set, must be a positive integer. Override with `CADDYSNAKE_MAX_DYNAMIC_APPS` or this directive / `--max-dynamic-apps`. Idle LRU eviction uses `CADDYSNAKE_DYNAMIC_APP_IDLE_TTL` (default **30m**).
+
+```caddyfile
+python {
+    module_asgi "{http.request.host.labels.2}:app"
+    working_dir "/srv/apps/{http.request.host.labels.2}"
+    max_dynamic_apps 32
+}
+```
+
+Each dynamic app owns its configured worker processes, so keep the cap tight whenever placeholder values can be influenced by untrusted requests.
 
 ### `start_timeout`
 
@@ -276,8 +305,8 @@ python {
 - The Python module cache (`sys.modules`) is invalidated for all modules in the working directory before reimporting
 - The old app is cleaned up and a new one is created seamlessly
 - In-flight requests complete before the swap happens (thread-safe with read/write locks)
-- If the reload fails (e.g. syntax error in Python code), the app degrades to returning HTTP 503 for all requests until the next file change triggers a successful reload
-- If the app cannot be loaded at all (e.g. app directory deleted), the Caddy process terminates to avoid silently serving errors
+- If a static-app reload fails (e.g. syntax error in Python code), the app returns HTTP 503 until the next file change triggers a successful reload
+- Reload failures do not terminate Caddy in the normal Caddyfile and CLI wiring
 
 ### `isolation`
 
@@ -328,7 +357,7 @@ You can use [Caddy placeholders](https://caddyserver.com/docs/caddyfile/concepts
 This is useful for multi-tenant setups where each subdomain or route serves a different application.
 
 :::warning Security
-Placeholders may come from Host, path, **headers**, and other request fields. Only use placeholders that you control (for example hostname labels behind a trusted TLS site). Do **not** wire `working_dir`, `venv`, `python_path`, or `env_file` to untrusted headers or query strings — resolved `working_dir` and `venv` paths must exist and be directories. Prefer a fixed parent directory plus a single safe label (e.g. `{http.request.host.labels.2}/`). Failed dynamic creates are negatively cached (default **5s**, configurable via `dynamic_failure_ttl`) to limit fork/exec storms from bad keys. Capacity limits (`max_dynamic_apps`, default **128**; `dynamic_max_concurrency`, default **4**) return HTTP **503** when exceeded.
+Placeholders may come from Host, path, **headers**, and other request fields. Only use placeholders that you control (for example hostname labels behind a trusted TLS site). Do **not** wire `working_dir`, `venv`, `python_path`, or `env_file` to untrusted headers or query strings — resolved `working_dir` and `venv` paths must exist and be directories. Prefer a fixed parent directory plus a single safe label (e.g. `{http.request.host.labels.2}/`). Failed dynamic creates are negatively cached for a short period to limit fork/exec storms from bad keys. When the cached-app capacity (`max_dynamic_apps`, default **128**) is exceeded, requests return HTTP **503**.
 :::
 
 ```caddyfile
@@ -349,10 +378,10 @@ Cached dynamic apps are bounded to avoid unbounded process growth under multi-te
 
 | Limit | Default | Override |
 | --- | --- | --- |
-| Max cached apps | **128** | `CADDYSNAKE_MAX_DYNAMIC_APPS` (positive integer) |
+| Max cached apps | **128** | `CADDYSNAKE_MAX_DYNAMIC_APPS`, or Caddyfile/CLI [`max_dynamic_apps`](#max_dynamic_apps) / `--max-dynamic-apps` |
 | Idle eviction TTL | **30m** | `CADDYSNAKE_DYNAMIC_APP_IDLE_TTL` (Go duration, e.g. `15m`) |
 
-When the cache is full, the least-recently-used app is evicted (cleaned up after a short grace period). Idle apps past the TTL are expired when a new tenant is created.
+When the cache is full, the least-recently-used idle app is evicted (cleaned up after a short grace period). Apps with active requests are not evicted; if every slot is busy, new keys fail until capacity frees.
 
 ### How it works
 
@@ -364,13 +393,11 @@ When any of the configuration values (`module_wsgi`/`module_asgi`, `working_dir`
 4. Otherwise, lazily imports the Python module and creates a new app instance (evicting LRU/idle entries if needed)
 5. Uses double-check locking for thread-safe concurrent access
 
-Optional limits (Caddyfile block form only; defaults shown):
+Optional limit (Caddyfile block form only; default shown):
 
 | Directive | Default | Purpose |
 | --- | --- | --- |
 | `max_dynamic_apps` | `128` | Maximum distinct cached dynamic apps |
-| `dynamic_max_concurrency` | `4` | Maximum concurrent dynamic app creations |
-| `dynamic_failure_ttl` | `5s` | How long to cache failed create errors |
 
 ### Dynamic modules + autoreload
 
@@ -386,7 +413,7 @@ Dynamic module loading works with `autoreload`. When enabled, each resolved work
 }
 ```
 
-Old app instances are cleaned up after a 10-second grace period to allow in-flight requests to complete safely.
+Old app instances are retired immediately and cleaned up after their in-flight requests complete.
 
 ---
 
@@ -694,6 +721,7 @@ caddy python-server --server-type asgi --app main:app \
 | `working_dir` | `--working-dir` |
 | `venv` | `--venv` |
 | `workers` | `--workers` |
+| `max_dynamic_apps` | `--max-dynamic-apps` |
 | `start_timeout` | `--start-timeout` (use `--start-timeout=-1` or `forever` for indefinite) |
 | `autoreload` | `--autoreload` |
 | `python_path` | `--python-path` |
@@ -701,9 +729,6 @@ caddy python-server --server-type asgi --app main:app \
 | `env_var <name> <value>` | `--env-var NAME=VALUE` (repeatable) |
 | `isolation docker { image ... }` | `--isolation docker` + `--isolation-image` (+ optional `--isolation-network`, `--isolation-docker-host`, `--isolation-memory`, `--isolation-cpus`, `--isolation-read-only`) |
 | `isolation none` | `--isolation none` |
-| `max_dynamic_apps` | `--max-dynamic-apps` |
-| `dynamic_max_concurrency` | `--dynamic-max-concurrency` |
-| `dynamic_failure_ttl` | `--dynamic-failure-ttl` |
 
 CLI-only: `--domain`, `--listen` (default **`127.0.0.1:9080`** when no `--domain`), `--static-path`, `--static-route`, `--debug`, `--access-logs`.
 

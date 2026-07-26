@@ -132,17 +132,25 @@ func ensureEnvFileInsideWorkingDir(workingDir, envFileAbs string) error {
 	if err != nil {
 		return fmt.Errorf("resolve env_file working_dir: %w", err)
 	}
+	baseAbs = filepath.Clean(baseAbs)
 	baseEval, err := filepath.EvalSymlinks(baseAbs)
 	if err != nil {
 		// working_dir may not exist yet at validate time; fall back to cleaned abs.
-		baseEval = filepath.Clean(baseAbs)
+		baseEval = baseAbs
 	} else {
 		baseEval = filepath.Clean(baseEval)
 	}
-	fileEval, err := filepath.EvalSymlinks(envFileAbs)
+	fileAbs := filepath.Clean(envFileAbs)
+	fileEval, err := filepath.EvalSymlinks(fileAbs)
 	if err != nil {
-		// Missing file: still reject when the unresolved path escapes the base.
-		fileEval = filepath.Clean(envFileAbs)
+		// Missing path components: keep containment checks on one filesystem view.
+		// On macOS, EvalSymlinks(base) may yield /private/var/... while a missing
+		// child still has the logical /var/... prefix; rebuild under baseEval.
+		rel, relErr := filepath.Rel(baseAbs, fileAbs)
+		if relErr != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
+			return fmt.Errorf("env_file %q resolves outside working_dir %q", envFileAbs, workingDir)
+		}
+		fileEval = filepath.Join(baseEval, rel)
 	} else {
 		fileEval = filepath.Clean(fileEval)
 	}

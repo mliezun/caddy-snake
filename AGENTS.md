@@ -71,6 +71,7 @@ Whenever you add or change a `python { ... }` subdirective (or a field on `Caddy
 | `working_dir` | `--working-dir` |
 | `venv` | `--venv` |
 | `workers` | `--workers` |
+| `max_dynamic_apps` | `--max-dynamic-apps` |
 | `start_timeout` | `--start-timeout` (indefinite: `--start-timeout=-1` or `forever`) |
 | `autoreload` | `--autoreload` |
 | `python_path` | `--python-path` |
@@ -78,9 +79,6 @@ Whenever you add or change a `python { ... }` subdirective (or a field on `Caddy
 | `env_var <name> <value>` | `--env-var NAME=VALUE` (repeatable) |
 | `isolation docker { image ... }` | `--isolation docker` + `--isolation-image` (+ optional `--isolation-network`, `--isolation-docker-host`, `--isolation-memory`, `--isolation-cpus`, `--isolation-read-only`) |
 | `isolation none` | `--isolation none` |
-| `max_dynamic_apps` | `--max-dynamic-apps` |
-| `dynamic_max_concurrency` | `--dynamic-max-concurrency` |
-| `dynamic_failure_ttl` | `--dynamic-failure-ttl` |
 
 CLI-only conveniences (no Caddyfile `python` equivalent) are fine to keep separate: `--domain`, `--listen` (default `127.0.0.1:9080`), `--static-path`, `--static-route`, `--debug`, `--access-logs`.
 
