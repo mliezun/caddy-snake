@@ -1,11 +1,11 @@
 import wsgiref.validate
 
 from flask import Flask, request
-from sqlitedict import SqliteDict
+from kvstore import KVStore
 
 app = Flask(__name__)
 
-db = SqliteDict("items.db", autocommit=True)
+db = KVStore("items.db")
 
 
 @app.route("/item/<string:id>", methods=["POST"])

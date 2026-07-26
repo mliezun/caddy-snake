@@ -18,8 +18,9 @@ while IFS= read -r req; do
 done < <(find . -name 'requirements*.txt' -not -path './.git/*' | sort)
 
 if [ -f cmd/cli/pyproject.toml ]; then
-  echo "==> pip-audit: cmd/cli/pyproject.toml"
-  if ! pip-audit --project-path cmd/cli --progress-spinner=off; then
+  echo "==> pip-audit: cmd/cli"
+  # Positional project_path audits pyproject.toml in that directory.
+  if ! pip-audit cmd/cli --progress-spinner=off; then
     status=1
   fi
 fi
