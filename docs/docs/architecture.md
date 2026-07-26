@@ -141,9 +141,13 @@ The ASGI implementation in [`caddysnake.py`](https://github.com/mliezun/caddy-sn
 
 ## Current Limitations
 
-### Virtual Environment Sharing
+### Shared cache has no tenant isolation
 
-When a `venv` is specified, the packages are added to the global `sys.path`. This means all Python apps served by the same Caddy instance have access to those packages, regardless of which app the venv was configured for.
+The in-process shared cache is visible to every worker attached to the same `python` handler. Use key prefixes per app/tenant, or an external store, when isolation is required.
+
+### Dynamic app cache is bounded, not infinite
+
+Multi-tenant `DynamicApp` caches are capped (default 128 apps, 30m idle TTL). Very large tenant counts need higher limits via env vars or an external routing design.
 
 ---
 

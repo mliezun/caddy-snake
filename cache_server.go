@@ -75,9 +75,8 @@ func (e *cacheEntry) expired(now time.Time) bool {
 type cacheStore struct {
 	mu      sync.Mutex
 	data    map[string]*cacheEntry
-	conds   map[string]*sync.Cond // lazily created; all use &mu
+	conds   map[string]*sync.Cond // lazily created; all use &mu (Wait unlocks while blocked)
 	closing bool
-	keyCap  int //nolint:unused // reserved for future max-keys enforcement
 }
 
 func newCacheStore() *cacheStore {
@@ -748,10 +747,6 @@ func respWriteBulk(w *bufio.Writer, b []byte) error {
 		return err
 	}
 	return w.Flush()
-}
-
-func respWriteBulkString(w *bufio.Writer, s string) error {
-	return respWriteBulk(w, []byte(s))
 }
 
 func respWriteArrayHeader(w *bufio.Writer, n int) error {

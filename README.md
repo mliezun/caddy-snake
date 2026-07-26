@@ -24,7 +24,7 @@ To make it easier to get started you can also grab one of the precompiled binari
 ## Features
 
 - **WSGI, ASGI & ESGI** — serve WSGI and ASGI frameworks, plus [ESGI](https://github.com/mliezun/esgi) apps (blocking `application(scope, protocol)` per connection)
-- **Multi-worker** — process-based (default) or thread-based workers for concurrent request handling
+- **Multi-worker** — process-based workers for concurrent request handling
 - **Shared worker cache** — optional key/value store in the Caddy (Go) process so Python **process** workers can share state via a small RESP client; on Linux/macOS the transport is a **Unix domain socket** (`unix://…` in `CADDYSNAKE_CACHE_ADDR`), on Windows it uses **loopback TCP**
 - **Auto-reload** — watches `.py` files and hot-reloads your app on changes during development
 - **Dynamic module loading** — use Caddy placeholders to load different apps per subdomain or route
@@ -62,8 +62,8 @@ This starts a server on port `9080` serving your app. See `./caddy python-server
 --domain <example.com>    Enable HTTPS with automatic certificates
 --listen <addr>           Custom listen address (default: :9080)
 --workers <count>         Number of worker processes (default: CPU count)
---max-dynamic-apps <n>    Maximum cached dynamic apps (default: 0, unlimited)
---python-path <path>      Path to Python executable (default: embedded Python)
+--max-dynamic-apps <n>    Cap cached dynamic apps (0 = env/default; default env cap: 128)
+--python-path <path>      Path to Python executable (default: system/venv python; embedded in standalone builds)
 --working-dir <path>      Working directory for the Python app
 --venv <path>             Path to virtual environment
 --env-file <path>         Dotenv file for worker env (repeatable)
@@ -292,9 +292,9 @@ Selects how the Python worker schedules work at the gateway boundary:
 
 ### `venv`
 
-Path to a Python virtual environment. Behind the scenes, this appends `venv/lib/python3.x/site-packages` to `sys.path` so installed packages are available to your app.
+Path to a Python virtual environment. Each Python **worker process** adds that venv’s `site-packages` to its own `sys.path`, so installed packages are available to your app.
 
-> **Note:** The venv packages are added to the global `sys.path`, which means all Python apps served by Caddy share the same packages.
+> **Note:** Workers are separate processes: a venv configured for one `python` handler (or one dynamic tenant) does not leak packages into other workers’ interpreters.
 
 ### `working_dir`
 
@@ -342,7 +342,7 @@ python {
 
 Number of worker processes to spawn. Defaults to the number of CPUs (`GOMAXPROCS`). Maximum: **256**.
 
-When you use **process workers** (more than one worker, or the default multi-worker layout), Caddy Snake may start an **in-process shared cache** in the Go plugin and pass connection details to each worker via environment variables (see [Shared worker cache](#shared-worker-cache)).
+When the `python` handler is provisioned, Caddy Snake starts an **in-process shared cache** in the Go plugin and passes connection details to each worker via environment variables (see [Shared worker cache](#shared-worker-cache)).
 
 ### `max_dynamic_apps`
 
@@ -414,7 +414,7 @@ This is useful for multi-tenant setups where each subdomain or route serves a di
 }
 ```
 
-In this example, a request to `app1.example.com` loads the app from the `app1/` directory, `app2.example.com` loads from `app2/`, and so on. Apps are lazily created on first request and cached for subsequent requests. Because each cached app owns worker processes, set `max_dynamic_apps` when placeholder values can be influenced by untrusted requests.
+In this example, a request to `app1.example.com` loads the app from the `app1/` directory, `app2.example.com` loads from `app2/`, and so on. Apps are lazily created on first request and cached for subsequent requests (default cap: 128 apps, 30m idle TTL; override with `max_dynamic_apps` / `--max-dynamic-apps`, or `CADDYSNAKE_MAX_DYNAMIC_APPS` / `CADDYSNAKE_DYNAMIC_APP_IDLE_TTL`).
 
 ---
 
@@ -526,12 +526,12 @@ Caddy Snake serves **~60% more requests/sec than Gunicorn** for Flask, **~51% mo
 
 ## Platform support
 
-| Platform       | Workers runtime   | Notes                                    |
-|----------------|-------------------|------------------------------------------|
-| Linux (x86_64) | process, thread   | Primary platform, full support           |
-| Linux (arm64)  | process, thread   | Full support                             |
-| macOS          | process, thread   | Full support                             |
-| Windows        | process           | Worker and cache IPC use loopback TCP    |
+| Platform       | Workers | Notes                          |
+|----------------|---------|--------------------------------|
+| Linux (x86_64) | process | Primary platform, full support |
+| Linux (arm64)  | process | Full support                   |
+| macOS          | process | Full support                   |
+| Windows        | process | Loopback TCP instead of Unix sockets |
 
 **Python versions:** 3.12, 3.13, 3.13-nogil (free-threaded), 3.14, 3.14-nogil (free-threaded)
 

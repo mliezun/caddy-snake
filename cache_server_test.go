@@ -151,6 +151,35 @@ func TestCacheStore_PopBlocksUntilAppend(t *testing.T) {
 	}
 }
 
+func TestCacheStore_GetSucceedsWhilePopBlocked(t *testing.T) {
+	// sync.Cond.Wait unlocks the store mutex while blocked, so other keys remain usable.
+	s := newCacheStore()
+	_ = s.Append([]byte("q"), []byte("item"))
+	_, _ = s.Pop([]byte("q"), nil)
+	_ = s.Set([]byte("other"), []byte("value"), 0)
+
+	started := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		close(started)
+		_, _ = s.Pop([]byte("q"), nil)
+		close(done)
+	}()
+	<-started
+	time.Sleep(20 * time.Millisecond)
+
+	got, _, _, kind, ok := s.Get([]byte("other"))
+	if !ok || kind != entryScalar || string(got) != "value" {
+		t.Fatalf("expected Get to succeed while Pop waits, ok=%v kind=%v got=%q", ok, kind, got)
+	}
+	_ = s.Append([]byte("q"), []byte("unblock"))
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Pop did not unblock")
+	}
+}
+
 func TestCacheStore_DeleteUnblocksPop(t *testing.T) {
 	s := newCacheStore()
 	_ = s.Append([]byte("k"), []byte("a"))
