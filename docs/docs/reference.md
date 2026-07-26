@@ -344,6 +344,8 @@ python {
 
 **Cache:** When Docker isolation is enabled, the in-process cache listens on TCP `127.0.0.1:<port>` and workers connect via `host.docker.internal`. The shared cache is still **not** a tenant isolation boundary — use key prefixes or avoid shared cache across untrusted apps.
 
+**Worker IPC:** Caddy talks to each container worker over a **Unix domain socket** on a host bind mount (`/run/caddysnake/worker.sock` in the container). No container IP or published TCP port is used for request proxying.
+
 **Platform:** Linux only in v1. Not supported on Windows.
 
 See also: [isolation design notes](isolation.md).

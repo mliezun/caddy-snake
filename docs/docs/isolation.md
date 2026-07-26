@@ -16,7 +16,7 @@ This document describes the `isolation` subdirective under the Caddy `python` ha
 | Host env | Inherits Caddy process env | `env_file` + `env_var` + internal `CADDYSNAKE_*` only |
 | Other workers | Same UID | Separate containers |
 | Shared cache | Per-handler in-process store | Reachable via `host.docker.internal`; **not** a tenant boundary |
-| Network | Host network | Bridge + container IP dial from Caddy |
+| Network | Host network | Worker HTTP via bind-mounted Unix socket; cache via `host.docker.internal` |
 
 ## Config
 
@@ -43,8 +43,7 @@ When Docker isolation is enabled:
 
 1. The in-process cache listens on TCP `127.0.0.1:<port>`.
 2. Workers receive `CADDYSNAKE_CACHE_ADDR=host.docker.internal:<port>`.
-3. Workers use TCP mode (`CADDYSNAKE_WORKER_TCP=1`) and write their listen port to a host-mounted port file.
-4. Caddy dials the container IP and published port.
+3. Each worker listens on a **Unix domain socket** at `/run/caddysnake/worker.sock` inside the container; the socket directory is bind-mounted on the host so Caddy dials the same path (no container IP lookup).
 
 ## Backend interface
 

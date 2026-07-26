@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -103,8 +104,8 @@ func TestBuildWorkerEnvForIsolation_DockerOmitsHostEnv(t *testing.T) {
 	if !strings.Contains(joined, "APP_ENV=test") {
 		t.Fatalf("missing configured env var: %s", joined)
 	}
-	if !strings.Contains(joined, envCaddysnakeWorkerTCP+"=1") {
-		t.Fatalf("missing tcp env: %s", joined)
+	if strings.Contains(joined, "CADDYSNAKE_WORKER_TCP=") {
+		t.Fatalf("docker workers use unix socket IPC, not TCP env: %s", joined)
 	}
 	if !strings.Contains(joined, "host.docker.internal:9999") {
 		t.Fatalf("cache addr not rewritten: %s", joined)
@@ -206,19 +207,21 @@ func TestDockerBackend_dockerEnv(t *testing.T) {
 
 func TestDockerBackend_Stop(t *testing.T) {
 	b := dockerBackend{cfg: &DockerIsolationConfig{Image: "python:3.13-slim"}}
-	portDir := t.TempDir()
+	sockDir := t.TempDir()
+	socketPath := filepath.Join(sockDir, "worker.sock")
 	h := &dockerWorkerHandle{
 		containerID: "nonexistent-container-id",
-		portDir:     portDir,
-		dialNet:     "tcp",
-		dialAddr:    "127.0.0.1:1",
+		sockDir:     sockDir,
+		socketPath:  socketPath,
+		dialNet:     "unix",
+		dialAddr:    socketPath,
 		exited:      make(chan error),
 	}
 	if err := b.Stop(h, time.Second); err != nil {
 		t.Fatalf("Stop: %v", err)
 	}
-	if _, err := os.Stat(portDir); err == nil {
-		t.Fatal("portDir should be removed")
+	if _, err := os.Stat(sockDir); err == nil {
+		t.Fatal("sockDir should be removed")
 	}
 	if err := b.Stop(fakeWorkerHandle{}, time.Second); err == nil {
 		t.Fatal("invalid handle should error")
@@ -227,8 +230,8 @@ func TestDockerBackend_Stop(t *testing.T) {
 
 func TestDockerWorkerHandleAccessors(t *testing.T) {
 	exited := make(chan error, 1)
-	h := &dockerWorkerHandle{dialNet: "tcp", dialAddr: "10.0.0.2:8080", exited: exited}
-	if h.DialNetwork() != "tcp" || h.DialAddress() != "10.0.0.2:8080" || h.Exited() != exited {
+	h := &dockerWorkerHandle{dialNet: "unix", dialAddr: "/tmp/worker.sock", exited: exited}
+	if h.DialNetwork() != "unix" || h.DialAddress() != "/tmp/worker.sock" || h.Exited() != exited {
 		t.Fatal("accessor mismatch")
 	}
 }
@@ -354,9 +357,6 @@ func TestDockerCLIHelpers(t *testing.T) {
 	}
 	if err := b.waitDocker(ctx, "definitely-not-a-container"); err == nil {
 		t.Fatal("waitDocker should fail for missing container")
-	}
-	if _, err := b.containerIP(ctx, "definitely-not-a-container"); err == nil {
-		t.Fatal("containerIP should fail for missing container")
 	}
 	if err := b.stopContainer(ctx, "definitely-not-a-container", time.Second); err == nil {
 		t.Fatal("stopContainer should fail for missing container")

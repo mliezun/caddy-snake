@@ -15,8 +15,6 @@ import (
 const (
 	isolationBackendNone   = "none"
 	isolationBackendDocker = "docker"
-
-	envCaddysnakeWorkerTCP = "CADDYSNAKE_WORKER_TCP"
 )
 
 // IsolationConfig selects how Python workers are run.
@@ -246,11 +244,7 @@ func workerInternalEnvForIsolation(iface, cacheAddr, cacheToken, workerID, worke
 	if isolated {
 		addr = cacheAddrForContainer(cacheAddr)
 	}
-	extra := workerInternalEnv(iface, addr, cacheToken, workerID, workerToken)
-	if isolated {
-		extra = append(extra, envCaddysnakeWorkerTCP+"=1")
-	}
-	return extra
+	return workerInternalEnv(iface, addr, cacheToken, workerID, workerToken)
 }
 
 func buildWorkerEnvForIsolation(spec WorkerSpec, fileVars map[string]string) []string {
