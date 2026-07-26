@@ -1,8 +1,8 @@
 asgiref==3.8.1
-certifi==2024.8.30
+certifi==2026.7.22
 charset-normalizer==3.4.0
-Django==5.1.4
-idna==3.10
-requests==2.32.3
-sqlparse==0.5.2
-urllib3==2.2.3
+Django==5.2.16
+idna==3.18
+requests==2.34.2
+sqlparse==0.5.4
+urllib3==2.7.0

@@ -1,8 +1,8 @@
 import json
 
-from sqlitedict import SqliteDict
+from kvstore import KVStore
 
-db = SqliteDict("items.db", autocommit=True)
+db = KVStore("items.db")
 
 
 def store_item(id: str, content: dict):

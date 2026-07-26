@@ -22,18 +22,12 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
-          go-version: "1.26"
+          go-version: "1.26.5"
           cache: false
-      - name: govulncheck (report-only)
+      - name: govulncheck
         run: |
           go install golang.org/x/vuln/cmd/govulncheck@latest
-          set +e
           govulncheck ./...
-          status=$?
-          if [ "$status" -ne 0 ]; then
-            echo "::warning title=govulncheck::Reported vulnerabilities (often transitive Caddy/TLS deps); see log above"
-          fi
-          exit 0
 
   pip-audit:
     name: pip-audit
@@ -66,13 +60,7 @@ jobs:
         working-directory: docs
         run: |
           npm ci
-          set +e
           npm audit --audit-level=high
-          status=$?
-          if [ "$status" -ne 0 ]; then
-            echo "::warning title=npm audit::High-severity docs dev dependency issues (often no upstream fix yet); see log"
-          fi
-          exit 0
 
   gosec:
     name: gosec
@@ -83,7 +71,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
-          go-version: "1.26"
+          go-version: "1.26.5"
           cache: false
       - name: Run gosec
         run: |

@@ -46,7 +46,9 @@ This starts a server on port `9080` serving your app. See `caddysnake --help` fo
 | `--domain <example.com>` | Enable HTTPS with automatic certificates | — |
 | `--listen <addr>` | Custom listen address | `:9080` |
 | `--workers <count>` | Number of worker processes | CPU count |
-| `--max-dynamic-apps <count>` | Cap cached dynamic apps (`0` = env/default cap) | env/default (`128`) |
+| `--max-dynamic-apps <count>` | Max distinct dynamic Python apps | `128` |
+| `--dynamic-max-concurrency <count>` | Max concurrent dynamic app creations | `4` |
+| `--dynamic-failure-ttl <duration>` | Negative-cache TTL for failed dynamic creates | `5s` |
 | `--python-path <path>` | Path to the Python interpreter | system/venv python |
 | `--venv <path>` | Path to a Python virtual environment | — |
 | `--working-dir <path>` | Working directory for the Python app | — |
@@ -111,7 +113,7 @@ Install on Ubuntu 24.04:
 
 ```bash
 sudo apt-get install python3 golang
-go install github.com/caddyserver/xcaddy/cmd/xcaddy@latest
+go install github.com/caddyserver/xcaddy/cmd/xcaddy@v0.4.6
 ```
 
 ### Example usage: FastAPI

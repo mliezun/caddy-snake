@@ -105,7 +105,7 @@ go version
 
 # Install xcaddy
 echo ">>> Installing xcaddy..."
-go install github.com/caddyserver/xcaddy/cmd/xcaddy@latest
+go install github.com/caddyserver/xcaddy/cmd/xcaddy@v0.4.6
 
 # Install Python
 echo ">>> Installing Python ${PY_PKG_VERSION}..."

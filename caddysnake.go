@@ -45,23 +45,28 @@ var caddysnake_py string
 // Hop-internal headers: set only by the Go module after stripping client-supplied
 // values. The Python worker uses these for REMOTE_ADDR / ASGI client.
 const (
-	caddySnakeRemoteAddrHeader = "Caddy-Snake-Remote-Addr"
-	caddySnakeRemotePortHeader = "Caddy-Snake-Remote-Port"
+	caddySnakeRemoteAddrHeader  = "Caddy-Snake-Remote-Addr"
+	caddySnakeRemotePortHeader  = "Caddy-Snake-Remote-Port"
+	caddySnakeWorkerTokenHeader = "Caddy-Snake-Worker-Token"
 	// maxPythonWorkers caps process spawn at provision / per dynamic key.
 	maxPythonWorkers = 256
 )
+
+// EnvCaddysnakeWorkerToken is set on worker processes for inbound proxy authentication.
+const EnvCaddysnakeWorkerToken = "CADDYSNAKE_WORKER_TOKEN"
 
 // setPythonWorkerOutboundHeaders configures the outbound request to the Python
 // worker: target URL, standard X-Forwarded-* (preserve inbound X-Forwarded-For
 // chain, then append this hop per [httputil.ProxyRequest.SetXForwarded]), and
 // trusted Caddy-Snake-Remote-* from the inbound RemoteAddr.
-func setPythonWorkerOutboundHeaders(pr *httputil.ProxyRequest, dialAddr string) {
+func setPythonWorkerOutboundHeaders(pr *httputil.ProxyRequest, dialAddr, workerToken string) {
 	pr.Out.URL.Scheme = "http"
 	pr.Out.URL.Host = dialAddr
 	pr.Out.Header["X-Forwarded-For"] = pr.In.Header["X-Forwarded-For"]
 	pr.SetXForwarded()
 	pr.Out.Header.Del(caddySnakeRemoteAddrHeader)
 	pr.Out.Header.Del(caddySnakeRemotePortHeader)
+	pr.Out.Header.Del(caddySnakeWorkerTokenHeader)
 	host, port, err := net.SplitHostPort(pr.In.RemoteAddr)
 	if err != nil {
 		host = pr.In.RemoteAddr
@@ -69,6 +74,9 @@ func setPythonWorkerOutboundHeaders(pr *httputil.ProxyRequest, dialAddr string) 
 	}
 	pr.Out.Header.Set(caddySnakeRemoteAddrHeader, host)
 	pr.Out.Header.Set(caddySnakeRemotePortHeader, port)
+	if workerToken != "" {
+		pr.Out.Header.Set(caddySnakeWorkerTokenHeader, workerToken)
+	}
 }
 
 // AppServer defines the interface to interacting with a WSGI or ASGI server
@@ -147,10 +155,6 @@ type CaddySnake struct {
 	VenvPath string `json:"venv_path,omitempty"`
 	// Number of worker processes to spawn. Defaults to GOMAXPROCS (CPU count) when empty or "0".
 	Workers string `json:"workers,omitempty"`
-	// Maximum number of request-resolved dynamic apps cached by this handler.
-	// Empty or "0" keeps the env/default cap (CADDYSNAKE_MAX_DYNAMIC_APPS, default 128).
-	// A positive value overrides that cap for this site.
-	MaxDynamicApps string `json:"max_dynamic_apps,omitempty"`
 	// How long Provision waits for each worker to become ready.
 	// Empty uses 120s; "-1", "forever", "none", "inf", or "indefinite" wait indefinitely.
 	// Caddyfile: start_timeout. CLI: --start-timeout (use --start-timeout=-1 or forever).
@@ -166,6 +170,12 @@ type CaddySnake struct {
 	// Individual environment variables for workers. Applied after env_files (overrides file values).
 	// Caddyfile: repeatable "env_var NAME value". Cannot set PYTHONUNBUFFERED or CADDYSNAKE_*.
 	EnvVars map[string]string `json:"env_vars,omitempty"`
+	// Dynamic mode limits (ignored when module/working_dir/venv have no placeholders).
+	// MaxDynamicApps: empty uses env/default (CADDYSNAKE_MAX_DYNAMIC_APPS, usually 128);
+	// a positive value sets the site cap (0 is rejected).
+	MaxDynamicApps        string `json:"max_dynamic_apps,omitempty"`
+	DynamicMaxConcurrency string `json:"dynamic_max_concurrency,omitempty"`
+	DynamicFailureTTL     string `json:"dynamic_failure_ttl,omitempty"`
 
 	logger   *zap.Logger
 	app      AppServer
@@ -286,10 +296,6 @@ func (f *CaddySnake) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 					if !d.Args(&f.Workers) {
 						return d.Errf("expected exactly one argument for workers")
 					}
-				case "max_dynamic_apps":
-					if !d.Args(&f.MaxDynamicApps) {
-						return d.Errf("expected exactly one argument for max_dynamic_apps")
-					}
 				case "start_timeout":
 					if !d.Args(&f.StartTimeout) {
 						return d.Errf("expected exactly one argument for start_timeout")
@@ -321,6 +327,18 @@ func (f *CaddySnake) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 						f.EnvVars = make(map[string]string)
 					}
 					f.EnvVars[name] = value
+				case "max_dynamic_apps":
+					if !d.Args(&f.MaxDynamicApps) {
+						return d.Errf("expected exactly one argument for max_dynamic_apps")
+					}
+				case "dynamic_max_concurrency":
+					if !d.Args(&f.DynamicMaxConcurrency) {
+						return d.Errf("expected exactly one argument for dynamic_max_concurrency")
+					}
+				case "dynamic_failure_ttl":
+					if !d.Args(&f.DynamicFailureTTL) {
+						return d.Errf("expected exactly one argument for dynamic_failure_ttl")
+					}
 				default:
 					return d.Errf("unknown subdirective: %s", d.Val())
 				}
@@ -351,6 +369,7 @@ func (f *CaddySnake) Provision(ctx caddy.Context) error {
 	}
 	f.cacheSrv = cs
 	cacheAddr := cs.Addr()
+	cacheToken := cs.Token()
 	success := false
 	defer func() {
 		if !success && f.cacheSrv != nil {
@@ -373,10 +392,6 @@ func (f *CaddySnake) Provision(ctx caddy.Context) error {
 	if workers > maxPythonWorkers {
 		workers = maxPythonWorkers
 	}
-	maxDynamicApps, err := strconv.Atoi(f.MaxDynamicApps)
-	if f.MaxDynamicApps != "" && (err != nil || maxDynamicApps < 0) {
-		return fmt.Errorf("invalid max_dynamic_apps value: %s", f.MaxDynamicApps)
-	}
 
 	startTimeout, err := parseStartTimeout(f.StartTimeout)
 	if err != nil {
@@ -389,7 +404,7 @@ func (f *CaddySnake) Provision(ctx caddy.Context) error {
 		envFilesContainPlaceholder(f.EnvFiles) || envMapContainsPlaceholder(f.EnvVars)
 
 	if isDynamic {
-		if err = f.provisionDynamic(workers, maxDynamicApps, cacheAddr, startTimeout); err != nil {
+		if err = f.provisionDynamic(workers, cacheAddr, cacheToken, startTimeout); err != nil {
 			return err
 		}
 		success = true
@@ -416,7 +431,7 @@ func (f *CaddySnake) Provision(ctx caddy.Context) error {
 		}
 	}
 	rt := effectivePythonRuntime(iface, f.Runtime)
-	f.app, err = NewPythonWorkerGroup(iface, module, f.WorkingDir, f.VenvPath, lifespan, rt, workers, pythonBin, cacheAddr, envFiles, envVars, startTimeout, f.logger)
+	f.app, err = NewPythonWorkerGroup(iface, module, f.WorkingDir, f.VenvPath, lifespan, rt, workers, pythonBin, cacheAddr, cacheToken, envFiles, envVars, startTimeout, f.logger)
 	if err != nil {
 		return err
 	}
@@ -439,7 +454,7 @@ func (f *CaddySnake) Provision(ctx caddy.Context) error {
 		}
 
 		factory := func() (AppServer, error) {
-			return NewPythonWorkerGroup(iface, module, f.WorkingDir, f.VenvPath, lifespan, rt, workers, pythonBin, cacheAddr, envFiles, envVars, startTimeout, f.logger)
+			return NewPythonWorkerGroup(iface, module, f.WorkingDir, f.VenvPath, lifespan, rt, workers, pythonBin, cacheAddr, cacheToken, envFiles, envVars, startTimeout, f.logger)
 		}
 
 		// Keep Caddy running on reload errors; failed app serves 503 until recovery.
@@ -469,12 +484,16 @@ func (f *CaddySnake) pythonInterfaceAndModule() (iface, module string, err error
 
 // provisionDynamic sets up the module in dynamic mode where Caddy placeholders
 // in module_wsgi/module_asgi/module_esgi, working_dir, or venv are resolved per-request.
-func (f *CaddySnake) provisionDynamic(workers, maxDynamicApps int, cacheAddr string, startTimeout time.Duration) error {
+func (f *CaddySnake) provisionDynamic(workers int, cacheAddr, cacheToken string, startTimeout time.Duration) error {
 	autoreload := f.Autoreload == "on"
 	pythonPath := f.PythonPath
 	envFilePatterns := cloneEnvFiles(f.EnvFiles)
 	envVarPatterns := cloneEnvVars(f.EnvVars)
 	logger := f.logger
+	limits, err := parseDynamicAppLimits(f.MaxDynamicApps, f.DynamicMaxConcurrency, f.DynamicFailureTTL)
+	if err != nil {
+		return err
+	}
 
 	iface, modulePattern, err := f.pythonInterfaceAndModule()
 	if err != nil {
@@ -493,9 +512,9 @@ func (f *CaddySnake) provisionDynamic(workers, maxDynamicApps int, cacheAddr str
 	rt := effectivePythonRuntime(iface, f.Runtime)
 	factory := func(module, dir, venv string, envFiles []string, envVars map[string]string) (AppServer, error) {
 		pythonBin := resolvePythonInterpreter(pythonPath, venv)
-		return NewPythonWorkerGroup(iface, module, dir, venv, lifespan, rt, workers, pythonBin, cacheAddr, envFiles, envVars, startTimeout, logger)
+		return NewPythonWorkerGroup(iface, module, dir, venv, lifespan, rt, workers, pythonBin, cacheAddr, cacheToken, envFiles, envVars, startTimeout, logger)
 	}
-	f.app, err = NewDynamicApp(modulePattern, f.WorkingDir, f.VenvPath, envFilePatterns, envVarPatterns, factory, f.logger, autoreload, nil, maxDynamicApps)
+	f.app, err = NewDynamicApp(modulePattern, f.WorkingDir, f.VenvPath, envFilePatterns, envVarPatterns, factory, f.logger, autoreload, nil, limits)
 	if err != nil {
 		return err
 	}
@@ -543,12 +562,6 @@ func (m *CaddySnake) Validate() error {
 			return fmt.Errorf("workers value %d exceeds maximum of %d", w, maxPythonWorkers)
 		}
 	}
-	if m.MaxDynamicApps != "" {
-		maxApps, err := strconv.Atoi(m.MaxDynamicApps)
-		if err != nil || maxApps < 0 {
-			return fmt.Errorf("invalid max_dynamic_apps value: %s", m.MaxDynamicApps)
-		}
-	}
 	if _, err := parseStartTimeout(m.StartTimeout); err != nil {
 		return err
 	}
@@ -556,6 +569,9 @@ func (m *CaddySnake) Validate() error {
 		return fmt.Errorf("lifespan must be 'on' or 'off', got: %s", m.Lifespan)
 	}
 	if err := validateEnvVars(m.EnvVars); err != nil {
+		return err
+	}
+	if _, err := parseDynamicAppLimits(m.MaxDynamicApps, m.DynamicMaxConcurrency, m.DynamicFailureTTL); err != nil {
 		return err
 	}
 	return nil
@@ -727,6 +743,8 @@ type PythonWorker struct {
 	DialNet      string // "unix" or "tcp"
 	DialAddr     string // socket path or host:port
 	CacheAddr    string // CADDYSNAKE_CACHE_ADDR: unix://path (Unix) or 127.0.0.1:port (Windows); empty = omit env
+	CacheToken   string // CADDYSNAKE_CACHE_TOKEN for TCP cache auth; empty on Unix sockets
+	WorkerToken  string // shared secret for inbound proxy requests (CADDYSNAKE_WORKER_TOKEN)
 	WorkerID     string // CADDYSNAKE_WORKER_ID: stable index 0..N-1 within the worker group
 	EnvFiles     []string
 	EnvVars      map[string]string
@@ -740,7 +758,7 @@ type PythonWorker struct {
 	Proxy     *httputil.ReverseProxy
 }
 
-func NewPythonWorker(iface, app, workingDir, venv, lifespan, pyRuntime, pythonBin, scriptPath, cacheAddr, workerID string, envFiles []string, envVars map[string]string, startTimeout time.Duration, logger *zap.Logger) (*PythonWorker, error) {
+func NewPythonWorker(iface, app, workingDir, venv, lifespan, pyRuntime, pythonBin, scriptPath, cacheAddr, cacheToken, workerToken, workerID string, envFiles []string, envVars map[string]string, startTimeout time.Duration, logger *zap.Logger) (*PythonWorker, error) {
 	var socket *os.File
 	var sockDir string
 	var err error
@@ -787,6 +805,8 @@ func NewPythonWorker(iface, app, workingDir, venv, lifespan, pyRuntime, pythonBi
 		DialNet:      dialNet,
 		DialAddr:     dialAddr,
 		CacheAddr:    cacheAddr,
+		CacheToken:   cacheToken,
+		WorkerToken:  workerToken,
 		WorkerID:     workerID,
 		EnvFiles:     cloneEnvFiles(envFiles),
 		EnvVars:      cloneEnvVars(envVars),
@@ -812,7 +832,7 @@ func (w *PythonWorker) Start() error {
 	}
 	w.Proxy = &httputil.ReverseProxy{
 		Rewrite: func(req *httputil.ProxyRequest) {
-			setPythonWorkerOutboundHeaders(req, w.DialAddr)
+			setPythonWorkerOutboundHeaders(req, w.DialAddr, w.WorkerToken)
 		},
 		Transport:  w.Transport,
 		BufferPool: sharedProxyBufferPool,
@@ -843,13 +863,13 @@ func (w *PythonWorker) Start() error {
 		"--app", w.App,
 		"--socket", w.Socket.Name(),
 	}
-	timeout := effectiveStartTimeout(w.StartTimeout)
 	if workingDir != "" {
 		args = append(args, "--working-dir", workingDir)
 	}
 	if w.Venv != "" {
 		args = append(args, "--venv", w.Venv)
 	}
+	timeout := effectiveStartTimeout(w.StartTimeout)
 	if w.Lifespan != "" {
 		args = append(args, "--lifespan", w.Lifespan)
 		if w.Lifespan == "on" && timeout >= 0 {
@@ -867,7 +887,7 @@ func (w *PythonWorker) Start() error {
 	if err != nil {
 		return err
 	}
-	w.Cmd.Env = buildWorkerEnv(os.Environ(), fileVars, w.EnvVars, workerInternalEnv(w.Interface, w.CacheAddr, w.WorkerID)...)
+	w.Cmd.Env = buildWorkerEnv(os.Environ(), fileVars, w.EnvVars, workerInternalEnv(w.Interface, w.CacheAddr, w.CacheToken, w.WorkerID, w.WorkerToken)...)
 	setSysProcAttr(w.Cmd)
 
 	if err := w.Cmd.Start(); err != nil {
@@ -877,7 +897,6 @@ func (w *PythonWorker) Start() error {
 	go func() {
 		w.cmdWaitCh <- w.Cmd.Wait()
 	}()
-
 	if runtime.GOOS == "windows" {
 		port, err := waitForPortFile(w.Socket.Name(), timeout, w.cmdWaitCh, w.logger)
 		if err != nil {
@@ -1093,16 +1112,22 @@ type PythonWorkerGroup struct {
 	ScriptPath string // path to worker_main.py inside BundleDir
 }
 
-func NewPythonWorkerGroup(iface, app, workingDir, venv, lifespan, runtime string, count int, pythonBin, cacheAddr string, envFiles []string, envVars map[string]string, startTimeout time.Duration, logger *zap.Logger) (*PythonWorkerGroup, error) {
+func NewPythonWorkerGroup(iface, app, workingDir, venv, lifespan, runtime string, count int, pythonBin, cacheAddr, cacheToken string, envFiles []string, envVars map[string]string, startTimeout time.Duration, logger *zap.Logger) (*PythonWorkerGroup, error) {
 	scriptPath, bundleDir, err := acquireCaddysnakePyBundle()
 	if err != nil {
 		return nil, fmt.Errorf("failed to write worker bundle: %w", err)
 	}
 
+	workerToken, err := generateSecretToken()
+	if err != nil {
+		os.RemoveAll(bundleDir)
+		return nil, fmt.Errorf("failed to generate worker token: %w", err)
+	}
+
 	errs := make([]error, count)
 	workers := make([]*PythonWorker, count)
 	for i := 0; i < count; i++ {
-		workers[i], errs[i] = NewPythonWorker(iface, app, workingDir, venv, lifespan, runtime, pythonBin, scriptPath, cacheAddr, strconv.Itoa(i), envFiles, envVars, startTimeout, logger)
+		workers[i], errs[i] = NewPythonWorker(iface, app, workingDir, venv, lifespan, runtime, pythonBin, scriptPath, cacheAddr, cacheToken, workerToken, strconv.Itoa(i), envFiles, envVars, startTimeout, logger)
 	}
 	wg := &PythonWorkerGroup{
 		Workers:    workers,
@@ -1149,18 +1174,18 @@ func init() {
 		Name: "python-server",
 		Usage: "--server-type wsgi|asgi|esgi --app <module> " +
 			"[--domain <example.com>] [--listen <addr>] [--workers <count>] " +
-			"[--max-dynamic-apps <count>] " +
 			"[--python-path <path>] [--working-dir <path>] [--venv <path>] " +
 			"[--env-file <path>] [--env-var NAME=VALUE] " +
 			"[--start-timeout=<duration|-1|forever>] " +
 			"[--static-path <path>] [--static-route <route>] " +
 			"[--runtime <name>] [--lifespan on|off] " +
+			"[--max-dynamic-apps <count>] [--dynamic-max-concurrency <count>] [--dynamic-failure-ttl <duration>] " +
 			"[--debug] [--access-logs] [--autoreload]",
 		Short: "Spins up a Python server",
 		Long: `
 A Python WSGI, ASGI, or ESGI server designed for apps and frameworks.
 
-Python-block options mirror the Caddyfile python directive (workers, max_dynamic_apps, venv,
+Python-block options mirror the Caddyfile python directive (workers, venv,
 working_dir, env_file, env_var, start_timeout, runtime, lifespan, autoreload,
 python_path). CLI-only flags cover listen address, HTTPS domain, and static files.
 
@@ -1179,7 +1204,6 @@ Ensure DNS A/AAAA records are correctly set up if using a public domain for secu
 			cmd.Flags().StringP("domain", "d", "", "Domain name at which to serve the files")
 			cmd.Flags().StringP("listen", "l", "", "The address to which to bind the listener")
 			cmd.Flags().StringP("workers", "w", "0", "The number of workers to spawn")
-			cmd.Flags().String("max-dynamic-apps", "0", "Maximum cached dynamic apps (0 = env/default cap, usually 128)")
 			cmd.Flags().String("python-path", "", "Path to the Python interpreter")
 			cmd.Flags().String("working-dir", "", "Working directory for the Python app")
 			cmd.Flags().String("venv", "", "Path to a Python virtual environment to use")
@@ -1193,6 +1217,9 @@ Ensure DNS A/AAAA records are correctly set up if using a public domain for secu
 			cmd.Flags().Bool("autoreload", false, "Watch .py files and reload on changes")
 			cmd.Flags().String("lifespan", "off", "Enable ASGI lifespan support (ignored in WSGI mode)")
 			cmd.Flags().String("runtime", "", "Worker runtime (wsgi: sync|gevent; esgi: gevent only; asgi: native|uvloop); defaults: sync for WSGI, gevent for ESGI, uvloop for ASGI")
+			cmd.Flags().String("max-dynamic-apps", "", "Max distinct dynamic Python apps (empty = env/default, usually 128)")
+			cmd.Flags().String("dynamic-max-concurrency", "", "Max concurrent dynamic app creations (default: 4)")
+			cmd.Flags().String("dynamic-failure-ttl", "", "Cache failed dynamic create errors for this duration (default: 5s)")
 			cmd.RunE = caddycmd.WrapCommandFuncForCobra(pythonServer)
 		},
 	})
@@ -1206,7 +1233,6 @@ func pythonServer(fs caddycmd.Flags) (int, error) {
 	app := fs.String("app")
 	listen := fs.String("listen")
 	workers := fs.String("workers")
-	maxDynamicApps := fs.String("max-dynamic-apps")
 	debug := fs.Bool("debug")
 	accessLogs := fs.Bool("access-logs")
 	autoreload := fs.Bool("autoreload")
@@ -1218,6 +1244,9 @@ func pythonServer(fs caddycmd.Flags) (int, error) {
 	venv := fs.String("venv")
 	lifespan := fs.String("lifespan")
 	runtimeFlag := fs.String("runtime")
+	maxDynamicApps := fs.String("max-dynamic-apps")
+	dynamicMaxConcurrency := fs.String("dynamic-max-concurrency")
+	dynamicFailureTTL := fs.String("dynamic-failure-ttl")
 	startTimeout := fs.String("start-timeout")
 	envFiles, err := fs.GetStringSlice("env-file")
 	if err != nil {
@@ -1273,7 +1302,6 @@ func pythonServer(fs caddycmd.Flags) (int, error) {
 	}
 
 	pythonHandler.Workers = workers
-	pythonHandler.MaxDynamicApps = maxDynamicApps
 	pythonHandler.PythonPath = pythonPath
 	if autoreload {
 		pythonHandler.Autoreload = "on"
@@ -1282,6 +1310,9 @@ func pythonServer(fs caddycmd.Flags) (int, error) {
 	pythonHandler.Lifespan = lifespan
 	pythonHandler.Runtime = runtimeFlag
 	pythonHandler.StartTimeout = startTimeout
+	pythonHandler.MaxDynamicApps = maxDynamicApps
+	pythonHandler.DynamicMaxConcurrency = dynamicMaxConcurrency
+	pythonHandler.DynamicFailureTTL = dynamicFailureTTL
 	pythonHandler.EnvFiles = cloneEnvFiles(envFiles)
 	pythonHandler.EnvVars = envVars
 
@@ -1357,7 +1388,7 @@ func pythonServer(fs caddycmd.Flags) (int, error) {
 	}
 	if listen == "" {
 		if domain == "" {
-			listen = ":9080"
+			listen = "127.0.0.1:9080"
 		} else {
 			listen = ":" + strconv.Itoa(certmagic.HTTPSPort)
 		}

@@ -60,9 +60,8 @@ This starts a server on port `9080` serving your app. See `./caddy python-server
 --server-type wsgi|asgi|esgi   Required. Type of Python app
 --app <module:var>        Required. Python module and app variable (e.g. main:app)
 --domain <example.com>    Enable HTTPS with automatic certificates
---listen <addr>           Custom listen address (default: :9080)
+--listen <addr>           Custom listen address (default: 127.0.0.1:9080)
 --workers <count>         Number of worker processes (default: CPU count)
---max-dynamic-apps <n>    Cap cached dynamic apps (0 = env/default; default env cap: 128)
 --python-path <path>      Path to Python executable (default: system/venv python; embedded in standalone builds)
 --working-dir <path>      Working directory for the Python app
 --venv <path>             Path to virtual environment
@@ -76,6 +75,9 @@ This starts a server on port `9080` serving your app. See `./caddy python-server
 --lifespan on|off         Enable ASGI lifespan events (default: off)
 --runtime <name>          WSGI: sync|gevent; ESGI: gevent only; ASGI: native|uvloop (see docs)
 --autoreload              Watch .py files and reload on changes
+--max-dynamic-apps <n>    Max distinct dynamic Python apps (default: 128)
+--dynamic-max-concurrency <n>  Max concurrent dynamic app creates (default: 4)
+--dynamic-failure-ttl <dur>    Negative-cache TTL for failed dynamic creates (default: 5s)
 ```
 
 ### Option 2: Build from source
@@ -93,7 +95,7 @@ Install on Ubuntu 24.04:
 
 ```bash
 sudo apt-get install python3 golang
-go install github.com/caddyserver/xcaddy/cmd/xcaddy@latest
+go install github.com/caddyserver/xcaddy/cmd/xcaddy@v0.4.6
 ```
 
 ### Option 3: Use a Docker image
@@ -127,7 +129,7 @@ zip -g app.zip main.py
 cd caddy-snake/cmd/embed-app
 ./build.sh /path/to/myapp/app.zip 3.13 --output myapp
 
-./myapp  # Serves on :9080
+./myapp  # Serves on 127.0.0.1:9080
 ```
 
 See [Apps as Standalone Binaries](https://caddy-snake.readthedocs.io/en/latest/docs/embed-app/) for the full guide.
@@ -254,7 +256,7 @@ python {
     env_file "/path/to/.env"            # Dotenv file loaded into worker env (repeatable)
     env_var VARNAME value               # Inline env var; overrides env_file (repeatable)
     workers 4                           # Number of worker processes (default: CPU count)
-    max_dynamic_apps 32                 # Cap request-resolved app instances (0 = env/default)
+    max_dynamic_apps 32                 # Cap request-resolved app instances (default: 128)
     start_timeout 120s                  # Wait for worker readiness (default: 120s; -1 = indefinite)
     lifespan on|off                     # ASGI lifespan events (default: off)
     python_path "/usr/bin/python3"       # Explicit Python interpreter
@@ -346,7 +348,7 @@ When the `python` handler is provisioned, Caddy Snake starts an **in-process sha
 
 ### `max_dynamic_apps`
 
-Optional override for the number of cached app instances created from request-time placeholders. Empty or `0` keeps the env/default cap (`CADDYSNAKE_MAX_DYNAMIC_APPS`, default **128**) and idle LRU eviction (`CADDYSNAKE_DYNAMIC_APP_IDLE_TTL`, default **30m**). A positive value overrides the cap for that site; when every slot is busy, uncached keys are rejected until capacity frees.
+Maximum distinct cached app instances created from request-time placeholders (default **128**). Must be a positive integer when set. Override with `CADDYSNAKE_MAX_DYNAMIC_APPS` or this directive / `--max-dynamic-apps`. Idle apps are also evicted by LRU (`CADDYSNAKE_DYNAMIC_APP_IDLE_TTL`, default **30m**); when every slot is busy, new keys return HTTP 503.
 
 ### `start_timeout`
 
@@ -376,9 +378,9 @@ python {
 Process-based workers run in **separate Python interpreters**, so they do not share `sys.modules` or in-memory globals. For lightweight cross-worker state (queues, small shared counters, etc.), Caddy Snake can expose a **key/value cache** that lives in the **Caddy plugin process** and is reached over a stream socket using a small **RESP2**-like protocol.
 
 - **Linux and macOS:** the plugin listens on a **Unix domain socket** under a private temporary directory and sets **`CADDYSNAKE_CACHE_ADDR`** to a **`unix:///absolute/path/to/cache.sock`** URL. Traffic stays on the filesystem socket, not the generic TCP/IP stack.
-- **Windows:** workers use **loopback TCP**; **`CADDYSNAKE_CACHE_ADDR`** is like **`127.0.0.1:<ephemeral-port>`**.
+- **Windows:** workers use **loopback TCP**; **`CADDYSNAKE_CACHE_ADDR`** is like **`127.0.0.1:<ephemeral-port>`**. Clients must authenticate with **`CADDYSNAKE_CACHE_TOKEN`** via the **`CSAUTH`** command before other cache commands.
 
-Caddy also sets **`CADDYSNAKE_WORKER_INTERFACE`** (`wsgi`, `asgi`, `esgi`, …), **`CADDYSNAKE_WORKER_ID`** (stable index `0`…`N-1` per worker group), and **`CADDYSNAKE_CACHE_TIMEOUT`** (read/connect hint in seconds) for the Python client.
+Caddy also sets **`CADDYSNAKE_WORKER_INTERFACE`** (`wsgi`, `asgi`, `esgi`, …), **`CADDYSNAKE_WORKER_ID`** (stable index `0`…`N-1` per worker group), **`CADDYSNAKE_CACHE_TIMEOUT`** (read/connect hint in seconds), and **`CADDYSNAKE_WORKER_TOKEN`** (shared secret checked on inbound proxy requests) for the Python client.
 
 The cache supports **scalars**, **FIFO lists**, **sets** (`sadd`/`srem`/`smembers`), atomic **`setnx`**, prefix **`keys`**, and one-shot **`publish`/`subscribe`** for cross-worker coordination.
 

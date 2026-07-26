@@ -1,6 +1,10 @@
 package caddysnake
 
 import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -20,27 +24,85 @@ import (
 
 var validModulePattern = regexp.MustCompile(`^[a-zA-Z_][\w.]*:[a-zA-Z_]\w*$`)
 
+var (
+	ErrDynamicAppCapacity = errors.New("dynamic app limit reached")
+	ErrDynamicCreateLimit = errors.New("too many concurrent dynamic app creations")
+)
+
 const (
-	// defaultMaxDynamicApps caps cached DynamicApp tenants to bound memory/process use.
-	defaultMaxDynamicApps = 128
-	// defaultDynamicAppIdleTTL is how long an unused dynamic app may stay cached.
-	defaultDynamicAppIdleTTL = 30 * time.Minute
+	defaultMaxDynamicApps        = 128
+	defaultDynamicMaxConcurrency = 4
+	defaultDynamicFailureTTL     = 5 * time.Second
+	defaultDynamicAppIdleTTL     = 30 * time.Minute
 
 	envMaxDynamicApps      = "CADDYSNAKE_MAX_DYNAMIC_APPS"
 	envDynamicAppIdleTTL   = "CADDYSNAKE_DYNAMIC_APP_IDLE_TTL"
 	dynamicAppCleanupGrace = 10 * time.Second
 )
 
-var errDynamicAppLimit = errors.New("dynamic app limit reached")
+// DynamicAppLimits configures capacity and backoff for dynamic app loading.
+type DynamicAppLimits struct {
+	MaxApps        int
+	MaxConcurrency int
+	FailureTTL     time.Duration
+}
 
-func parseMaxDynamicApps() int {
+func defaultDynamicAppLimits() DynamicAppLimits {
+	return DynamicAppLimits{
+		MaxApps:        defaultMaxDynamicApps,
+		MaxConcurrency: defaultDynamicMaxConcurrency,
+		FailureTTL:     defaultDynamicFailureTTL,
+	}
+}
+
+func normalizeDynamicAppLimits(l DynamicAppLimits) DynamicAppLimits {
+	d := defaultDynamicAppLimits()
+	if l.MaxApps > 0 {
+		d.MaxApps = l.MaxApps
+	}
+	if l.MaxConcurrency > 0 {
+		d.MaxConcurrency = l.MaxConcurrency
+	}
+	if l.FailureTTL > 0 {
+		d.FailureTTL = l.FailureTTL
+	}
+	return d
+}
+
+func parseDynamicAppLimits(maxApps, maxConcurrency, failureTTL string) (DynamicAppLimits, error) {
+	lim := defaultDynamicAppLimits()
+	if maxApps != "" {
+		n, err := strconv.Atoi(maxApps)
+		if err != nil || n <= 0 {
+			return lim, fmt.Errorf("invalid max_dynamic_apps: %q", maxApps)
+		}
+		lim.MaxApps = n
+	}
+	if maxConcurrency != "" {
+		n, err := strconv.Atoi(maxConcurrency)
+		if err != nil || n <= 0 {
+			return lim, fmt.Errorf("invalid dynamic_max_concurrency: %q", maxConcurrency)
+		}
+		lim.MaxConcurrency = n
+	}
+	if failureTTL != "" {
+		d, err := caddy.ParseDuration(failureTTL)
+		if err != nil || d <= 0 {
+			return lim, fmt.Errorf("invalid dynamic_failure_ttl: %q", failureTTL)
+		}
+		lim.FailureTTL = d
+	}
+	return lim, nil
+}
+
+func effectiveMaxDynamicApps(limits DynamicAppLimits) int {
 	if v := os.Getenv(envMaxDynamicApps); v != "" {
 		n, err := strconv.Atoi(v)
 		if err == nil && n > 0 {
 			return n
 		}
 	}
-	return defaultMaxDynamicApps
+	return limits.MaxApps
 }
 
 func parseDynamicAppIdleTTL() time.Duration {
@@ -77,16 +139,32 @@ func validateResolvedValues(module, dir, venv string) error {
 		if hasDotDotSegment(dir) {
 			return fmt.Errorf("working directory contains path traversal: %q", dir)
 		}
-		if _, err := filepath.Abs(dir); err != nil {
+		abs, err := filepath.Abs(dir)
+		if err != nil {
 			return fmt.Errorf("invalid working directory: %w", err)
+		}
+		info, err := os.Stat(abs)
+		if err != nil {
+			return fmt.Errorf("working directory does not exist: %w", err)
+		}
+		if !info.IsDir() {
+			return fmt.Errorf("working directory is not a directory: %q", abs)
 		}
 	}
 	if venv != "" {
 		if hasDotDotSegment(venv) {
 			return fmt.Errorf("venv path contains path traversal: %q", venv)
 		}
-		if _, err := filepath.Abs(venv); err != nil {
+		abs, err := filepath.Abs(venv)
+		if err != nil {
 			return fmt.Errorf("invalid venv path: %w", err)
+		}
+		info, err := os.Stat(abs)
+		if err != nil {
+			return fmt.Errorf("venv path does not exist: %w", err)
+		}
+		if !info.IsDir() {
+			return fmt.Errorf("venv path is not a directory: %q", abs)
 		}
 	}
 	return nil
@@ -123,23 +201,39 @@ func validateResolvedEnvConfig(dir string, envFiles []string) error {
 	return nil
 }
 
-func envVarsCacheKey(m map[string]string) string {
-	if len(m) == 0 {
-		return ""
+type dynamicKeyEnvPair struct {
+	Key   string `json:"k"`
+	Value string `json:"v"`
+}
+
+type dynamicKeyPayload struct {
+	Module   string              `json:"module"`
+	Dir      string              `json:"dir"`
+	Venv     string              `json:"venv"`
+	EnvFiles []string            `json:"env_files,omitempty"`
+	EnvVars  []dynamicKeyEnvPair `json:"env_vars,omitempty"`
+}
+
+func dynamicAppCacheKey(module, dir, venv string, envFiles []string, envVars map[string]string) string {
+	payload := dynamicKeyPayload{
+		Module:   module,
+		Dir:      dir,
+		Venv:     venv,
+		EnvFiles: append([]string(nil), envFiles...),
 	}
-	keys := make([]string, 0, len(m))
-	for k := range m {
-		keys = append(keys, k)
+	if len(envVars) > 0 {
+		keys := make([]string, 0, len(envVars))
+		for k := range envVars {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		for _, k := range keys {
+			payload.EnvVars = append(payload.EnvVars, dynamicKeyEnvPair{Key: k, Value: envVars[k]})
+		}
 	}
-	sort.Strings(keys)
-	var b strings.Builder
-	for _, k := range keys {
-		b.WriteString(k)
-		b.WriteByte('=')
-		b.WriteString(m[k])
-		b.WriteByte(';')
-	}
-	return b.String()
+	b, _ := json.Marshal(payload)
+	sum := sha256.Sum256(b)
+	return hex.EncodeToString(sum[:])
 }
 
 // appFactory is a function that creates a new AppServer for a resolved
@@ -160,8 +254,6 @@ type failedAppCreate struct {
 	err       error
 	expiresAt time.Time
 }
-
-const dynamicCreateFailureTTL = 5 * time.Second
 
 // DynamicApp implements AppServer by lazily importing Python apps based on
 // Caddy placeholders resolved at request time. For example, when working_dir
@@ -188,8 +280,10 @@ type DynamicApp struct {
 	envVarPatterns  map[string]string
 	factory         appFactory
 	logger          *zap.Logger
+	limits          DynamicAppLimits
 	maxApps         int
 	idleTTL         time.Duration
+	createSem       chan struct{}
 	now             func() time.Time // overridable in tests
 
 	// Autoreload fields
@@ -197,6 +291,9 @@ type DynamicApp struct {
 	watcher             *fsnotify.Watcher
 	dirToKeys           map[string][]string // abs working dir -> cache keys that use it
 	stopCh              chan struct{}
+	stopOnce            sync.Once
+	cleanupMu           sync.Mutex
+	pendingCleanups     []context.CancelFunc
 	exitOnReloadFailure func(code int) // if set and autoreload, process exits when app creation fails
 }
 
@@ -205,19 +302,8 @@ type DynamicApp struct {
 // request time and lazily creates Python app instances via the supplied factory.
 // When autoreload is true, if exitOnReloadFailure is non-nil it is called with
 // code 1 when app creation fails (e.g. app deleted), so the process can terminate.
-//
-// Optional maxApps overrides the env/default cache cap when provided and > 0
-// (from Caddyfile max_dynamic_apps / --max-dynamic-apps).
-func NewDynamicApp(modulePattern, workingDir, venvPath string, envFilePatterns []string, envVarPatterns map[string]string, factory appFactory, logger *zap.Logger, autoreload bool, exitOnReloadFailure func(code int), maxApps ...int) (*DynamicApp, error) {
-	maxDynamicApps := parseMaxDynamicApps()
-	if len(maxApps) > 0 {
-		if maxApps[0] < 0 {
-			return nil, fmt.Errorf("max dynamic apps must be non-negative")
-		}
-		if maxApps[0] > 0 {
-			maxDynamicApps = maxApps[0]
-		}
-	}
+func NewDynamicApp(modulePattern, workingDir, venvPath string, envFilePatterns []string, envVarPatterns map[string]string, factory appFactory, logger *zap.Logger, autoreload bool, exitOnReloadFailure func(code int), limits DynamicAppLimits) (*DynamicApp, error) {
+	limits = normalizeDynamicAppLimits(limits)
 	d := &DynamicApp{
 		apps:                make(map[string]AppServer),
 		lastUsed:            make(map[string]time.Time),
@@ -232,8 +318,10 @@ func NewDynamicApp(modulePattern, workingDir, venvPath string, envFilePatterns [
 		envVarPatterns:      cloneEnvVars(envVarPatterns),
 		factory:             factory,
 		logger:              logger,
-		maxApps:             maxDynamicApps,
+		limits:              limits,
+		maxApps:             effectiveMaxDynamicApps(limits),
 		idleTTL:             parseDynamicAppIdleTTL(),
+		createSem:           make(chan struct{}, limits.MaxConcurrency),
 		now:                 time.Now,
 		autoreload:          autoreload,
 		exitOnReloadFailure: exitOnReloadFailure,
@@ -268,7 +356,7 @@ func (d *DynamicApp) pruneExpiredFailuresLocked(now time.Time) {
 func (d *DynamicApp) rememberFailedCreateLocked(key string, err error) {
 	now := time.Now()
 	d.pruneExpiredFailuresLocked(now)
-	d.failed[key] = failedAppCreate{err: err, expiresAt: now.Add(dynamicCreateFailureTTL)}
+	d.failed[key] = failedAppCreate{err: err, expiresAt: now.Add(d.limits.FailureTTL)}
 }
 
 // resolve uses the Caddy replacer from the request context to substitute
@@ -293,7 +381,7 @@ func (d *DynamicApp) resolve(r *http.Request) (key, module, dir, venv string, en
 		}
 	}
 
-	key = module + "|" + dir + "|" + venv + "|" + strings.Join(envFiles, ",") + "|" + envVarsCacheKey(envVars)
+	key = dynamicAppCacheKey(module, dir, venv, envFiles, envVars)
 	return
 }
 
@@ -374,12 +462,21 @@ func (d *DynamicApp) getOrCreateApp(key, module, dir, venv string, envFiles []st
 	if len(d.apps)+len(d.inflight) >= d.maxApps {
 		d.mu.Unlock()
 		d.cleanupAppsAsync(evicted)
-		return nil, fmt.Errorf("%w: max %d cached apps (set %s)", errDynamicAppLimit, d.maxApps, envMaxDynamicApps)
+		return nil, ErrDynamicAppCapacity
+	}
+	select {
+	case d.createSem <- struct{}{}:
+	default:
+		d.mu.Unlock()
+		d.cleanupAppsAsync(evicted)
+		return nil, ErrDynamicCreateLimit
 	}
 	c := &appCreate{done: make(chan struct{})}
 	d.inflight[key] = c
 	d.mu.Unlock()
 	d.cleanupAppsAsync(evicted)
+
+	releaseCreate := func() { <-d.createSem }
 
 	d.logger.Info("dynamically importing python app",
 		zap.String("module", module),
@@ -393,6 +490,7 @@ func (d *DynamicApp) getOrCreateApp(key, module, dir, venv string, envFiles []st
 	func() {
 		defer func() {
 			if r := recover(); r != nil {
+				releaseCreate()
 				d.mu.Lock()
 				delete(d.inflight, key)
 				c.app = nil
@@ -405,6 +503,8 @@ func (d *DynamicApp) getOrCreateApp(key, module, dir, venv string, envFiles []st
 		}()
 		app, err = d.factory(module, dir, venv, cloneEnvFiles(envFiles), cloneEnvVars(envVars))
 	}()
+
+	releaseCreate()
 
 	d.mu.Lock()
 	delete(d.inflight, key)
@@ -652,6 +752,15 @@ func (d *DynamicApp) watchForChanges() {
 	}
 }
 
+func (d *DynamicApp) cancelPendingCleanups() {
+	d.cleanupMu.Lock()
+	for _, cancel := range d.pendingCleanups {
+		cancel()
+	}
+	d.pendingCleanups = nil
+	d.cleanupMu.Unlock()
+}
+
 // reloadDir evicts all apps associated with the given directory and
 // cleans them up after a grace period.
 func (d *DynamicApp) reloadDir(absDir string) {
@@ -679,6 +788,8 @@ func (d *DynamicApp) reloadDir(absDir string) {
 
 	d.mu.Unlock()
 
+	d.cancelPendingCleanups()
+
 	d.logger.Info("dynamic python apps evicted, will reimport on next request",
 		zap.String("working_dir", absDir),
 		zap.Int("apps_evicted", len(oldApps)),
@@ -696,6 +807,10 @@ func (d *DynamicApp) HandleRequest(w http.ResponseWriter, r *http.Request) error
 	for {
 		app, err := d.getOrCreateApp(key, module, dir, venv, envFiles, envVars)
 		if err != nil {
+			if errors.Is(err, ErrDynamicAppCapacity) || errors.Is(err, ErrDynamicCreateLimit) {
+				http.Error(w, err.Error(), http.StatusServiceUnavailable)
+				return nil
+			}
 			if d.autoreload && d.exitOnReloadFailure != nil {
 				d.logger.Error("failed to load python app (autoreload); terminating",
 					zap.String("module", module),
@@ -740,10 +855,16 @@ func (d *DynamicApp) Cleanup() error {
 		d.mu.Lock()
 	}
 
-	if d.autoreload && d.stopCh != nil {
-		close(d.stopCh)
+	d.stopOnce.Do(func() {
+		if d.autoreload && d.stopCh != nil {
+			close(d.stopCh)
+		}
+	})
+	if d.autoreload && d.watcher != nil {
 		_ = d.watcher.Close()
 	}
+
+	d.cancelPendingCleanups()
 
 	var errs []error
 	for key, app := range d.apps {

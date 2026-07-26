@@ -269,15 +269,13 @@ class TestWsReadFrame:
         frame.extend(bytes(b ^ mask_key[i % 4] for i, b in enumerate(payload)))
         return bytes(frame)
 
-    async def test_small_unmasked_frame(self):
+    async def test_small_unmasked_frame_rejected(self):
         frame = cs.ws_build_frame(cs.WS_OPCODE_TEXT, b"hello")
         reader = asyncio.StreamReader()
         reader.feed_data(frame)
         reader.feed_eof()
-        fin, opcode, payload = await cs.ws_read_frame(reader)
-        assert fin == 1
-        assert opcode == cs.WS_OPCODE_TEXT
-        assert payload == b"hello"
+        with pytest.raises(ValueError, match="must be masked"):
+            await cs.ws_read_frame(reader)
 
     async def test_masked_frame(self):
         # Client frames are masked; build manually
@@ -297,7 +295,7 @@ class TestWsReadFrame:
 
     async def test_extended_payload_126(self):
         payload = b"x" * 200
-        frame = cs.ws_build_frame(cs.WS_OPCODE_BINARY, payload)
+        frame = self._masked_frame(cs.WS_OPCODE_BINARY, payload)
         reader = asyncio.StreamReader()
         reader.feed_data(frame)
         reader.feed_eof()
@@ -306,7 +304,7 @@ class TestWsReadFrame:
 
     async def test_extended_payload_127(self):
         payload = b"x" * 65536
-        frame = cs.ws_build_frame(cs.WS_OPCODE_BINARY, payload)
+        frame = self._masked_frame(cs.WS_OPCODE_BINARY, payload)
         reader = asyncio.StreamReader()
         reader.feed_data(frame)
         reader.feed_eof()
@@ -314,7 +312,7 @@ class TestWsReadFrame:
         assert payload_out == payload
 
     async def test_empty_payload(self):
-        frame = cs.ws_build_frame(cs.WS_OPCODE_PING, b"")
+        frame = self._masked_frame(cs.WS_OPCODE_PING, b"")
         reader = asyncio.StreamReader()
         reader.feed_data(frame)
         reader.feed_eof()

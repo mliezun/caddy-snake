@@ -25,11 +25,6 @@ import click
     default="0",
     help="The number of workers to spawn (default: 0, uses CPU count)",
 )
-@click.option(
-    "--max-dynamic-apps",
-    default="0",
-    help="Maximum cached dynamic apps (0 = env/default cap, usually 128)",
-)
 @click.option("--python-path", help="Path to the Python interpreter")
 @click.option("--working-dir", help="Working directory for the Python app")
 @click.option("--venv", help="Path to a Python virtual environment to use")
@@ -71,13 +66,21 @@ import click
     "--runtime",
     help="Worker runtime (wsgi: sync|gevent; esgi: gevent only; asgi: native|uvloop)",
 )
+@click.option("--max-dynamic-apps", help="Max distinct dynamic Python apps (default: 128)")
+@click.option(
+    "--dynamic-max-concurrency",
+    help="Max concurrent dynamic app creations (default: 4)",
+)
+@click.option(
+    "--dynamic-failure-ttl",
+    help="Cache failed dynamic create errors for this duration (default: 5s)",
+)
 def main(
     server_type,
     domain,
     app,
     listen,
     workers,
-    max_dynamic_apps,
     python_path,
     working_dir,
     venv,
@@ -91,6 +94,9 @@ def main(
     autoreload,
     lifespan,
     runtime,
+    max_dynamic_apps,
+    dynamic_max_concurrency,
+    dynamic_failure_ttl,
 ):
     """
     A Python WSGI, ASGI, or ESGI server designed for apps and frameworks.
@@ -123,8 +129,6 @@ def main(
         args.extend(["--listen", listen])
     if workers:
         args.extend(["--workers", workers])
-    if max_dynamic_apps:
-        args.extend(["--max-dynamic-apps", max_dynamic_apps])
     if python_path:
         args.extend(["--python-path", python_path])
     if working_dir:
@@ -152,6 +156,12 @@ def main(
         args.extend(["--lifespan", lifespan])
     if runtime:
         args.extend(["--runtime", runtime])
+    if max_dynamic_apps:
+        args.extend(["--max-dynamic-apps", max_dynamic_apps])
+    if dynamic_max_concurrency:
+        args.extend(["--dynamic-max-concurrency", dynamic_max_concurrency])
+    if dynamic_failure_ttl:
+        args.extend(["--dynamic-failure-ttl", dynamic_failure_ttl])
 
     # Execute the binary with the constructed arguments
     os.execv(binary_path, args)

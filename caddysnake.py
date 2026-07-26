@@ -233,6 +233,7 @@ _DRAIN_HIGH_WATER = 64 * 1024
 MAX_REQUEST_LINE = 8192
 MAX_HEADERS_SIZE = 64 * 1024  # 64 KB total header block
 MAX_BODY_SIZE = 128 * 1024 * 1024  # 128 MB (internal IPC; external limits enforced by Caddy)
+MAX_WSGI_RESPONSE_BODY = 64 * 1024 * 1024  # 64 MB joined WSGI response cap
 MAX_HEADER_COUNT = 100
 MAX_WS_FRAME_SIZE = 16 * 1024 * 1024  # 16 MB
 MAX_WS_MESSAGE_SIZE = 16 * 1024 * 1024  # 16 MB reassembled message
@@ -428,8 +429,16 @@ def _call_wsgi_app(app, environ):
     try:
         result = app(environ, start_response)
         output = []
+        total = 0
         for chunk in result:
             if chunk:
+                total += len(chunk)
+                if total > MAX_WSGI_RESPONSE_BODY:
+                    return (
+                        500,
+                        [("Content-Type", "text/plain")],
+                        b"WSGI response body exceeds 64 MiB limit",
+                    )
                 output.append(chunk)
         if not response_started:
             return 500, [("Content-Type", "text/plain")], b"Internal Server Error"
@@ -538,6 +547,17 @@ async def _handle_wsgi_connection(reader, writer, app):
                 break
 
             method, path, version, headers_list, raw_headers, body_stream = result
+            if not _check_worker_token(raw_headers):
+                await body_stream.discard()
+                writer.write(
+                    b"HTTP/1.1 403 Forbidden\r\n"
+                    b"Content-Type: text/plain\r\n"
+                    b"Content-Length: 9\r\n"
+                    b"Connection: close\r\n\r\n"
+                    b"Forbidden"
+                )
+                await writer.drain()
+                break
             wsgi_input = _WsgiInputStream(body_stream, loop)
             environ = _build_wsgi_environ(
                 method, path, version, headers_list, raw_headers, wsgi_input
@@ -683,12 +703,26 @@ WS_OPCODE_PONG = 0xA
 WS_MAGIC = b"258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 
 
+def _check_worker_token(raw_headers):
+    """Return True when the inbound proxy request is authorized."""
+    expected = os.environ.get("CADDYSNAKE_WORKER_TOKEN")
+    if not expected:
+        return True
+    got = raw_headers.get("caddy-snake-worker-token")
+    return got == expected
+
+
 async def ws_read_frame(reader):
     """Read and decode a single WebSocket frame."""
     data = await reader.readexactly(2)
     fin = (data[0] >> 7) & 1
+    rsv = (data[0] >> 4) & 0x7
+    if rsv != 0:
+        raise ValueError("WebSocket frame uses reserved bits")
     opcode = data[0] & 0xF
     masked = (data[1] >> 7) & 1
+    if not masked:
+        raise ValueError("WebSocket client frame must be masked")
     payload_len = data[1] & 0x7F
 
     if payload_len == 126:
@@ -1516,8 +1550,13 @@ class _EsgiWsMessage:
 def ws_read_frame_sync(sock):
     data = _recv_exact_sock(sock, 2)
     fin = (data[0] >> 7) & 1
+    rsv = (data[0] >> 4) & 0x7
+    if rsv != 0:
+        raise ValueError("WebSocket frame uses reserved bits")
     opcode = data[0] & 0xF
     masked = (data[1] >> 7) & 1
+    if not masked:
+        raise ValueError("WebSocket client frame must be masked")
     payload_len = data[1] & 0x7F
 
     if payload_len == 126:
@@ -1803,6 +1842,16 @@ def _esgi_connection_loop(sock, app):
             if result is None:
                 return
             method, path, version, headers_list, raw_headers, body_stream = result
+            if not _check_worker_token(raw_headers):
+                body_stream.discard()
+                sock.sendall(
+                    b"HTTP/1.1 403 Forbidden\r\n"
+                    b"Content-Type: text/plain\r\n"
+                    b"Content-Length: 9\r\n"
+                    b"Connection: close\r\n\r\n"
+                    b"Forbidden"
+                )
+                return
             upgrade = raw_headers.get("upgrade")
             is_websocket = (
                 upgrade is not None
@@ -1920,6 +1969,17 @@ async def _handle_asgi_connection(reader, writer, app, state):
                 break
 
             method, path, version, headers, raw_headers, body_stream = result
+            if not _check_worker_token(raw_headers):
+                await body_stream.discard()
+                writer.write(
+                    b"HTTP/1.1 403 Forbidden\r\n"
+                    b"Content-Type: text/plain\r\n"
+                    b"Content-Length: 9\r\n"
+                    b"Connection: close\r\n\r\n"
+                    b"Forbidden"
+                )
+                await writer.drain()
+                break
             path_part, query_string = _split_path(path)
 
             upgrade = raw_headers.get("upgrade")
@@ -1940,6 +2000,7 @@ async def _handle_asgi_connection(reader, writer, app, state):
                 not in (
                     b"caddy-snake-remote-addr",
                     b"caddy-snake-remote-port",
+                    b"caddy-snake-worker-token",
                     b"proxy",
                 )
             ]
@@ -2047,6 +2108,7 @@ async def _handle_asgi_lifespan(app, state, startup_timeout=None):
             await app(scope, receive, send)
         except Exception:
             traceback.print_exc(file=sys.stderr)
+            startup_failed = True
             if not startup_complete.is_set():
                 startup_failed = True
                 startup_complete.set()
