@@ -7,7 +7,7 @@ import os
 from pathlib import Path
 
 SECRET_ENV = "CADDYSNAKE_ISOLATION_PROBE_SECRET"
-ALLOWED_ENV = "CADDYSNAKE_ISOLATION_ALLOWED"
+ALLOWED_ENV = "ISOLATION_ALLOWED"
 
 
 def wsgi_app(environ, start_response):

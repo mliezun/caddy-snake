@@ -10,7 +10,7 @@ import requests
 
 BASE_URL = "http://localhost:9080"
 SECRET_ENV = "CADDYSNAKE_ISOLATION_PROBE_SECRET"
-ALLOWED_ENV = "CADDYSNAKE_ISOLATION_ALLOWED"
+ALLOWED_ENV = "ISOLATION_ALLOWED"
 OUTSIDE_DIR = Path(__file__).resolve().parent.parent / "secret_outside"
 
 

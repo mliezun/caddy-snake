@@ -11,7 +11,7 @@ localhost:9080 {
 		working_dir "."
 		workers 1
 		start_timeout 300s
-		env_var CADDYSNAKE_ISOLATION_ALLOWED visible
+		env_var ISOLATION_ALLOWED visible
 		isolation docker {
 			image "python:3.13-slim"
 		}
