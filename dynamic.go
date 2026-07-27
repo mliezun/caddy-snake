@@ -515,9 +515,19 @@ func (d *DynamicApp) getOrCreateApp(key, module, dir, venv string, envFiles []st
 		now = d.now()
 		d.apps[key] = app
 		d.lastUsed[key] = now
-		d.appDirs[key] = dir
+		// Store the RESOLVED dir. Eviction untracks by this value, and by then
+		// the release directory may be gone — resolving again at that point
+		// would fail, fall back to the unresolved path, silently fail to match
+		// dirToKeys, and leak the key. Resolve once, here, while it exists.
+		resolvedDir := dir
 		if d.autoreload && dir != "" {
-			d.startWatchingDir(dir, key)
+			if r, err := resolveWatchRoot(dir, d.logger); err == nil {
+				resolvedDir = r
+			}
+		}
+		d.appDirs[key] = resolvedDir
+		if d.autoreload && dir != "" {
+			d.startWatchingDir(resolvedDir, key)
 		}
 	} else {
 		d.rememberFailedCreateLocked(key, err)
@@ -584,12 +594,14 @@ func (d *DynamicApp) removeAppLocked(key string) AppServer {
 	delete(d.lastUsed, key)
 	// Leave inUse intact so a still-running handler's releaseApp cannot
 	// accidentally unpin a replacement app created for the same key.
+	// appDirs already holds the resolved watch root, which is what dirToKeys is
+	// keyed by. Do NOT re-resolve here: by eviction time the release directory
+	// is often gone, EvalSymlinks would fail, and the fallback would not match
+	// the key — silently leaking it into dirToKeys forever.
 	dir := d.appDirs[key]
 	delete(d.appDirs, key)
 	if d.autoreload && dir != "" {
-		if absDir, err := filepath.Abs(dir); err == nil {
-			d.untrackKeyLocked(absDir, key)
-		}
+		d.untrackKeyLocked(dir, key)
 	}
 	return app
 }
@@ -641,13 +653,15 @@ func (d *DynamicApp) cleanupAppsAsync(apps []AppServer) {
 		}
 	}()
 }
-func (d *DynamicApp) startWatchingDir(dir, key string) {
-	absDir, err := filepath.Abs(dir)
-	if err != nil {
-		d.logger.Warn("autoreload: failed to resolve directory",
-			zap.String("dir", dir),
-			zap.Error(err),
-		)
+
+// startWatchingDir registers a watch for a tenant's working directory.
+//
+// absDir MUST be the value returned by resolveWatchRoot — the same string the
+// watcher is rooted at. fsnotify reports events under the path given to Add, so
+// keying dirToKeys off anything else (e.g. a bare filepath.Abs) makes
+// pathWithinDir fail for every event and silently disables dynamic autoreload.
+func (d *DynamicApp) startWatchingDir(absDir, key string) {
+	if absDir == "" {
 		return
 	}
 

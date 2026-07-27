@@ -11,8 +11,57 @@ import (
 	"go.uber.org/zap"
 )
 
+// resolveWatchRoot returns the absolute, symlink-resolved directory that the
+// watcher should be rooted at.
+//
+// This exists because filepath.Walk lstat()s its root and refuses to descend
+// into a symlink, so a working_dir like the `releases/active -> releases/main`
+// indirection common to release-directory deploys would add zero watches and
+// silently never reload.
+//
+// CALLERS MUST KEY ANY PATH BOOKKEEPING OFF THE VALUE RETURNED HERE, not off
+// the configured directory. fsnotify reports events as
+// filepath.Join(<path given to Add>, name), so once the watcher is rooted at a
+// resolved path, every event carries the resolved prefix. DynamicApp matches
+// events against its dirToKeys map to decide which tenant to reload; keying
+// that map off the unresolved path silently drops every event. Note this is
+// not limited to a symlinked working_dir — EvalSymlinks resolves every path
+// component, so a symlinked ancestor (macOS /var and /tmp, a symlinked /home
+// or /srv, a container's /app) is enough to make the two disagree.
+//
+// On error the absolute path is returned unchanged, which leaves a root whose
+// components contain no symlinks behaving exactly as before.
+func resolveWatchRoot(dir string, logger *zap.Logger) (string, error) {
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		return "", err
+	}
+	resolved, err := filepath.EvalSymlinks(abs)
+	if err != nil {
+		// Broken, missing or unreadable path: fall back to the literal one.
+		logger.Warn("autoreload: failed to resolve working directory symlinks",
+			zap.String("path", abs),
+			zap.Error(err),
+		)
+		return abs, nil
+	}
+	if resolved != abs {
+		// Debug, not Info: this fires for any symlinked ancestor, so on macOS
+		// (/var -> private/var) it would otherwise log on every single app.
+		logger.Debug("autoreload: resolved working directory",
+			zap.String("path", abs),
+			zap.String("resolved", resolved),
+		)
+	}
+	return resolved, nil
+}
+
 // watchDirRecursive adds all directories under root to the fsnotify watcher.
 // It is used by both AutoreloadableApp and DynamicApp.
+//
+// root must already have been passed through resolveWatchRoot. Symlinks
+// *inside* the tree are not followed by the initial walk, so it stays free of
+// cycles and of excursions outside the app.
 func watchDirRecursive(watcher *fsnotify.Watcher, root string, logger *zap.Logger) {
 	if err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
@@ -52,7 +101,11 @@ func handleNewDirEvent(event fsnotify.Event, watcher *fsnotify.Watcher) {
 	if !event.Has(fsnotify.Create) {
 		return
 	}
-	info, err := os.Stat(event.Name)
+	// Lstat, not Stat: Stat follows symlinks, so a symlink-to-directory created
+	// inside the tree at runtime would be watched and extend the watcher
+	// outside the app — inconsistent with the initial walk, which lstat()s and
+	// skips them.
+	info, err := os.Lstat(event.Name)
 	if err != nil || !info.IsDir() {
 		return
 	}
@@ -104,7 +157,15 @@ func NewAutoreloadableApp(
 		exitOnReloadFailure: exitOnReloadFailure,
 	}
 
-	watchDirRecursive(watcher, workingDir, logger)
+	watchRoot, err := resolveWatchRoot(workingDir, logger)
+	if err != nil {
+		logger.Warn("autoreload: failed to resolve working directory",
+			zap.String("working_dir", workingDir),
+			zap.Error(err),
+		)
+		watchRoot = workingDir
+	}
+	watchDirRecursive(watcher, watchRoot, logger)
 
 	go a.watch()
 

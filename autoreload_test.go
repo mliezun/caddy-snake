@@ -310,3 +310,196 @@ func TestAutoreloadableApp_FileChangeTriggersReload(t *testing.T) {
 		t.Fatal("expected reload to be triggered by .py file change")
 	}
 }
+
+// A working_dir that is itself a symlink is the normal shape of a
+// release-directory deploy (`releases/active -> releases/main`). filepath.Walk
+// lstat()s its root and does not descend into a symlink, so watching such a
+// root used to add zero watches and autoreload silently never fired.
+func TestAutoreloadableApp_FileChangeTriggersReload_SymlinkedWorkingDir(t *testing.T) {
+	reloadCalled := make(chan struct{}, 1)
+
+	mockApp := &mockAppServer{}
+	base := t.TempDir()
+	target := filepath.Join(base, "release")
+	nested := filepath.Join(target, "pkg")
+	if err := os.MkdirAll(nested, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	link := filepath.Join(base, "active")
+	if err := os.Symlink(target, link); err != nil {
+		t.Skipf("symlinks unsupported: %v", err)
+	}
+
+	a, err := NewAutoreloadableApp(mockApp, link, func() (AppServer, error) {
+		select {
+		case reloadCalled <- struct{}{}:
+		default:
+		}
+		return mockApp, nil
+	}, zap.NewNop(), nil)
+	if err != nil {
+		t.Fatalf("NewAutoreloadableApp: %v", err)
+	}
+	defer a.Cleanup()
+
+	// Write through the real path, as a deploy does — the watcher must have
+	// followed the link to see it, including into subdirectories.
+	pyFile := filepath.Join(nested, "test_trigger.py")
+	if err := os.WriteFile(pyFile, []byte("x = 1"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	select {
+	case <-reloadCalled:
+	case <-time.After(5 * time.Second):
+		t.Fatal("expected reload to be triggered through a symlinked working_dir")
+	}
+
+	// Pin HOW it resolved, not just that it fired. Without this, a "fix" that
+	// watched the link's parent directory, or that followed symlinks inside the
+	// tree, would also pass. The watch list must be exactly the resolved target
+	// and its subdirectory.
+	resolvedTarget, err := filepath.EvalSymlinks(target)
+	if err != nil {
+		t.Fatalf("EvalSymlinks: %v", err)
+	}
+	want := map[string]bool{
+		resolvedTarget:                       true,
+		filepath.Join(resolvedTarget, "pkg"): true,
+	}
+	got := a.watcher.WatchList()
+	if len(got) != len(want) {
+		t.Fatalf("watch list = %v, want exactly %v", got, want)
+	}
+	for _, p := range got {
+		if !want[p] {
+			t.Errorf("unexpected watched path %q, want one of %v", p, want)
+		}
+	}
+}
+
+// A symlink ANYWHERE in the working_dir's ancestry is enough to make the
+// watched path differ from the configured one, because EvalSymlinks resolves
+// every component — macOS /var and /tmp, a symlinked /home or /srv, a
+// container's /app. Nothing here is a symlinked working_dir, and it must still
+// reload. This is the case that silently regressed dynamic apps, and the one a
+// t.TempDir()-only test cannot see on Linux CI.
+func TestAutoreloadableApp_FileChangeTriggersReload_SymlinkedAncestor(t *testing.T) {
+	reloadCalled := make(chan struct{}, 1)
+
+	mockApp := &mockAppServer{}
+	base := t.TempDir()
+	realParent := filepath.Join(base, "real-parent")
+	workingDir := filepath.Join(realParent, "app")
+	if err := os.MkdirAll(workingDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	linkParent := filepath.Join(base, "link-parent")
+	if err := os.Symlink(realParent, linkParent); err != nil {
+		t.Skipf("symlinks unsupported: %v", err)
+	}
+
+	// The configured working_dir is a plain directory; only its PARENT is a link.
+	configured := filepath.Join(linkParent, "app")
+
+	a, err := NewAutoreloadableApp(mockApp, configured, func() (AppServer, error) {
+		select {
+		case reloadCalled <- struct{}{}:
+		default:
+		}
+		return mockApp, nil
+	}, zap.NewNop(), nil)
+	if err != nil {
+		t.Fatalf("NewAutoreloadableApp: %v", err)
+	}
+	defer a.Cleanup()
+
+	if err := os.WriteFile(filepath.Join(workingDir, "t.py"), []byte("x = 1"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	select {
+	case <-reloadCalled:
+	case <-time.After(5 * time.Second):
+		t.Fatal("expected reload through a symlinked ancestor")
+	}
+}
+
+// A broken symlink must fall back to the literal path rather than panic, and
+// must leave the app serving.
+func TestAutoreloadableApp_BrokenSymlinkWorkingDir(t *testing.T) {
+	mockApp := &mockAppServer{}
+	base := t.TempDir()
+	link := filepath.Join(base, "active")
+	if err := os.Symlink(filepath.Join(base, "does-not-exist"), link); err != nil {
+		t.Skipf("symlinks unsupported: %v", err)
+	}
+
+	a, err := NewAutoreloadableApp(mockApp, link, func() (AppServer, error) {
+		return mockApp, nil
+	}, zap.NewNop(), nil)
+	if err != nil {
+		t.Fatalf("NewAutoreloadableApp should tolerate a broken working_dir link: %v", err)
+	}
+	defer a.Cleanup()
+
+	if watched := a.watcher.WatchList(); len(watched) != 0 {
+		t.Errorf("expected no watches for a broken symlink, got %v", watched)
+	}
+}
+
+// DynamicApp matches fsnotify events against its dirToKeys map to decide which
+// tenant to reload. The watcher is rooted at the RESOLVED working directory, so
+// events carry the resolved prefix; if dirToKeys is keyed off the unresolved
+// path instead, every event is dropped and dynamic autoreload silently does
+// nothing while still logging "autoreload enabled". This test fails both when
+// the root is not resolved at all (zero watches) and when it is resolved on
+// only one of the two sides (watches, but no attribution).
+func TestDynamicApp_AutoreloadThroughSymlinkedWorkingDir(t *testing.T) {
+	base := t.TempDir()
+	target := filepath.Join(base, "release")
+	if err := os.MkdirAll(target, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	link := filepath.Join(base, "active")
+	if err := os.Symlink(target, link); err != nil {
+		t.Skipf("symlinks unsupported: %v", err)
+	}
+
+	d, err := NewDynamicApp("main:app", link, "", nil, nil,
+		func(module, dir, venv string, envFiles []string, envVars map[string]string) (AppServer, error) {
+			return &mockAppServer{}, nil
+		},
+		zap.NewNop(),
+		true, // autoreload
+		nil, defaultDynamicAppLimits(),
+	)
+	if err != nil {
+		t.Fatalf("NewDynamicApp: %v", err)
+	}
+	defer d.Cleanup()
+
+	if _, err := d.getOrCreateApp("key1", "main:app", link, "", nil, nil); err != nil {
+		t.Fatalf("getOrCreateApp: %v", err)
+	}
+
+	// Write through the real path, as a deploy does.
+	if err := os.WriteFile(filepath.Join(target, "t.py"), []byte("x = 1"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	// A reload evicts the cached app for that directory (cleanup is async).
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		d.mu.RLock()
+		_, stillCached := d.apps["key1"]
+		d.mu.RUnlock()
+		if !stillCached {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("expected the dynamic app to be evicted by autoreload through a symlinked working_dir")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
