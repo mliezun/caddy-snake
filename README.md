@@ -363,7 +363,14 @@ Enables ASGI [lifespan events](https://asgi.readthedocs.io/en/latest/specs/lifes
 
 Watches the working directory for `.py` file changes and automatically reloads the Python app. Useful during development.
 
-Changes are debounced (500ms) to handle rapid edits.
+Changes are debounced (500ms) to handle rapid edits. The working directory is resolved through symlinks before
+watching, so a `releases/active -> releases/main` style root is watched correctly; the tree is resolved once, at
+start, so re-pointing the symlink at a new directory still needs a Caddy reload.
+
+> **This is a development feature.** The reload swaps the app under a write lock while requests hold a read lock
+> for their whole lifetime, so an open WebSocket or streaming response blocks the swap — and Go's `RWMutex` then
+> queues new requests behind it. In production, reload Caddy instead (`caddy reload --force`), which keeps the
+> listeners up and does not block.
 
 ```Caddyfile
 python {
@@ -463,9 +470,10 @@ For **[nip.io](https://nip.io/)** names like **`app7.203.0.113.43.nip.io`**, the
 
 There are two approaches for hot reloading during development:
 
-### Built-in autoreload (recommended)
+### Built-in autoreload (recommended for development)
 
-Add the `autoreload` directive to your Caddyfile. This watches for `.py` file changes and reloads the app in-place without restarting Caddy:
+Add the `autoreload` directive to your Caddyfile. This watches for `.py` file changes and starts fresh Python
+workers without restarting Caddy (it is not an in-process reimport):
 
 ```Caddyfile
 python {

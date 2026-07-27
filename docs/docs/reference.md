@@ -302,15 +302,24 @@ python {
 **How it works:**
 - Uses filesystem notifications (via [fsnotify](https://github.com/fsnotify/fsnotify)) to watch for `.py` file changes (write, create, remove, rename)
 - Changes are debounced with a 500ms window to group rapid edits (e.g. editor save + format)
-- The Python module cache (`sys.modules`) is invalidated for all modules in the working directory before reimporting
+- A reload starts **fresh Python worker processes** via the factory. It is not an in-process reimport, so there is no `sys.modules` cache to invalidate — each new worker is a new interpreter
 - The old app is cleaned up and a new one is created seamlessly
 - In-flight requests complete before the swap happens (thread-safe with read/write locks)
 - If a static-app reload fails (e.g. syntax error in Python code), the app returns HTTP 503 until the next file change triggers a successful reload
 - Reload failures do not terminate Caddy in the normal Caddyfile and CLI wiring
-- A `working_dir` that is itself a symlink is resolved to its target before watching, so the release-directory pattern (`releases/active -> releases/main`) works. Symlinks *inside* the tree are not followed
+- The working directory is resolved through symlinks before watching, so the release-directory pattern (`releases/active -> releases/main`) works — for both static and dynamic apps. Symlinks *inside* the tree are not followed
 
-:::caution
-The watched tree is resolved once, when the app starts. Re-pointing a symlinked `working_dir` at a **new** directory does not move the watcher — the old target stays watched. Deploys that swap the symlink to a fresh release directory need a Caddy reload (or restart) to pick the new tree up; deploys that write in place over the existing target are picked up normally.
+:::warning
+`autoreload` is a development feature. Two properties make it a poor fit for production:
+
+- **The swap waits for in-flight requests, and queues new ones behind them.** A request holds a read lock for its whole lifetime and the reload takes the write lock; Go's `RWMutex` gives a waiting writer priority, so new requests block too. With a WebSocket or a streaming response open, the app stops serving until that connection closes. Reload Caddy instead (`caddy reload --force`), which keeps listeners up and does not block.
+- **The 500ms debounce is tuned for an editor save, not a deploy.** With `tar`/`rsync` it can fire against a half-extracted tree.
+:::
+
+:::warning
+The watched tree is resolved once, when the app starts. Re-pointing a symlinked `working_dir` at a **new** directory does not move the watcher — the old target stays watched, so a Caddy reload (or restart) is needed to pick the new tree up. Deploys that write in place over the existing target are picked up normally.
+
+If the old release directory is then **deleted**, the kernel drops those watches and nothing re-adds them: autoreload goes silently dead for the lifetime of the process. Release schemes that prune old releases should reload Caddy on deploy rather than rely on `autoreload`.
 :::
 
 ### `isolation`
@@ -420,7 +429,9 @@ Dynamic module loading works with `autoreload`. When enabled, each resolved work
 }
 ```
 
-Old app instances are retired immediately and cleaned up after their in-flight requests complete.
+Old app instances are evicted immediately and their worker processes are cleaned up after a fixed 10s
+grace period. Unlike idle/LRU eviction, this does **not** wait for active requests: a request still
+running 10s after the reload has its worker killed under it.
 
 ---
 

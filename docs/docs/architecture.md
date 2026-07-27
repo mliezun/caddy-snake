@@ -54,7 +54,7 @@ The autoreload feature provides hot-reloading during development without restart
 
 ### How it works
 
-1. A filesystem watcher ([fsnotify](https://github.com/fsnotify/fsnotify)) is started on the working directory, recursively watching all subdirectories
+1. A filesystem watcher ([fsnotify](https://github.com/fsnotify/fsnotify)) is started on the working directory, recursively watching all subdirectories. The directory is resolved through symlinks first, since `filepath.Walk` will not descend a symlinked root
 2. Only `.py` file events are considered (write, create, remove, rename)
 3. Rapid changes are debounced with a 500ms window (e.g. when an editor saves and auto-formats)
 4. When the debounce fires:
@@ -112,7 +112,7 @@ When `autoreload` is enabled on a dynamic app, each resolved working directory g
 
 - A `dirToKeys` map tracks which cache keys belong to each working directory
 - When a `.py` file changes, only the apps for that directory are evicted
-- Old app instances are retired immediately and cleaned up when their active request count reaches zero
+- Old app instances are evicted immediately; their workers are cleaned up after a fixed 10s grace period, which does **not** wait for active requests
 - The app is lazily reimported on the next request
 - If the reimport fails on the next request, the process terminates (when `exitOnReloadFailure` is configured)
 
