@@ -310,3 +310,48 @@ func TestAutoreloadableApp_FileChangeTriggersReload(t *testing.T) {
 		t.Fatal("expected reload to be triggered by .py file change")
 	}
 }
+
+// A working_dir that is itself a symlink is the normal shape of a
+// release-directory deploy (`releases/active -> releases/main`). filepath.Walk
+// lstat()s its root and does not descend into a symlink, so watching such a
+// root used to add zero watches and autoreload silently never fired.
+func TestAutoreloadableApp_FileChangeTriggersReload_SymlinkedWorkingDir(t *testing.T) {
+	reloadCalled := make(chan struct{}, 1)
+
+	mockApp := &mockAppServer{}
+	base := t.TempDir()
+	target := filepath.Join(base, "release")
+	nested := filepath.Join(target, "pkg")
+	if err := os.MkdirAll(nested, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	link := filepath.Join(base, "active")
+	if err := os.Symlink(target, link); err != nil {
+		t.Skipf("symlinks unsupported: %v", err)
+	}
+
+	a, err := NewAutoreloadableApp(mockApp, link, func() (AppServer, error) {
+		select {
+		case reloadCalled <- struct{}{}:
+		default:
+		}
+		return mockApp, nil
+	}, zap.NewNop(), nil)
+	if err != nil {
+		t.Fatalf("NewAutoreloadableApp: %v", err)
+	}
+	defer a.Cleanup()
+
+	// Write through the real path, as a deploy does — the watcher must have
+	// followed the link to see it, including into subdirectories.
+	pyFile := filepath.Join(nested, "test_trigger.py")
+	if err := os.WriteFile(pyFile, []byte("x = 1"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	select {
+	case <-reloadCalled:
+	case <-time.After(5 * time.Second):
+		t.Fatal("expected reload to be triggered through a symlinked working_dir")
+	}
+}

@@ -13,7 +13,28 @@ import (
 
 // watchDirRecursive adds all directories under root to the fsnotify watcher.
 // It is used by both AutoreloadableApp and DynamicApp.
+//
+// The root is resolved through symlinks first. filepath.Walk lstat()s its root
+// and refuses to descend into a symlink, so a working_dir like the
+// `releases/active -> releases/main` indirection common to release-directory
+// deploys would otherwise add zero watches and silently never reload.
+// Only the root is resolved: symlinks *inside* the tree are still not followed,
+// so the walk stays free of cycles and of excursions outside the app.
 func watchDirRecursive(watcher *fsnotify.Watcher, root string, logger *zap.Logger) {
+	if resolved, err := filepath.EvalSymlinks(root); err != nil {
+		// Broken or unreadable link: fall back to the literal path, which
+		// leaves a non-symlinked root behaving exactly as before.
+		logger.Warn("autoreload: failed to resolve working directory symlinks",
+			zap.String("path", root),
+			zap.Error(err),
+		)
+	} else if resolved != root {
+		logger.Info("autoreload: resolved working directory symlink",
+			zap.String("path", root),
+			zap.String("resolved", resolved),
+		)
+		root = resolved
+	}
 	if err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err

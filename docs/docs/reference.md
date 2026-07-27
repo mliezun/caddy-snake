@@ -307,6 +307,11 @@ python {
 - In-flight requests complete before the swap happens (thread-safe with read/write locks)
 - If a static-app reload fails (e.g. syntax error in Python code), the app returns HTTP 503 until the next file change triggers a successful reload
 - Reload failures do not terminate Caddy in the normal Caddyfile and CLI wiring
+- A `working_dir` that is itself a symlink is resolved to its target before watching, so the release-directory pattern (`releases/active -> releases/main`) works. Symlinks *inside* the tree are not followed
+
+:::caution
+The watched tree is resolved once, when the app starts. Re-pointing a symlinked `working_dir` at a **new** directory does not move the watcher — the old target stays watched. Deploys that swap the symlink to a fresh release directory need a Caddy reload (or restart) to pick the new tree up; deploys that write in place over the existing target are picked up normally.
+:::
 
 ### `isolation`
 
