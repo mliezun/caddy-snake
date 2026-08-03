@@ -40,6 +40,10 @@ RUN export DEBIAN_FRONTEND=noninteractive &&\
     # Containers intentionally install pip into the image Python; PEP 668 marks
     # Debian/Ubuntu interpreters as externally managed on newer releases.
     python get-pip.py --break-system-packages &&\
+    # pip>=26.2 ships a vendored CycloneDX SBOM (bom.cdx.json). Trivy treats that
+    # third-party SBOM as installed packages and fails on pip's vendored copies of
+    # msgpack/setuptools even though they are not importable top-level deps.
+    rm -f /usr/local/lib/python*/dist-packages/pip/_vendor/bom.cdx.json &&\
     apt-get clean &&\
     rm -rf /var/lib/apt/lists/* get-pip.py
 
