@@ -32,7 +32,7 @@ jobs:
             use_docker: false
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
@@ -83,7 +83,7 @@ jobs:
         run: |
           docker build -f builder.Dockerfile --platform "$DOCKER_PLATFORM" --build-arg PY_VERSION="$PY_VERSION" -t caddy-snake-builder .
           docker run --rm -v "$(pwd)":/output caddy-snake-builder
-      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         if: ${{ !matrix.use_docker }}
         with:
           go-version: "1.26.5"
@@ -97,7 +97,7 @@ jobs:
         if: ${{ !matrix.use_docker }}
         run: rustup toolchain install stable
       - name: Setup Python
-        uses: actions/setup-python@7f4fc3e22c37d6ff65e88745f38bd3157c663f7c # v4.9.1
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: ${{ matrix.python-version }}
       - name: Build the CLI
@@ -109,7 +109,7 @@ jobs:
           python"${PY_VERSION}" -m pip install maturin
           python"${PY_VERSION}" -m maturin build --release
       - name: Upload artifacts
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: caddysnake-cli-${{ matrix.python-version }}-${{ matrix.os }}
           path: cmd/cli/target/wheels/*.whl
@@ -122,7 +122,7 @@ jobs:
     # The pypa/gh-action-pypi-publish action ships only a linux/amd64 image,
     # so the publish job must run on an amd64 runner regardless of where the
     # wheels were built.
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     environment:
       name: pypi-publish
       url: https://pypi.org/p/caddysnake
@@ -136,7 +136,7 @@ jobs:
           pattern: caddysnake-cli-*
           merge-multiple: true
       - name: Publish package to PyPI
-        uses: pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b # v1.14.0
+        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
         with:
           skip-existing: true
           packages-dir: dist
