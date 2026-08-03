@@ -20,6 +20,13 @@
       "description": "Pin GitHub Actions to digest updates",
       "matchManagers": ["github-actions"],
       "pinDigests": true
+    },
+    {
+      "description": "Ubuntu base image majors need a deliberate migration (PEP 668, deadsnakes, CI)",
+      "matchDatasources": ["docker"],
+      "matchPackageNames": ["ubuntu"],
+      "matchUpdateTypes": ["major"],
+      "enabled": false
     }
   ],
   "gomod": {

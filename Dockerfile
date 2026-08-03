@@ -1,4 +1,4 @@
-FROM ubuntu:26.04 AS builder
+FROM ubuntu:22.04 AS builder
 
 ARG GO_VERSION=1.26.5
 
@@ -20,7 +20,7 @@ RUN go install github.com/caddyserver/xcaddy/cmd/xcaddy@v0.4.6 &&\
     cd /usr/local/bin &&\
     CGO_ENABLED=0 /root/go/bin/xcaddy build --with github.com/mliezun/caddy-snake=/build
 
-FROM ubuntu:26.04
+FROM ubuntu:22.04
 
 ARG PY_VERSION=3.13
 
@@ -37,7 +37,9 @@ RUN export DEBIAN_FRONTEND=noninteractive &&\
     ln -sf /usr/bin/python${PY_VERSION} /usr/bin/python &&\
     ln -sf /usr/bin/python${PY_VERSION} /usr/bin/python3 &&\
     wget -q https://bootstrap.pypa.io/get-pip.py &&\
-    python get-pip.py &&\
+    # Containers intentionally install pip into the image Python; PEP 668 marks
+    # Debian/Ubuntu interpreters as externally managed on newer releases.
+    python get-pip.py --break-system-packages &&\
     apt-get clean &&\
     rm -rf /var/lib/apt/lists/* get-pip.py
 
