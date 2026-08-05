@@ -70,6 +70,7 @@ Example configuration for ASGI app (FastAPI or others):
 	}
 }
 
+# Production app
 app.example.com {
 	handle_path /static/* {
 		root * /srv/releases/active/staticfiles
@@ -85,6 +86,7 @@ app.example.com {
 	}
 }
 
+# Preview apps (one hostname / slug per Git branch)
 https://*.preview.example.com {
 	tls {
 		on_demand
@@ -122,7 +124,6 @@ On preview deploy, clone the primary schema:
 
 ```bash
 branchable branches create --base-schema app --branch-name "preview_${SLUG}"
-# writes /srv/releases/${SLUG}/.database.env → DATABASE_NAME=preview_...
 ```
 
 On Postgres 18+, branchable can use a copy-on-write template clone when available; otherwise it falls back to template/`pg_dump`.
