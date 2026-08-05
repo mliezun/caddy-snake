@@ -24,14 +24,6 @@ DNS (all pointing at the VM's public IP):
 | `preview.example.com` | A | VM IP |
 | `*.preview.example.com` | CNAME or A | `preview.example.com` (or the same VM IP) |
 
-| | Production | Preview |
-|---|---|---|
-| Hostname | `app.example.com` | `{slug}.preview.example.com` |
-| Code | `/srv/releases/active` (symlink) | `/srv/releases/{slug}/` |
-| App mode | Fixed `working_dir` | Dynamic apps (hostname placeholders) |
-| Code pickup | `caddy reload` | `autoreload` |
-| Database | primary schema | `preview_{slug}` clone on the same Postgres |
-
 ### Slug from branch name
 
 The `{slug}` in the hostname and release path comes from the Git branch name. A small sanitizer turns it into a DNS label:
