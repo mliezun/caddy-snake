@@ -62,7 +62,7 @@ The package is built and published automatically on tagged releases by the [`pyt
 See https://caddy-snake.readthedocs.io for complete documentation, including:
 
 - [Quickstart](https://caddy-snake.readthedocs.io/en/latest/docs/intro) — get started in 5 minutes
-- [Installation & Distribution](https://caddy-snake.readthedocs.io/en/latest/docs/installation) — PyPI, standalone binaries, Docker, and more
+- [Installation](https://caddy-snake.readthedocs.io/en/latest/docs/installation) — PyPI, standalone binaries, Docker, and more
 - [Configuration Reference](https://caddy-snake.readthedocs.io/en/latest/docs/reference) — all Caddyfile directives
 - [Examples](https://caddy-snake.readthedocs.io/en/latest/docs/examples) — Flask, Django, FastAPI, Socket.IO, dynamic modules, autoreload
 - [Architecture](https://caddy-snake.readthedocs.io/en/latest/docs/architecture) — how it works under the hood

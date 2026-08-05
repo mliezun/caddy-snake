@@ -1,14 +1,12 @@
 ---
-title: Apps as Standalone Binaries
-description: Package your Python app with Caddy Snake and Python into a single, self-contained executable
+title: Embed an app binary
+description: Package your Python app, Caddy Snake, and Python into one executable
 sidebar_position: 8
 ---
 
-# Apps as Standalone Binaries
+# Embed an app binary
 
-Caddy Snake can produce a **single binary** that includes Caddy, the caddy-snake plugin, a Python interpreter, and your application — similar to [FrankenPHP](https://frankenphp.dev/docs/embed)'s approach for PHP apps.
-
-The result is a self-contained executable you can distribute and run without installing Python, Caddy, or any dependencies on the target system.
+Build a single executable that includes Caddy, the plugin, a Python interpreter, and your app — similar to [FrankenPHP](https://frankenphp.dev/docs/embed) for PHP. No Python or Caddy install on the target host.
 
 ## Requirements
 

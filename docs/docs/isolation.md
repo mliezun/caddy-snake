@@ -1,24 +1,14 @@
-# Per-app isolation design
+---
+title: Isolation
+description: Run Python workers as host processes or Docker containers
+sidebar_position: 4
+---
 
-This document describes the `isolation` subdirective under the Caddy `python` handler.
+# Isolation
 
-## Goals
+By default each worker is a host subprocess with the same UID as Caddy. Use **`isolation docker`** when a compromised app should not see the full host filesystem or ambient environment.
 
-- **Hardening**: limit filesystem and environment exposure when a Python app is compromised.
-- **Multi-tenant readiness**: separate worker units per app; per-tenant isolation config is handler-scoped in v1.
-- **Pluggable backends**: Docker first; Firecracker and LXC can implement the same `WorkerBackend` interface.
-
-## Threat model (v1)
-
-| Boundary | `isolation none` (default) | `isolation docker` |
-|----------|---------------------------|---------------------|
-| Host filesystem | Full Caddy UID access | Bind-mounted `working_dir`, `venv`, worker script only |
-| Host env | Inherits Caddy process env | `env_file` + `env_var` + internal `CADDYSNAKE_*` only |
-| Other workers | Same UID | Separate containers |
-| Shared cache | Per-handler in-process store | Reachable via `host.docker.internal`; **not** a tenant boundary |
-| Network | Host network | Bridge + container IP dial from Caddy |
-
-## Config
+## Quick config
 
 ```caddyfile
 python {
@@ -31,25 +21,29 @@ python {
 }
 ```
 
-Omit `isolation` or use `isolation none` for the legacy subprocess model.
+Omit `isolation` or set `isolation none` for the default process model.
 
-## Workers
+CLI: `--isolation docker --isolation-image python:3.13-slim` (plus optional `--isolation-network`, `--isolation-docker-host`, `--isolation-memory`, `--isolation-cpus`, `--isolation-read-only`).
 
-`workers N` spawns **N isolated units** (N processes or N containers). Round-robin in `PythonWorkerGroup` is unchanged.
+Requires a working Docker engine (`docker` on `PATH`, access to the socket or `DOCKER_HOST`). Linux only.
 
-## Cache and IPC
+## What changes
 
-When Docker isolation is enabled:
+| Boundary | `isolation none` | `isolation docker` |
+|----------|------------------|---------------------|
+| Host filesystem | Full Caddy UID access | Bind-mounted `working_dir`, `venv`, worker script |
+| Host env | Inherits Caddy env | `env_file` + `env_var` + internal `CADDYSNAKE_*` |
+| Other workers | Same UID | Separate containers |
+| Shared cache | In-process | Reachable via `host.docker.internal` — **still not a tenant boundary** |
+| Network | Host network | Bridge; Caddy dials the container IP |
 
-1. The in-process cache listens on TCP `127.0.0.1:<port>`.
-2. Workers receive `CADDYSNAKE_CACHE_ADDR=host.docker.internal:<port>`.
-3. Workers use TCP mode (`CADDYSNAKE_WORKER_TCP=1`, bind `0.0.0.0`) and write their listen port to a host-mounted port file.
-4. Caddy dials the container IP and that port.
+`workers N` → N processes or N containers. Round-robin is unchanged.
 
-## Backend interface
+## When to use it
 
-Spawn logic lives behind `WorkerBackend` (`isolation.go`). `ProcessBackend` preserves existing behavior; `DockerBackend` uses the Docker CLI.
+- Untrusted or multi-tenant code on one handler
+- Preview environments where a branch should not read host files outside its release dir
 
-## Future backends
+When **not** enough: mutually hostile tenants that share the in-process cache, or need separate secrets stores — use key prefixes, external Redis, or separate Caddy handlers/hosts. For a shared-VM preview pattern, see [branch previews](../blog/branch-previews).
 
-Firecracker and LXC should implement `WorkerBackend` without changing `AppServer` or `ServeHTTP`.
+Full option list: [configuration reference](reference.md#isolation).

@@ -42,3 +42,18 @@ latest:
   label: "3.14"
   permalink: /3-14
   description: Python 3.14 related posts
+
+previews:
+  label: Previews
+  permalink: /previews
+  description: Preview deployment posts
+
+deployment:
+  label: Deployment
+  permalink: /deployment
+  description: Deployment and operations posts
+
+postgres:
+  label: Postgres
+  permalink: /postgres
+  description: PostgreSQL related posts

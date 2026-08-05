@@ -1,29 +1,71 @@
-/**
- * CSS files with the .module.css suffix will be treated as CSS modules
- * and scoped locally.
- */
-
 .heroBanner {
-  padding: 4rem 0;
+  padding: 5rem 0 4.25rem;
   text-align: center;
   position: relative;
   overflow: hidden;
 }
 
-/* Add styles for better text contrast in dark mode */
-:global([data-theme='dark']) .heroBanner :global(.hero__title),
-:global([data-theme='dark']) .heroBanner :global(.hero__subtitle) {
-  color: #ffffff;
+.heroInner {
+  max-width: 42rem;
 }
 
-@media screen and (max-width: 996px) {
-  .heroBanner {
-    padding: 2rem;
-  }
+.heroLogo {
+  display: block;
+  margin: 0 auto 1.25rem;
+  border-radius: 50%;
+  box-shadow: 0 8px 28px rgba(15, 23, 42, 0.18);
+}
+
+.heroTitle {
+  font-size: clamp(2.4rem, 5vw, 3.25rem);
+  font-weight: 750;
+  letter-spacing: -0.03em;
+  margin-bottom: 0.75rem;
+  line-height: 1.1;
+}
+
+.heroLead {
+  font-size: 1.35rem;
+  font-weight: 500;
+  opacity: 0.95;
+  margin: 0 0 0.65rem;
+  line-height: 1.35;
+}
+
+.heroSupport {
+  font-size: 1.05rem;
+  opacity: 0.88;
+  margin: 0 auto 1.75rem;
+  max-width: 34rem;
+  line-height: 1.5;
+}
+
+:global([data-theme='dark']) .heroBanner :global(.hero__title),
+:global([data-theme='dark']) .heroLead,
+:global([data-theme='dark']) .heroSupport {
+  color: #ffffff;
 }
 
 .buttons {
   display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
   align-items: center;
   justify-content: center;
+}
+
+.secondaryBtn {
+  --ifm-button-border-color: rgba(255, 255, 255, 0.65);
+  color: #fff !important;
+}
+
+:global([data-theme='light']) .secondaryBtn {
+  --ifm-button-border-color: rgba(15, 23, 42, 0.35);
+  color: var(--ifm-font-color-base) !important;
+}
+
+@media screen and (max-width: 996px) {
+  .heroBanner {
+    padding: 3rem 1.25rem 2.75rem;
+  }
 }

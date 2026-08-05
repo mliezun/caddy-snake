@@ -31,7 +31,7 @@ With this configuration:
 - `app2.example.com` → loads `app2/app2.py`
 - `app3.example.com` → loads `app3/app3.py`
 
-Apps are **lazily imported** on first request and cached for subsequent requests. There's no limit on how many apps you can serve — each one is created on demand.
+Apps are **lazily imported** on first request and cached for subsequent requests. The cache is bounded (default **128** apps, with idle LRU eviction) so a runaway hostname pattern cannot grow forever — raise `max_dynamic_apps` when you need more.
 
 Under the hood, `DynamicApp` resolves placeholders at request time, builds a composite cache key, and uses double-check locking for thread-safe concurrent access. This means the fast path (cache hit) only requires a read lock, keeping things efficient even under high concurrency.
 
@@ -86,7 +86,7 @@ Or update to the [latest release](https://github.com/mliezun/caddy-snake/release
 
 Check out the full documentation:
 
-- [Installation & Distribution](../docs/installation) — all the ways to install Caddy Snake (PyPI, standalone binaries, Docker)
+- [Installation](../docs/installation) — PyPI, standalone binaries, Docker
 - [Configuration Reference](../docs/reference) — all directives explained in detail
 - [Examples](../docs/examples) — working examples for dynamic modules, autoreload, and more
 - [Architecture](../docs/architecture) — deep dive into how it all works

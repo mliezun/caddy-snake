@@ -8,6 +8,8 @@ tags: [python, docs, caddy-snake, go, web]
 
 Now you can retrieve a precompiled binary of caddy with caddy-snake and your preferred version of Python.
 
+<!-- truncate -->
+
 Check out the [latest release of caddy-snake](https://github.com/mliezun/caddy-snake/releases).
 
 The following python versions are available: 3.12, 3.13, 3.13+freethreading (nogil), 3.14, and 3.14+freethreading (nogil).

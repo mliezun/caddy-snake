@@ -1,11 +1,27 @@
 .features {
   display: flex;
-  align-items: center;
-  padding: 2rem 0;
+  align-items: stretch;
+  padding: 3.5rem 0 4rem;
   width: 100%;
+  border-top: 1px solid var(--ifm-toc-border-color);
+  background: var(--ifm-background-surface-color);
 }
 
-.featureSvg {
-  height: 200px;
-  width: 200px;
+.featureItem {
+  height: 100%;
+  padding: 0.5rem 0.75rem;
+}
+
+.featureTitle {
+  font-size: 1.15rem;
+  font-weight: 650;
+  letter-spacing: -0.02em;
+  margin-bottom: 0.6rem;
+}
+
+.featureText {
+  color: var(--ifm-color-emphasis-700);
+  margin: 0;
+  line-height: 1.55;
+  font-size: 0.98rem;
 }
