@@ -139,4 +139,14 @@ No Caddy restart is required for preview deploys.
 1. Delete the release directory: `rm -rf /srv/releases/{slug}`
 2. Delete the database branch: `branchable branches delete preview_{slug}`
 
+## Security
+
+The setup above shares one VM and one Postgres instance between production and previews. That is fine when every branch is trusted (same team, same secrets). For stronger isolation:
+
+- Run previews on a **second VM** with its own Caddy Snake process and the wildcard `*.preview.example.com` site only
+- Keep production on the first VM (`app.example.com`)
+- Use a **separate Postgres** for preview clones (or at least a separate database role and network path), so preview code cannot reach production data even if a branch is malicious or buggy
+
+The Caddyfile and CI flow stay the same; only the deploy target and database connection change.
+
 For the building blocks, see [dynamic modules](../docs/examples#multi-tenant--branch-hosts), [on-demand TLS](../docs/reference#on-demand-tls-certificate-permission-without-ask), and [branchable](https://github.com/mliezun/branchable).
