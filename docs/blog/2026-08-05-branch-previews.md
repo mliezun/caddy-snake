@@ -32,11 +32,9 @@ DNS (all pointing at the VM’s public IP):
 | Code pickup | `caddy reload` | `autoreload` |
 | Database | primary schema | `preview_{slug}` clone on the same Postgres |
 
-There are no per-PR containers. Isolation is separate release directories, separate database schemas, and Caddy Snake’s per-hostname dynamic worker sets. The Caddy binary and process are shared.
-
 ## Caddyfile config
 
-Production and previews share one Caddyfile. Previews use placeholders so the hostname selects the release directory:
+Example configuration for ASGI app (FastAPI or others):
 
 ```caddyfile
 {
