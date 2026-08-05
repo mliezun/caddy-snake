@@ -13,10 +13,10 @@ This post describes a preview setup that runs production and every branch previe
 
 Hardware and data:
 
-- **1 VM** — a single Caddy Snake process terminates TLS, serves static files, and runs the Python app for production and all previews
-- **1 Postgres instance** — production uses the primary schema; each preview gets its own cloned schema on the same server
+- **1 VM**: a single Caddy Snake process terminates TLS, serves static files, and runs the Python app for production and all previews
+- **1 Postgres instance**: production uses the primary schema; each preview gets its own cloned schema on the same server
 
-DNS (all pointing at the VM’s public IP):
+DNS (all pointing at the VM's public IP):
 
 | Record | Type | Value |
 |--------|------|-------|
@@ -32,12 +32,36 @@ DNS (all pointing at the VM’s public IP):
 | Code pickup | `caddy reload` | `autoreload` |
 | Database | primary schema | `preview_{slug}` clone on the same Postgres |
 
+### Slug from branch name
+
+The `{slug}` in the hostname and release path comes from the Git branch name. A small sanitizer turns it into a DNS label:
+
+1. Lowercase the branch name
+2. Replace `/`, `_`, and whitespace with `-`
+3. Strip other characters that are not `a-z`, `0-9`, or `-`
+4. Collapse repeated hyphens and trim edges
+5. If the result starts with a digit, prefix `p-` (DNS labels cannot start with a digit)
+6. Truncate to 63 characters (DNS label limit)
+
+Examples:
+
+| Branch | Slug | Preview URL |
+|--------|------|-------------|
+| `feature/login` | `feature-login` | `https://feature-login.preview.example.com` |
+| `fix/api_v2` | `fix-api-v2` | `https://fix-api-v2.preview.example.com` |
+| `123-experiment` | `p-123-experiment` | `https://p-123-experiment.preview.example.com` |
+
+The database name uses the same slug with hyphens turned into underscores, for example `preview_feature_login`.
+
 ## Caddyfile config
 
 Example configuration for ASGI app (FastAPI or others):
 
 ```caddyfile
 {
+	# Enables automatic HTTPS for preview hostnames without listing each one.
+	# python_dir allows a certificate only when /srv/releases/{slug} exists
+	# and the host matches *.{domain_suffix}.
 	on_demand_tls {
 		permission python_dir {
 			root /srv/releases
@@ -52,14 +76,12 @@ app.example.com {
 		file_server
 	}
 
-	route {
-		python {
-			module_asgi "main:app"
-			working_dir "/srv/releases/active"
-			venv "/srv/releases/active/.venv"
-			env_file "/srv/releases/active/.env"
-			lifespan on
-		}
+	python {
+		module_asgi "main:app"
+		working_dir "/srv/releases/active"
+		venv "/srv/releases/active/.venv"
+		env_file "/srv/releases/active/.env"
+		lifespan on
 	}
 }
 
@@ -73,17 +95,15 @@ https://*.preview.example.com {
 		file_server
 	}
 
-	route {
-		python {
-			module_asgi "main:app"
-			working_dir "/srv/releases/{http.request.host.labels.2}/"
-			venv "/srv/releases/{http.request.host.labels.2}/.venv"
-			env_file "/srv/releases/{http.request.host.labels.2}/.database.env"
-			env_var ALLOWED_HOSTS "{http.request.host.labels.2}.preview.example.com"
-			env_var CSRF_TRUSTED_ORIGINS "https://{http.request.host.labels.2}.preview.example.com"
-			lifespan on
-			autoreload
-		}
+	python {
+		module_asgi "main:app"
+		working_dir "/srv/releases/{http.request.host.labels.2}/"
+		venv "/srv/releases/{http.request.host.labels.2}/.venv"
+		env_file "/srv/releases/{http.request.host.labels.2}/.database.env"
+		env_var ALLOWED_HOSTS "{http.request.host.labels.2}.preview.example.com"
+		env_var CSRF_TRUSTED_ORIGINS "https://{http.request.host.labels.2}.preview.example.com"
+		lifespan on
+		autoreload
 	}
 }
 ```
@@ -92,9 +112,9 @@ Host labels are numbered from the right, so `feature-login.preview.example.com` 
 
 How the pieces fit together:
 
-1. **Dynamic apps** — the first request for a slug starts workers for that directory; later requests reuse them until idle eviction (default cap 128 apps, ~30m idle TTL).
-2. **On-demand TLS** — `tls.permission.python_dir` issues a certificate only if `/srv/releases/{slug}` exists. Unknown slugs do not get certificates.
-3. **Per-preview env** — `.database.env` sets `DATABASE_NAME` for that clone; `ALLOWED_HOSTS` / `CSRF_TRUSTED_ORIGINS` come from `env_var` with the same hostname placeholders.
+1. **Dynamic apps**: the first request for a slug starts workers for that directory; later requests reuse them until idle eviction (default cap 128 apps, ~30m idle TTL).
+2. **On-demand TLS**: `tls.permission.python_dir` issues a certificate only if `/srv/releases/{slug}` exists. Unknown slugs do not get certificates.
+3. **Per-preview env**: `.database.env` sets `DATABASE_NAME` for that clone; `ALLOWED_HOSTS` / `CSRF_TRUSTED_ORIGINS` come from `env_var` with the same hostname placeholders.
 
 ## Database branching with branchable
 
@@ -105,27 +125,26 @@ branchable branches create --base-schema app --branch-name "preview_${SLUG}"
 # writes /srv/releases/${SLUG}/.database.env → DATABASE_NAME=preview_...
 ```
 
-On Postgres 18+, branchable can use a copy-on-write template clone when available; otherwise it falls back to template/`pg_dump`. Connection host, user, and password stay in the shared host environment; only the database name differs per preview.
+On Postgres 18+, branchable can use a copy-on-write template clone when available; otherwise it falls back to template/`pg_dump`.
 
 ## CI: deploy and cleanup
 
 **On push to a non-main branch** (open a preview):
 
-1. Pack the branch into a tarball
-2. Upload it to the VM (SCP/SSH)
-3. Extract to `/srv/releases/{slug}/` and install dependencies
-4. Create the database branch with branchable (if it does not already exist)
-5. Run migrations (and collectstatic if needed)
-6. Touch a small `.py` file or rely on `autoreload` so the preview picks up the new code
-7. Expose `https://{slug}.preview.example.com` as the environment URL
+1. Derive `{slug}` from the branch name (see above)
+2. Pack the branch into a tarball
+3. Upload it to the VM (SCP/SSH)
+4. Extract to `/srv/releases/{slug}/` and install dependencies
+5. Create the database branch with branchable (if it does not already exist)
+6. Run migrations (and collectstatic if needed)
+7. Touch a small `.py` file or rely on `autoreload` so the preview picks up the new code
+8. Expose `https://{slug}.preview.example.com` as the environment URL
 
 No Caddy restart is required for preview deploys.
 
-**On merge (or when the branch is deleted)** — tear the preview down:
+**On merge (or when the branch is deleted)**, tear the preview down:
 
 1. Delete the release directory: `rm -rf /srv/releases/{slug}`
 2. Delete the database branch: `branchable branches delete preview_{slug}`
-
-Removing the directory also stops on-demand TLS from issuing certificates for that slug. Production deploys use the same upload path to `/srv/releases/...`, then flip the `active` symlink and run `caddy reload`.
 
 For the building blocks, see [dynamic modules](../docs/examples#multi-tenant--branch-hosts), [on-demand TLS](../docs/reference#on-demand-tls-certificate-permission-without-ask), and [branchable](https://github.com/mliezun/branchable).
