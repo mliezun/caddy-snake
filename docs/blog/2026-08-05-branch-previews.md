@@ -5,7 +5,7 @@ authors: mliezun
 tags: [python, caddy-snake, previews, deployment, postgres]
 ---
 
-This post describes a preview setup that runs production and every branch preview from **one virtual machine** and **one Postgres database**. Caddy Snake serves each branch as a dynamic Python app; [branchable](https://github.com/mliezun/branchable) clones a schema per preview.
+Caddy with our plugin added makes it easy to run preview environments for your Python apps. The setup below serves production and every branch preview from **one virtual machine** and **one Postgres database**: Caddy Snake loads each branch as a dynamic app, and [branchable](https://github.com/mliezun/branchable) clones a schema per preview.
 
 <!-- truncate -->
 
