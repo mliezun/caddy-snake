@@ -1,12 +1,14 @@
 ---
-title: Configuration Reference
-description: Complete reference of all configuration options for the Python directive
+title: Configuration
+description: Reference for the python directive, dynamic apps, TLS permission, cache, and CLI
 sidebar_position: 2
 ---
 
-# Configuration Reference
+# Configuration
 
-The `python` directive allows you to serve Python WSGI, ASGI, or ESGI applications through Caddy. It supports a simple form, a block form, and path-prefixed route blocks.
+Serve WSGI, ASGI, or ESGI apps with the `python` directive. Prefer the **route form**; use the block form for full options. CLI flags for `caddysnake` / `caddy python-server` mirror the same fields — see [python-server](#python-server-command).
+
+**Jump to:** [Subdirectives](#subdirectives) · [Dynamic apps](#dynamic-module-loading) · [On-demand TLS](#on-demand-tls-certificate-permission-without-ask) · [Shared cache](#shared-worker-cache) · [CLI](#python-server-command)
 
 ---
 
@@ -115,7 +117,7 @@ python {
 
 ### `runtime`
 
-Selects how the Python worker runs your app at the gateway boundary. See [ESGI integration: runtime semantics](esgi#runtime-semantics) for details.
+Selects how the Python worker runs your app at the gateway boundary. See [ESGI: runtime defaults](esgi#runtime-semantics) for details.
 
 - With **`module_wsgi`**: `sync` (default) or `gevent`.
 - With **`module_esgi`**: **`gevent` only** (default).
@@ -362,7 +364,7 @@ python {
 
 **Platform:** Linux only in v1. Not supported on Windows.
 
-See also: [isolation design notes](isolation.md).
+See also: [Isolation](isolation.md).
 
 ---
 

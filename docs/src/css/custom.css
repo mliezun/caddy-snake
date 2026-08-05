@@ -1,26 +1,30 @@
 /**
- * Any CSS included here will be global. The classic template
- * bundles Infima by default. Infima is a CSS framework designed to
- * work well for content-centric websites.
+ * Caddy Snake docs theme — Infima overrides.
  */
 
-/* You can override the default Infima variables here. */
 :root {
-  --ifm-color-primary: #2563eb;
-  --ifm-color-primary-dark: #1d4ed8;
-  --ifm-color-primary-darker: #1e40af;
-  --ifm-color-primary-darkest: #1e3a8a;
-  --ifm-color-primary-light: #3b82f6;
-  --ifm-color-primary-lighter: #60a5fa;
+  --ifm-color-primary: #1d4ed8;
+  --ifm-color-primary-dark: #1e40af;
+  --ifm-color-primary-darker: #1e3a8a;
+  --ifm-color-primary-darkest: #172554;
+  --ifm-color-primary-light: #2563eb;
+  --ifm-color-primary-lighter: #3b82f6;
   --ifm-color-primary-lightest: #93c5fd;
-  --ifm-code-font-size: 95%;
-  --docusaurus-highlighted-code-line-bg: rgba(0, 0, 0, 0.1);
-  --ifm-navbar-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.1);
+  --ifm-code-font-size: 92%;
+  --ifm-font-family-base: "IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
+  --ifm-heading-font-family: "IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
+  --ifm-font-family-monospace: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  --ifm-leading: 1.65;
+  --ifm-heading-font-weight: 650;
+  --docusaurus-highlighted-code-line-bg: rgba(29, 78, 216, 0.08);
+  --ifm-navbar-shadow: none;
   --ifm-toc-border-color: #e5e7eb;
   --ifm-menu-color-background-active: #eff6ff;
+  --ifm-menu-color-background-hover: #f8fafc;
+  --cs-hero-glow: rgba(147, 197, 253, 0.55);
+  --cs-surface: #f8fafc;
 }
 
-/* System color scheme detection */
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme]) {
     --ifm-color-primary: #60a5fa;
@@ -30,14 +34,15 @@
     --ifm-color-primary-light: #93c5fd;
     --ifm-color-primary-lighter: #bfdbfe;
     --ifm-color-primary-lightest: #dbeafe;
-    --docusaurus-highlighted-code-line-bg: rgba(0, 0, 0, 0.3);
-    --ifm-navbar-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.3);
-    --ifm-toc-border-color: #374151;
+    --docusaurus-highlighted-code-line-bg: rgba(96, 165, 250, 0.15);
+    --ifm-toc-border-color: #334155;
     --ifm-menu-color-background-active: #1e3a8a;
+    --ifm-menu-color-background-hover: #0f172a;
+    --cs-hero-glow: rgba(30, 64, 175, 0.55);
+    --cs-surface: #0b1220;
   }
 }
 
-/* For readability concerns, you should choose a lighter palette in dark mode. */
 [data-theme='dark'] {
   --ifm-color-primary: #60a5fa;
   --ifm-color-primary-dark: #3b82f6;
@@ -46,20 +51,22 @@
   --ifm-color-primary-light: #93c5fd;
   --ifm-color-primary-lighter: #bfdbfe;
   --ifm-color-primary-lightest: #dbeafe;
-  --docusaurus-highlighted-code-line-bg: rgba(0, 0, 0, 0.3);
-  --ifm-navbar-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.3);
-  --ifm-toc-border-color: #374151;
+  --docusaurus-highlighted-code-line-bg: rgba(96, 165, 250, 0.15);
+  --ifm-toc-border-color: #334155;
   --ifm-menu-color-background-active: #1e3a8a;
+  --ifm-menu-color-background-hover: #0f172a;
+  --cs-hero-glow: rgba(30, 64, 175, 0.55);
+  --cs-surface: #0b1220;
 }
 
-/* Custom styles */
 .navbar {
-  backdrop-filter: blur(8px);
-  background-color: rgba(255, 255, 255, 0.8) !important;
+  backdrop-filter: blur(10px);
+  background-color: rgba(255, 255, 255, 0.82) !important;
+  border-bottom: 1px solid var(--ifm-toc-border-color);
 }
 
 [data-theme='dark'] .navbar {
-  background-color: rgba(17, 24, 39, 0.8) !important;
+  background-color: rgba(11, 18, 32, 0.82) !important;
 }
 
 .navbar__logo img {
@@ -71,36 +78,71 @@
   transform: scale(1.05);
 }
 
+.navbar__title {
+  font-weight: 650;
+  letter-spacing: -0.02em;
+}
+
 .hero {
-  background: linear-gradient(135deg, var(--ifm-color-primary-lightest) 0%, var(--ifm-color-primary) 100%);
+  background:
+    radial-gradient(ellipse 80% 60% at 50% -10%, var(--cs-hero-glow), transparent 60%),
+    linear-gradient(160deg, var(--ifm-color-primary-lightest) 0%, var(--ifm-color-primary) 55%, var(--ifm-color-primary-dark) 100%);
   padding: 4rem 0;
 }
 
 [data-theme='dark'] .hero {
-  background: linear-gradient(135deg, var(--ifm-color-primary-darkest) 0%, var(--ifm-color-primary) 100%);
+  background:
+    radial-gradient(ellipse 70% 50% at 50% -10%, var(--cs-hero-glow), transparent 55%),
+    linear-gradient(160deg, #0f172a 0%, var(--ifm-color-primary-darkest) 45%, var(--ifm-color-primary-darker) 100%);
 }
 
 .hero__title {
-  font-size: 3rem;
-  font-weight: 700;
-  margin-bottom: 1rem;
+  font-weight: 750;
+  letter-spacing: -0.03em;
 }
 
-.hero__subtitle {
-  font-size: 1.5rem;
-  opacity: 0.9;
+.markdown h1:first-child {
+  letter-spacing: -0.03em;
 }
 
-/* Card hover effects */
-.card {
-  transition: transform 0.2s ease, box-shadow 0.2s ease;
+.markdown h2 {
+  margin-top: 2.25rem;
+  padding-bottom: 0.35rem;
+  border-bottom: 1px solid var(--ifm-toc-border-color);
 }
 
-.card:hover {
-  transform: translateY(-4px);
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+.markdown h3 {
+  margin-top: 1.75rem;
 }
 
-[data-theme='dark'] .card:hover {
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+.theme-doc-sidebar-container {
+  border-right-color: var(--ifm-toc-border-color) !important;
+}
+
+.menu__link {
+  border-radius: 6px;
+  font-size: 0.92rem;
+}
+
+.table-of-contents__link--active {
+  color: var(--ifm-color-primary);
+  font-weight: 600;
+}
+
+.theme-code-block {
+  box-shadow: none;
+  border: 1px solid var(--ifm-toc-border-color);
+}
+
+.footer {
+  background: #0f172a;
+}
+
+.footer__title {
+  letter-spacing: -0.01em;
+}
+
+/* Keep admonitions compact */
+.alert {
+  border-radius: 8px;
 }

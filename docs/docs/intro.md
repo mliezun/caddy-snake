@@ -1,137 +1,48 @@
 ---
 sidebar_position: 1
+title: Quickstart
+description: Run a Python web app with Caddy Snake in under five minutes
 ---
 
 # Quickstart
 
-Let's discover **Caddy Snake in less than 5 minutes**.
+Caddy Snake runs Python web apps **inside Caddy** — no separate Gunicorn or Uvicorn process. It works with Flask, Django, FastAPI, and any other WSGI/ASGI (or [ESGI](esgi.md)) app.
 
-Caddy Snake is a Caddy plugin that lets you run Python web apps directly inside Caddy — no reverse proxy needed. The plugin spawns Python worker subprocesses and forwards requests over a Unix domain socket (loopback TCP on Windows), so you do not need a separate Gunicorn or Uvicorn process.
-
-**Works with Flask, Django, FastAPI, and any other WSGI/ASGI framework.**
-
----
-
-## Option 1: Install from PyPI
-
-The fastest way to get started. Install with `pip` and you're ready to go:
-
-```bash
-pip install caddysnake
-```
-
-This installs the `caddysnake` command, which is a thin wrapper around a pre-compiled Caddy binary with the caddy-snake plugin. No C compiler or manual build step required — workers use the Python interpreter from your environment.
-
-Available on [PyPI](https://pypi.org/project/caddysnake/) for Python 3.12 through 3.14 on Linux and macOS (x86_64 and ARM64).
-
-### Usage
-
-```bash
-# Start a WSGI server
-caddysnake --server-type wsgi --app main:app
-
-# Start an ASGI server
-caddysnake --server-type asgi --app main:app
-
-# Start an ESGI server
-caddysnake --server-type esgi --app main:application
-```
-
-This starts a server on port `9080` serving your app. See `caddysnake --help` for all available options. Python-handler flags match the Caddyfile `python` block; see the [configuration reference](reference.md#python-server-command) for the full list.
-
-| Flag | Description | Default |
-|------|-------------|---------|
-| `--server-type wsgi\|asgi\|esgi` | **Required.** Type of Python app | — |
-| `--app <module:var>` | **Required.** Python module and app variable (e.g. `main:app`) | — |
-| `--domain <example.com>` | Enable HTTPS with automatic certificates | — |
-| `--listen <addr>` | Custom listen address | `:9080` |
-| `--workers <count>` | Number of worker processes | CPU count |
-| `--max-dynamic-apps <count>` | Max distinct dynamic Python apps | `128` |
-| `--python-path <path>` | Path to the Python interpreter | system/venv python |
-| `--venv <path>` | Path to a Python virtual environment | — |
-| `--working-dir <path>` | Working directory for the Python app | — |
-| `--env-file <path>` | Dotenv file for worker env (repeatable) | — |
-| `--env-var NAME=VALUE` | Inline worker env var (repeatable) | — |
-| `--start-timeout=<dur\|-1\|forever>` | Worker readiness wait (`=-1` or `forever` for indefinite) | `120s` |
-| `--runtime <name>` | Worker runtime (see [runtime](reference.md#runtime)) | per interface |
-| `--lifespan on\|off` | ASGI lifespan events | `off` |
-| `--static-path <path>` | Serve a static files directory | — |
-| `--static-route <route>` | Route prefix for static files | `/static` |
-| `--debug` | Enable debug logging | `false` |
-| `--access-logs` | Enable access logs | `false` |
-| `--autoreload` | Watch `.py` files and reload on changes | `false` |
-
-### Example
+## Install and run
 
 ```bash
 pip install caddysnake fastapi
-
-caddysnake \
-    --server-type asgi \
-    --app main:app \
-    --workers 4 \
-    --static-path ./static \
-    --access-logs
 ```
 
-:::tip
-The `caddysnake` PyPI package bundles a Caddy binary built with the caddy-snake plugin using [maturin](https://github.com/PyO3/maturin). Under the hood it runs `caddy python-server` with the same flags. See [how the CLI works](installation.md#pypi-package-caddysnake) for more details.
-:::
-
----
-
-## Option 2: Download a pre-built binary
-
-Download a self-contained Caddy binary with Python embedded from the [latest release](https://github.com/mliezun/caddy-snake/releases). No system Python required — everything is bundled into a single executable.
-
-```bash
-# Download and extract
-tar -xzf caddy-standalone-3.13-x86_64_v2-unknown-linux-gnu.tar.gz
-
-# Start a server
-./caddy python-server --server-type wsgi --app main:app
-```
-
-Pre-built binaries are available for Python 3.12 through 3.14 (including 3.13-nogil and 3.14-nogil) on Linux and macOS (x86_64 and ARM64). See the [Pre-built Binaries](installation.md#pre-built-standalone-binaries) page for details on how they work.
-
----
-
-## Option 3: Build from source
-
-```bash
-CGO_ENABLED=0 xcaddy build --with github.com/mliezun/caddy-snake
-```
-
-### Requirements
-
-- Python >= 3.12 (runtime — used by worker subprocesses)
-- Go >= 1.26 and [xcaddy](https://github.com/caddyserver/xcaddy)
-
-Install on Ubuntu 24.04:
-
-```bash
-sudo apt-get install python3 golang
-go install github.com/caddyserver/xcaddy/cmd/xcaddy@v0.4.6
-```
-
-### Example usage: FastAPI
-
-`main.py`
+`main.py`:
 
 ```python
 from fastapi import FastAPI
 
 app = FastAPI()
 
-
-@app.get("/hello-world")
+@app.get("/hello")
 def hello():
-    return "Hello world!"
+    return {"message": "Hello world!"}
 ```
 
-`Caddyfile`
+```bash
+caddysnake --server-type asgi --app main:app --lifespan on
+curl http://127.0.0.1:9080/hello
+```
 
-```Caddyfile
+That starts Caddy with the plugin on port `9080`. Use `--domain example.com` for automatic HTTPS.
+
+:::tip Flask instead?
+```bash
+pip install caddysnake flask
+caddysnake --server-type wsgi --app main:app
+```
+:::
+
+## Prefer a Caddyfile?
+
+```caddyfile
 http://localhost:9080 {
     python /* {
         module_asgi "main:app"
@@ -140,147 +51,24 @@ http://localhost:9080 {
 }
 ```
 
-Run:
-
 ```bash
-pip install fastapi
-./caddy run --config Caddyfile
+caddy run --config Caddyfile
 ```
 
-```bash
-curl http://localhost:9080/hello-world
-# Hello world!
-```
+## Other install options
 
-:::note
-It's possible to enable/disable [lifespan events](https://fastapi.tiangolo.com/advanced/events/) by adding the `lifespan on|off` directive to your Caddy configuration. In the above case the lifespan events are enabled. Omitting the directive disables them by default.
-:::
+| Method | When to use |
+|--------|-------------|
+| **[PyPI](installation.md#pypi-package-caddysnake)** (`pip install caddysnake`) | Day-to-day development |
+| **[Standalone binary](installation.md#pre-built-standalone-binaries)** | No system Python on the host |
+| **[Docker](installation.md#docker-images)** | Containers |
+| **[Build from source](installation.md#building-from-source)** | Custom Caddy builds |
 
-### Example usage: Flask
+Full CLI flags live in the [configuration reference](reference.md#python-server-command).
 
-`main.py`
+## Next steps
 
-```python
-from flask import Flask
-
-app = Flask(__name__)
-
-
-@app.route("/hello-world")
-def hello():
-    return "Hello world!"
-```
-
-`Caddyfile`
-
-```Caddyfile
-http://localhost:9080 {
-    python /* {
-        module_wsgi "main:app"
-    }
-}
-```
-
-Run:
-
-```bash
-pip install Flask
-./caddy run --config Caddyfile
-```
-
-```bash
-curl http://localhost:9080/hello-world
-# Hello world!
-```
-
----
-
-## Option 4: Use a Docker image
-
-Docker images are available with Python 3.12, 3.13, and 3.14:
-
-```Dockerfile
-FROM mliezun/caddy-snake:latest-py3.13
-
-WORKDIR /app
-COPY . /app
-
-CMD ["caddy", "run", "--config", "/app/Caddyfile"]
-```
-
-Images are published to both registries:
-
-- [Docker Hub](https://hub.docker.com/r/mliezun/caddy-snake)
-- [GitHub Container Registry](https://github.com/mliezun/caddy-snake/pkgs/container/caddy-snake)
-
-### Build with Docker
-
-There's a template file in the project: [builder.Dockerfile](https://github.com/mliezun/caddy-snake/blob/main/builder.Dockerfile). It supports build arguments to configure which Python or Go version to use.
-
-```bash
-# Build the Docker image
-docker build -f builder.Dockerfile --build-arg PY_VERSION=3.13 -t caddy-snake-builder .
-
-# Extract the caddy binary to your current directory
-docker run --rm -v $(pwd):/output caddy-snake-builder
-```
-
-Make sure to match the Python version with your target environment.
-
----
-
-## Virtual environments
-
-You can point Caddy Snake to a Python virtual environment using the `venv` directive:
-
-```Caddyfile
-python {
-    module_wsgi "main:app"
-    venv "./venv"
-}
-```
-
-Each Python worker process adds that venv’s `site-packages` to its own `sys.path` so installed packages are available to your app.
-
-:::note
-Workers are separate processes: a venv configured for one `python` handler (or one dynamic tenant) does not leak packages into other workers’ interpreters.
-:::
-
----
-
-## Per-app environment variables
-
-Use `env_file` and `env_var` inside a `python` block to configure worker environment variables without setting them globally on the Caddy process. Inline `env_var` entries override values from `env_file` when both set the same name.
-
-```Caddyfile
-python {
-    module_wsgi "main:app"
-    working_dir "/var/www/myapp"
-    env_file "/var/www/myapp/.env"
-    env_var DEBUG "1"
-}
-```
-
-See the [configuration reference](reference#env_file) for precedence, dynamic placeholders, and reserved variable names.
-
----
-
-## Platform support
-
-| Platform       | Notes                    |
-|----------------|--------------------------|
-| Linux (x86_64) | Primary platform         |
-| Linux (arm64)  | Full support             |
-| macOS          | Full support             |
-
-**Python versions:** 3.12, 3.13, 3.13-nogil (free-threaded), 3.14, 3.14-nogil (free-threaded)
-
----
-
-## What's next?
-
-- Learn about [Installation & Distribution](installation.md) — PyPI, pre-built binaries, and how they work
-- Learn about all [Configuration Options](reference.md)
-- See more [Examples](examples.md) with Flask, Django, FastAPI, Socket.IO, and more
-- Understand the [Architecture](architecture.md) and how it all works
-- Check out the [Benchmarks](benchmarks.md) comparing Caddy Snake to traditional reverse proxy setups
+- [Examples](examples.md) — Django, Socket.IO, multi-tenant hostnames, autoreload
+- [Configuration reference](reference.md) — every `python` directive
+- [Architecture](architecture.md) — workers, sockets, dynamic apps
+- [Blog: branch previews](../blog/branch-previews) — one-box PR previews with DB clones

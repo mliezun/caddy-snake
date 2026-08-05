@@ -42,7 +42,7 @@ When you implement or change a **user-facing feature** (Caddyfile directives, wo
 
 For cache or multi-worker features, also cover: env vars, wire protocol (`CS*` commands if applicable), Python API, limits, security/trust model, and an integration test under `tests/` when behavior spans workers.
 
-Build docs locally if you touch MkDocs content: `cd docs && mkdocs build` (also exercised in CI **Lint**).
+Build docs locally if you touch Docusaurus content: `cd docs && npm ci && npm run build` (also exercised in CI **Lint**).
 
 ---
 

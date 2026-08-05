@@ -1,30 +1,44 @@
 import clsx from 'clsx';
 import Link from '@docusaurus/Link';
+import useBaseUrl from '@docusaurus/useBaseUrl';
 import useDocusaurusContext from '@docusaurus/useDocusaurusContext';
 import Layout from '@theme/Layout';
 import HomepageFeatures from '@site/src/components/HomepageFeatures';
 
-import CaddysnakeLogo from '@site/static/img/caddysnake.png';
 import Heading from '@theme/Heading';
 import styles from './index.module.css';
 
 function HomepageHeader() {
   const {siteConfig} = useDocusaurusContext();
+  const logoSrc = useBaseUrl('/img/caddysnake-512x512.png');
   return (
     <header className={clsx('hero hero--primary', styles.heroBanner)}>
-      <div className="container">
-        <Heading as="h1" className="hero__title">
+      <div className={clsx('container', styles.heroInner)}>
+        <img
+          className={styles.heroLogo}
+          src={logoSrc}
+          alt=""
+          width={96}
+          height={96}
+        />
+        <Heading as="h1" className={clsx('hero__title', styles.heroTitle)}>
           {siteConfig.title}
         </Heading>
-        <p className="hero__subtitle">{siteConfig.tagline}</p>
-        <p className="hero__subtitle">Automatic HTTPS configuration</p>
-        <p className="hero__subtitle">Supports HTTP/2 and HTTP/3</p>
-        <img src={CaddysnakeLogo} alt="Caddy Snake logo" width={200} />
+        <p className={styles.heroLead}>{siteConfig.tagline}</p>
+        <p className={styles.heroSupport}>
+          Automatic HTTPS, HTTP/2 and HTTP/3 — without a reverse-proxy hop to
+          Gunicorn or Uvicorn.
+        </p>
         <div className={styles.buttons}>
           <Link
             className="button button--secondary button--lg"
             to="/docs/intro">
-            Quickstart - 5min ⏱️
+            Quickstart
+          </Link>
+          <Link
+            className={clsx('button button--outline button--lg', styles.secondaryBtn)}
+            to="/blog/branch-previews">
+            Case study: branch previews
           </Link>
         </div>
       </div>
@@ -33,11 +47,10 @@ function HomepageHeader() {
 }
 
 export default function Home() {
-  const {siteConfig} = useDocusaurusContext();
   return (
     <Layout
-      title={`${siteConfig.title} documentation`}
-      description="Caddy Snake is a plugin that integrates the Python interpreter inside the revers proxy to serve WSGI and ASGI apps.">
+      title="Run Python apps with Caddy"
+      description="Caddy Snake runs WSGI, ASGI, and ESGI Python apps inside Caddy with automatic HTTPS — no separate app server required.">
       <HomepageHeader />
       <main>
         <HomepageFeatures />

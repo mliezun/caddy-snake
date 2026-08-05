@@ -1,161 +1,71 @@
 ---
 title: Architecture
-description: Technical details about how Caddy-Snake works, its worker model, autoreload, and dynamic modules
+description: How Caddy Snake routes requests to Python workers
 sidebar_position: 5
 ---
 
 # Architecture
 
-Caddy-Snake is a Caddy plugin that bridges the gap between Caddy's HTTP server and Python web applications. The Go plugin forwards HTTP requests to Python worker subprocesses, which speak WSGI, ASGI, or ESGI to your application.
+Caddy Snake is a Caddy plugin that forwards HTTP to **Python worker subprocesses**. Workers speak WSGI, ASGI, or ESGI to your app. There is no CGO and no embedded Python C API in the Caddy process.
 
 ---
 
-## Request Flow
+## Request flow
 
-<img src="/en/latest/img/caddysnake-diagram.png" alt="Example request flow for Django app" width="600"></img>
+<img src="/en/latest/img/caddysnake-diagram.png" alt="Request flow from Caddy to a Python worker" width="600" />
 
-1. Caddy receives an HTTP request
-2. The request is routed to the Caddy-Snake plugin based on the Caddyfile configuration
-3. The plugin selects a Python worker (round-robin across the worker pool)
-4. The plugin forwards the HTTP request to the worker over a Unix domain socket (loopback TCP on Windows) using an internal reverse proxy
-5. The worker ([`caddysnake.py`](https://github.com/mliezun/caddy-snake/blob/main/caddysnake.py)) translates the HTTP request into WSGI, ASGI, or ESGI protocol calls
-6. The Python application processes the request and returns a response
-7. The worker sends the HTTP response back to the plugin
-8. Caddy sends the response to the client
+1. Caddy matches a `python` handler.
+2. The plugin picks a worker (round-robin).
+3. The request is proxied over a Unix domain socket (loopback TCP on Windows).
+4. [`caddysnake.py`](https://github.com/mliezun/caddy-snake/blob/main/caddysnake.py) translates to WSGI/ASGI/ESGI and writes the response back.
+
+Workers are spawned with the bundled `caddysnake.py` script. The interpreter comes from `python_path`, a configured `venv`, `PATH`, or (for standalone builds) an embedded distribution.
 
 ---
 
-## Python Integration
+## Workers
 
-The plugin does not embed Python in the Caddy process. Instead, it spawns one or more **Python worker subprocesses** that run the bundled [`caddysnake.py`](https://github.com/mliezun/caddy-snake/blob/main/caddysnake.py) script. Each worker listens on a private Unix domain socket (or loopback TCP on Windows) and serves your WSGI, ASGI, or ESGI application.
+| | Process workers (default) | `isolation docker` |
+|---|---|---|
+| Unit | OS process | Container |
+| Parallelism | One GIL per worker | Same |
+| Crash blast radius | One worker | One container |
+| Filesystem / env | Shared with Caddy UID | Bind-mounts + explicit env only |
 
-Key aspects of the integration:
-- **No CGO or Python C API** — the Go plugin and Python workers communicate over stream sockets using HTTP
-- **Embedded worker script** — `caddysnake.py` is bundled into the plugin and written to a temporary directory at startup
-- **Configurable Python binary** — workers use `python_path`, the venv interpreter, or `python3` from `PATH`
-- **Pre-built standalone binaries** bundle a full Python distribution and pass its interpreter via `--python-path`
-
----
-
-## Worker Model
-
-Caddy-Snake uses process-based workers by default. Each worker runs in a separate OS process with its own Python interpreter. With **`isolation docker`**, each worker runs in its own Docker container instead (Linux only); see [isolation](reference.md#isolation).
-
-- **True parallelism** — each worker unit has its own GIL, so CPU-bound work runs in parallel
-- **Isolation** — a crash in one worker doesn't affect others
-- **Higher memory usage** — each process loads its own copy of the Python interpreter and application
-- **Best for** — production deployments, CPU-bound workloads
+`workers N` starts N units. See [Isolation](isolation.md).
 
 ---
 
 ## Autoreload
 
-The autoreload feature provides hot-reloading during development without restarting Caddy. It is implemented in the `AutoreloadableApp` wrapper.
+With `autoreload`, a filesystem watcher (fsnotify) watches the working directory for `.py` changes (500ms debounce), starts a new worker group, and swaps it in under a read/write lock. Failed reloads serve HTTP 503 until the next success.
 
-### How it works
-
-1. A filesystem watcher ([fsnotify](https://github.com/fsnotify/fsnotify)) is started on the working directory, recursively watching all subdirectories. The directory is resolved through symlinks first, since `filepath.Walk` will not descend a symlinked root
-2. Only `.py` file events are considered (write, create, remove, rename)
-3. Rapid changes are debounced with a 500ms window (e.g. when an editor saves and auto-formats)
-4. When the debounce fires:
-   - New worker subprocesses are started via the factory function
-   - The new worker group replaces the old one atomically
-   - Old worker processes are terminated after the swap
-5. A read/write lock ensures in-flight requests complete before the swap
-6. If the reload fails (e.g. syntax error in Python code), all subsequent requests return HTTP 503 until the next successful reload
-7. Reload failures do not terminate Caddy in the normal Caddyfile and CLI wiring
-
-### Thread safety
-
-`AutoreloadableApp` uses `sync.RWMutex`:
-- **Read lock** — held during request handling, allows concurrent requests
-- **Write lock** — held during reload, blocks new requests until the swap is complete
+:::warning Production tip
+Autoreload waits on in-flight requests. Long-lived WebSockets can stall a reload. Prefer `caddy reload` for sticky production sessions; keep autoreload for development and disposable preview apps. See the [branch previews](../blog/branch-previews) case study.
+:::
 
 ---
 
-## Dynamic Module Loading
+## Dynamic apps
 
-Dynamic module loading allows a single Caddy configuration to serve multiple different Python applications, resolved at request time using [Caddy placeholders](https://caddyserver.com/docs/caddyfile/concepts#placeholders).
+Placeholders in `module_*`, `working_dir`, `venv`, `env_file`, and `env_var` are resolved per request. Apps are created lazily and cached (default **128** apps, ~**30m** idle TTL). Over capacity → HTTP 503.
 
-### How it works
+Each dynamic working directory can have its own autoreload watcher; a change only evicts apps for that directory.
 
-The `DynamicApp` struct manages a cache of Python app instances keyed by their resolved configuration:
-
-1. **Placeholder resolution** — on each request, Caddy placeholders in `module_wsgi`/`module_asgi`, `working_dir`, `venv`, `env_file`, and `env_var` values are resolved using the request context (e.g. hostname, path, headers)
-2. **Cache lookup** — a composite key (`module|dir|venv|envFiles|envVars`) is used to look up an existing app
-3. **Lazy creation** — if no app exists for the key, one is created via the factory function and cached
-4. **Double-check locking** — a fast-path read lock allows concurrent access, with a write lock only for app creation
-
-The optional `max_dynamic_apps` setting bounds the number of cached request-resolved apps (default 128) together with idle LRU eviction.
-
-### Example: multi-tenant by subdomain
-
-```caddyfile
-*.example.com:9080 {
-    route /* {
-        python {
-            module_asgi "{http.request.host.labels.2}:app"
-            working_dir "{http.request.host.labels.2}/"
-        }
-    }
-}
-```
-
-With this configuration:
-- `app1.example.com` → imports `app1:app` from the `app1/` directory
-- `app2.example.com` → imports `app2:app` from the `app2/` directory
-- Each app is created on first request and reused for subsequent ones
-
-### Dynamic modules + autoreload
-
-When `autoreload` is enabled on a dynamic app, each resolved working directory gets its own filesystem watcher. File changes only affect the apps associated with that directory:
-
-- A `dirToKeys` map tracks which cache keys belong to each working directory
-- When a `.py` file changes, only the apps for that directory are evicted
-- Old app instances are evicted immediately; their workers are cleaned up after a fixed 10s grace period, which does **not** wait for active requests
-- The app is lazily reimported on the next request
-- If the reimport fails on the next request, the process terminates (when `exitOnReloadFailure` is configured)
+Details and security notes: [Configuration reference](reference.md#dynamic-module-loading).
 
 ---
 
-## WSGI Implementation
+## Protocols
 
-The WSGI implementation in [`caddysnake.py`](https://github.com/mliezun/caddy-snake/blob/main/caddysnake.py) follows the [PEP 3333](https://peps.python.org/pep-3333/) specification:
-
-1. Parses the proxied HTTP request into WSGI components
-2. Builds a WSGI environment dictionary with all required keys (`REQUEST_METHOD`, `PATH_INFO`, `QUERY_STRING`, headers, etc.)
-3. Calls the WSGI application callable with the environment and a `start_response` callback
-4. Collects the response status, headers, and body
-5. Writes the HTTP response back to the Go plugin
-
-## ASGI Implementation
-
-The ASGI implementation in [`caddysnake.py`](https://github.com/mliezun/caddy-snake/blob/main/caddysnake.py) follows the [ASGI specification](https://asgi.readthedocs.io/en/latest/):
-
-1. Parses the proxied HTTP request into an ASGI scope dictionary with connection details
-2. Manages the ASGI protocol lifecycle via `receive` and `send` callables
-3. Supports HTTP and WebSocket connections
-4. Optionally handles the lifespan protocol for application startup/shutdown events
+- **WSGI** — PEP 3333 env + `start_response`
+- **ASGI** — HTTP and WebSocket; optional lifespan
+- **ESGI** — gevent-only sync gateway; see [ESGI](esgi.md)
 
 ---
 
-## Current Limitations
+## Limits to know
 
-### Shared cache has no tenant isolation
-
-The in-process shared cache is visible to every worker attached to the same `python` handler. Use key prefixes per app/tenant, or an external store, when isolation is required.
-
-### Dynamic app cache is bounded, not infinite
-
-Multi-tenant `DynamicApp` caches are capped (default 128 apps, 30m idle TTL). Very large tenant counts need higher limits via env vars or an external routing design.
-
----
-
-## Worker Lifecycle
-
-The plugin manages Python worker subprocesses from the Go side:
-
-- Workers are started with `exec.Command` and the bundled `caddysnake.py` script
-- Idle HTTP connections to workers are pooled via Go's `http.Transport`
-- Workers receive SIGTERM on Unix for graceful shutdown (ASGI lifespan); Windows uses process kill
-- Old worker groups are cleaned up during autoreload and dynamic module eviction
+- The [shared worker cache](reference.md#shared-worker-cache) is **not** a tenant boundary — prefix keys or use an external store.
+- Dynamic app cache is bounded; large tenant counts need higher limits or external routing.
+- Docker isolation hardens the worker sandbox; it does not isolate the shared cache.
