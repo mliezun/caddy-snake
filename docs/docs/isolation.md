@@ -44,6 +44,6 @@ Requires a working Docker engine (`docker` on `PATH`, access to the socket or `D
 - Untrusted or multi-tenant code on one handler
 - Preview environments where a branch should not read host files outside its release dir
 
-When **not** enough: mutually hostile tenants that share the in-process cache, or need separate secrets stores — use key prefixes, external Redis, or separate Caddy handlers/hosts. See the [branch previews](../blog/branch-previews) tradeoffs.
+When **not** enough: mutually hostile tenants that share the in-process cache, or need separate secrets stores — use key prefixes, external Redis, or separate Caddy handlers/hosts. For a shared-VM preview pattern, see [branch previews](../blog/branch-previews).
 
 Full option list: [configuration reference](reference.md#isolation).

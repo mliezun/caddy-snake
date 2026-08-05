@@ -1,33 +1,42 @@
 ---
 slug: branch-previews
-title: "Branch previews on one box: dynamic Python apps + database clones"
+title: "Branch previews with Caddy Snake and database clones"
 authors: mliezun
 tags: [python, caddy-snake, previews, deployment, postgres]
 ---
 
-Review apps usually mean a container or VM per pull request. A small biotech SaaS team needed something cheaper: real HTTPS previews with real-shaped data, WebSockets, and migrations — on a single small VM, without taking production down when a branch deploys.
-
-This post is an anonymized case study of that setup: **Caddy Snake** for per-branch Python apps, **[branchable](https://github.com/mliezun/branchable)** for Postgres clones, and a few hard-won deploy rules.
+This post describes a preview setup that runs production and every branch preview from **one virtual machine** and **one Postgres database**. Caddy Snake serves each branch as a dynamic Python app; [branchable](https://github.com/mliezun/branchable) clones a schema per preview.
 
 <!-- truncate -->
 
 ## The shape of the system
 
-One host runs a single Caddy Snake process. That process terminates TLS, serves static files, and runs the Django app (via ESGI + gevent) for both production and every branch preview.
+Hardware and data:
+
+- **1 VM** — a single Caddy Snake process terminates TLS, serves static files, and runs the Python app for production and all previews
+- **1 Postgres instance** — production uses the primary schema; each preview gets its own cloned schema on the same server
+
+DNS (all pointing at the VM’s public IP):
+
+| Record | Type | Value |
+|--------|------|-------|
+| `app.example.com` | A | VM IP |
+| `preview.example.com` | A | VM IP |
+| `*.preview.example.com` | CNAME or A | `preview.example.com` (or the same VM IP) |
 
 | | Production | Preview |
 |---|---|---|
 | Hostname | `app.example.com` | `{slug}.preview.example.com` |
 | Code | `/srv/releases/active` (symlink) | `/srv/releases/{slug}/` |
 | App mode | Fixed `working_dir` | Dynamic apps (hostname placeholders) |
-| Code pickup | `caddy reload` | `autoreload` + a deploy stamp file |
-| Database | primary schema | `preview_{slug}` clone |
+| Code pickup | `caddy reload` | `autoreload` |
+| Database | primary schema | `preview_{slug}` clone on the same Postgres |
 
-There are no per-PR containers. Isolation is separate release directories, separate databases, and Caddy Snake’s per-hostname dynamic worker sets. The binary, process memory, and most secrets are shared — more on that later.
+There are no per-PR containers. Isolation is separate release directories, separate database schemas, and Caddy Snake’s per-hostname dynamic worker sets. The Caddy binary and process are shared.
 
-## One wildcard site, many apps
+## Caddyfile config
 
-Previews use Caddy placeholders so the hostname picks the release directory:
+Production and previews share one Caddyfile. Previews use placeholders so the hostname selects the release directory:
 
 ```caddyfile
 {
@@ -35,6 +44,23 @@ Previews use Caddy placeholders so the hostname picks the release directory:
 		permission python_dir {
 			root /srv/releases
 			domain_suffix preview.example.com
+		}
+	}
+}
+
+app.example.com {
+	handle_path /static/* {
+		root * /srv/releases/active/staticfiles
+		file_server
+	}
+
+	route {
+		python {
+			module_asgi "main:app"
+			working_dir "/srv/releases/active"
+			venv "/srv/releases/active/.venv"
+			env_file "/srv/releases/active/.env"
+			lifespan on
 		}
 	}
 }
@@ -51,13 +77,13 @@ https://*.preview.example.com {
 
 	route {
 		python {
-			module_esgi "app.esgi:application"
+			module_asgi "main:app"
 			working_dir "/srv/releases/{http.request.host.labels.2}/"
 			venv "/srv/releases/{http.request.host.labels.2}/.venv"
 			env_file "/srv/releases/{http.request.host.labels.2}/.database.env"
 			env_var ALLOWED_HOSTS "{http.request.host.labels.2}.preview.example.com"
 			env_var CSRF_TRUSTED_ORIGINS "https://{http.request.host.labels.2}.preview.example.com"
-			runtime gevent
+			lifespan on
 			autoreload
 		}
 	}
@@ -66,66 +92,42 @@ https://*.preview.example.com {
 
 Host labels are numbered from the right, so `feature-login.preview.example.com` resolves `labels.2` to `feature-login`.
 
-Three pieces matter:
+How the pieces fit together:
 
-1. **Dynamic apps** — first request for a slug creates a worker set for that directory; later requests reuse it until idle eviction (default cap 128 apps, ~30m idle TTL).
-2. **On-demand TLS** — `tls.permission.python_dir` issues a certificate only if `/srv/releases/{slug}` exists. Unprovisioned hostnames do not get certs; no separate `ask` service.
-3. **Per-preview env** — a small `.database.env` overrides `DATABASE_NAME`; host/CSRF settings come from `env_var` with the same placeholders.
-
-Production sits beside this with a *fixed* `working_dir` and **no** `autoreload`.
-
-## Why production and previews disagree about reload
-
-The app keeps long-lived WebSocket connections (device control). Autoreload’s swap waits on in-flight requests. With a connection that never closes, a reload can starve every other request on that server.
-
-So:
-
-- **Production** deploys flip a symlink and run `caddy reload --force`. No autoreload.
-- **Previews** keep `autoreload`. A preview deploy only uploads code and writes a tiny `_deploy_stamp.py` after migrate/collectstatic, so the watcher fires once the tree is ready. Dynamic apps evict per hostname; a preview reload does not lock the production worker set.
-
-Same process, opposite reload strategies — chosen for connection lifetime, not ideology.
+1. **Dynamic apps** — the first request for a slug starts workers for that directory; later requests reuse them until idle eviction (default cap 128 apps, ~30m idle TTL).
+2. **On-demand TLS** — `tls.permission.python_dir` issues a certificate only if `/srv/releases/{slug}` exists. Unknown slugs do not get certificates.
+3. **Per-preview env** — `.database.env` sets `DATABASE_NAME` for that clone; `ALLOWED_HOSTS` / `CSRF_TRUSTED_ORIGINS` come from `env_var` with the same hostname placeholders.
 
 ## Database branching with branchable
 
-App branching without data branching is half a preview. On deploy, a script clones the primary schema:
+On preview deploy, clone the primary schema:
 
 ```bash
 branchable branches create --base-schema app --branch-name "preview_${SLUG}"
 # writes /srv/releases/${SLUG}/.database.env → DATABASE_NAME=preview_...
 ```
 
-On Postgres 18+, branchable prefers a copy-on-write template clone when available; otherwise it falls back to template/`pg_dump`. Cleanup on branch delete drops the DB and removes the release directory — which also revokes TLS permission for that slug.
+On Postgres 18+, branchable can use a copy-on-write template clone when available; otherwise it falls back to template/`pg_dump`. Connection host, user, and password stay in the shared host environment; only the database name differs per preview.
 
-Connection host/user/password stay in the shared host env; only the database name is per preview.
+## CI: deploy and cleanup
 
-## CI is upload, not orchestration
+**On push to a non-main branch** (open a preview):
 
-The preview job is intentionally thin:
+1. Pack the branch into a tarball
+2. Upload it to the VM (SCP/SSH)
+3. Extract to `/srv/releases/{slug}/` and install dependencies
+4. Create the database branch with branchable (if it does not already exist)
+5. Run migrations (and collectstatic if needed)
+6. Touch a small `.py` file or rely on `autoreload` so the preview picks up the new code
+7. Expose `https://{slug}.preview.example.com` as the environment URL
 
-1. Pack a tarball of the branch
-2. SCP + SSH to the host
-3. Extract to `/srv/releases/{slug}/`, install deps, ensure DB branch, migrate, collectstatic, write the stamp file
-4. Publish `https://{slug}.preview.example.com` as the environment URL
+No Caddy restart is required for preview deploys.
 
-No Caddy restart. No shared binary rewrite from preview jobs. Cleanup runs when the branch is deleted.
+**On merge (or when the branch is deleted)** — tear the preview down:
 
-Production uses the same upload path, then flips `active`, syncs host scripts from **main only**, and reloads Caddy.
+1. Delete the release directory: `rm -rf /srv/releases/{slug}`
+2. Delete the database branch: `branchable branches delete preview_{slug}`
 
-## Hard lessons (the blog-worthy ones)
+Removing the directory also stops on-demand TLS from issuing certificates for that slug. Production deploys use the same upload path to `/srv/releases/...`, then flip the `active` symlink and run `caddy reload`.
 
-**Previews must never update the host.** Early versions let every deploy refresh `/usr/local/bin/caddy` and shared shell scripts. A preview that changed the binary caused a full-process restart — minutes of downtime for production WebSockets. Rule: only `main` may install the binary or refresh host control-plane scripts.
-
-**Refuse dangerous slugs.** Sanitize `feature/foo` → `feature-foo`. Reject anything that collapses to `main` or `active` so a branch cannot overwrite the production symlink target.
-
-**Atomic env files.** Concurrent deploy and cleanup racing a shared `.env` rewrite produced partial files. Write temp + rename.
-
-**Memory is the real limit.** Each warm preview holds workers. On a small VM, rely on idle eviction, aggressive cleanup, and a sane `max_dynamic_apps`. Shared secrets and object storage mean this is a *trusted-team* preview model, not multi-tenant SaaS isolation. When you need hard boundaries, use [`isolation docker`](../docs/isolation) or separate hosts.
-
-## Takeaways
-
-1. Pair **app branching** (dynamic `working_dir` / `venv`) with **data branching** (DB clones).
-2. Gate on-demand TLS on filesystem existence — deploy creates the dir, TLS follows.
-3. Choose reload strategy by connection lifetime: autoreload for disposable previews, process reload for sticky production sessions.
-4. Treat the host control plane (binary, systemd scripts, shared env) as production-critical. Previews upload app code only.
-
-If you want the building blocks without the full story, start with [dynamic modules](../docs/examples#multi-tenant--branch-hosts), [on-demand TLS](../docs/reference#on-demand-tls-certificate-permission-without-ask), and [branchable](https://github.com/mliezun/branchable).
+For the building blocks, see [dynamic modules](../docs/examples#multi-tenant--branch-hosts), [on-demand TLS](../docs/reference#on-demand-tls-certificate-permission-without-ask), and [branchable](https://github.com/mliezun/branchable).

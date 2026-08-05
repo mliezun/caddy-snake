@@ -41,7 +41,7 @@ Workers are spawned with the bundled `caddysnake.py` script. The interpreter com
 With `autoreload`, a filesystem watcher (fsnotify) watches the working directory for `.py` changes (500ms debounce), starts a new worker group, and swaps it in under a read/write lock. Failed reloads serve HTTP 503 until the next success.
 
 :::warning Production tip
-Autoreload waits on in-flight requests. Long-lived WebSockets can stall a reload. Prefer `caddy reload` for sticky production sessions; keep autoreload for development and disposable preview apps. See the [branch previews](../blog/branch-previews) case study.
+Autoreload waits on in-flight requests. Long-lived WebSockets can stall a reload. Prefer `caddy reload` for sticky production sessions; keep autoreload for development and disposable preview apps.
 :::
 
 ---
