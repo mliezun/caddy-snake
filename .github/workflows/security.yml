@@ -99,14 +99,18 @@ jobs:
     runs-on: ubuntu-24.04
     permissions:
       security-events: write
-    container:
-      image: semgrep/semgrep@sha256:296fc4912420833abfcf5090ec49a81bf1330bb61fc193cd09255f88b8267ba9
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
       - name: Semgrep scan
         run: |
+          # Install via pip instead of jobs.container so CI is not blocked by
+          # intermittent Docker Hub pull timeouts for semgrep/semgrep.
+          pip install "semgrep==1.172.0"
           semgrep scan \
             --config p/ci \
             --config p/golang \
