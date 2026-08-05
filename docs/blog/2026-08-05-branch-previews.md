@@ -21,8 +21,7 @@ DNS (all pointing at the VM's public IP):
 | Record | Type | Value |
 |--------|------|-------|
 | `app.example.com` | A | VM IP |
-| `preview.example.com` | A | VM IP |
-| `*.preview.example.com` | CNAME or A | `preview.example.com` (or the same VM IP) |
+| `*.preview.example.com` | A | VM IP |
 
 ### Slug from branch name
 
