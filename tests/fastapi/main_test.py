@@ -223,12 +223,19 @@ def test_path_encoding_asgi_cjk():
     assert r.json()["name"] == "日"
 
 
+def test_path_encoding_asgi_emoji():
+    r = requests.get(f"{BASE_URL}/encoding/param/🐍")
+    assert r.status_code == 200, r.text
+    assert r.json()["name"] == "🐍"
+
+
 if __name__ == "__main__":
     import sys
 
     test_path_encoding_asgi_route_param()
     test_path_encoding_asgi_scope()
     test_path_encoding_asgi_cjk()
+    test_path_encoding_asgi_emoji()
     print("Path encoding tests passed")
 
     count = int(sys.argv[1]) if len(sys.argv) > 1 else 2_500

@@ -1295,6 +1295,73 @@ class TestPathEncodingHelpers:
         assert cs._http_path_str("/%E6%97%A5") == "/日"
         assert cs._http_path_str("/%FF") == "/\ufffd"
 
+    def test_shared_helpers_cover_edge_cases(self):
+        """Pin WSGI vs ASGI/ESGI presentation for forms that often regress."""
+        snake = "/%F0%9F%90%8D"  # 🐍
+        cases = [
+            (
+                snake,
+                b"/\xf0\x9f\x90\x8d",
+                "/\xf0\x9f\x90\x8d",
+                "/🐍",
+            ),
+            (
+                "/a%2Fb",
+                b"/a/b",
+                "/a/b",
+                "/a/b",
+            ),
+            (
+                "/a%252Fb",
+                b"/a%2Fb",
+                "/a%2Fb",
+                "/a%2Fb",
+            ),
+            (
+                "/%00",
+                b"/\x00",
+                "/\x00",
+                "/\x00",
+            ),
+            (
+                "/%ZZ",
+                b"/%ZZ",
+                "/%ZZ",
+                "/%ZZ",
+            ),
+            (
+                "/%",
+                b"/%",
+                "/%",
+                "/%",
+            ),
+            (
+                "",
+                b"",
+                "",
+                "",
+            ),
+            (
+                "/a+b",
+                b"/a+b",
+                "/a+b",
+                "/a+b",
+            ),
+        ]
+        for encoded, raw, wsgi, http in cases:
+            assert cs._unquote_percent_bytes(encoded) == raw, encoded
+            assert cs._wsgi_path_info(encoded) == wsgi, encoded
+            assert cs._http_path_str(encoded) == http, encoded
+
+        mixed = "/å".encode().decode("latin-1") + "%2Ffoo"
+        assert cs._unquote_percent_bytes(mixed) == b"/" + "å".encode() + b"/foo"
+        assert cs._http_path_str(mixed) == "/å/foo"
+
+    def test_split_path_keeps_second_question_mark_in_query(self):
+        path, query = cs._split_path("/x?a=1?b=2")
+        assert path == "/x"
+        assert query == "a=1?b=2"
+
 
 # ==================== Forwarded scheme helper ====================
 

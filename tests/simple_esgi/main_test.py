@@ -50,6 +50,12 @@ def test_path_encoding_cjk():
     assert r.text.startswith("日,"), r.text
 
 
+def test_path_encoding_emoji():
+    r = requests.get(f"{BASE_URL}/encoding/🐍")
+    assert r.status_code == 200, r.text
+    assert r.text.startswith("🐍,"), r.text
+
+
 def test_http_hello():
     assert_http_hello()
 
@@ -162,6 +168,7 @@ def main():
     test_http_post_echo()
     test_path_encoding_utf8()
     test_path_encoding_cjk()
+    test_path_encoding_emoji()
     test_websocket_echo_text()
     test_websocket_echo_binary()
 

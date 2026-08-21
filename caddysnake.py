@@ -515,7 +515,7 @@ def _build_wsgi_environ(method, path, version, headers_list, raw_headers, wsgi_i
 
     environ = {
         "REQUEST_METHOD": method,
-        "SCRIPT_NAME": "",
+        "SCRIPT_NAME": "",  # mount prefixes must use _wsgi_path_info if ever set
         "PATH_INFO": _wsgi_path_info(path_part),
         "QUERY_STRING": query_string,
         "SERVER_NAME": server_name,
@@ -2054,7 +2054,7 @@ async def _handle_asgi_connection(reader, writer, app, state):
                 "path": _http_path_str(path_part),
                 "raw_path": path_part.encode("latin-1"),
                 "query_string": query_string.encode("latin-1"),
-                "root_path": "",
+                "root_path": "",  # mount prefixes must use _http_path_str if ever set
                 "scheme": scheme,
                 "headers": headers_for_scope,
                 "server": (server_host, server_port),

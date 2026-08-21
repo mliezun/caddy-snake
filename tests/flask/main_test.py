@@ -108,12 +108,19 @@ def test_path_encoding_flask_cjk():
     assert r2.text == "æ\x97¥, ['0xe6', '0x97', '0xa5']", r2.text
 
 
+def test_path_encoding_flask_emoji():
+    r = requests.get(f"{BASE_URL}/encoding/param/🐍")
+    assert r.status_code == 200, r.text
+    assert r.text.startswith("🐍,"), r.text
+
+
 if __name__ == "__main__":
     import sys
 
     test_path_encoding_flask_route_param()
     test_path_encoding_flask_raw_path_info()
     test_path_encoding_flask_cjk()
+    test_path_encoding_flask_emoji()
     print("Path encoding tests passed")
 
     count = int(sys.argv[1]) if len(sys.argv) > 1 else 2_500

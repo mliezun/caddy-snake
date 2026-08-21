@@ -2454,6 +2454,13 @@ func TestPythonWorkerGroup_WSGIPathEncoding(t *testing.T) {
 	if got := getBody(t, baseURL+"/日"); got != wantCJK {
 		t.Errorf("CJK PATH_INFO ords = %q, want %q", got, wantCJK)
 	}
+	wantEmoji := "0x2f,0xf0,0x9f,0x90,0x8d"
+	if got := getBody(t, baseURL+"/🐍"); got != wantEmoji {
+		t.Errorf("emoji PATH_INFO ords = %q, want %q", got, wantEmoji)
+	}
+	if got := getBody(t, baseURL+"/a%2Fb"); got != "0x2f,0x61,0x2f,0x62" {
+		t.Errorf("%%2F PATH_INFO ords = %q, want decoded slash", got)
+	}
 }
 
 func TestPythonWorkerGroup_ASGIPathEncoding(t *testing.T) {

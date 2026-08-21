@@ -69,7 +69,7 @@ The HTTP/1.1 request-target is treated as raw octets (latin-1 on the Python side
 | Interface | Path field | Presentation |
 |-----------|------------|----------------|
 | **WSGI** | `PATH_INFO` | Percent-decoded octets as a **latin-1** `str` (PEP 3333). Frameworks such as Flask/Werkzeug then `encode("latin-1").decode("utf-8")` to recover Unicode. |
-| **ASGI** | `scope["path"]` | Percent-decoded octets as **UTF-8** text (invalid sequences → U+FFFD). `scope["raw_path"]` is the original path bytes **without** percent-decoding. |
+| **ASGI** | `scope["path"]` | Percent-decoded octets as **UTF-8** text (invalid sequences → U+FFFD). `scope["raw_path"]` is the path bytes **as received by the Python worker**, without percent-decoding. The Go reverse-proxy hop may percent-encode a client’s raw UTF-8 request-target, so `raw_path` can be `%C3%A5…` even when the browser sent raw UTF-8; decoded `path` / WSGI `PATH_INFO` still round-trip correctly. |
 | **ESGI** | `scope["path"]` | Same UTF-8 text rule as ASGI (ESGI 0.1-draft). `query_string` is **not** percent-decoded. |
 
 `QUERY_STRING` / ASGI `query_string` stay encoded. This matches Gunicorn/Uvicorn so `/åäö` and `/%C3%A5%C3%A4%C3%B6` round-trip the same way.
