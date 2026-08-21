@@ -14,22 +14,61 @@ allowlisted=(
 npm ci
 
 tmp="$(mktemp)"
-trap 'rm -f "$tmp"' EXIT
+err="$(mktemp)"
+trap 'rm -f "$tmp" "$err"' EXIT
 
-# npm audit exits 1 when findings exist; we inspect JSON ourselves.
-npm audit --json >"$tmp" || true
+# npm audit exits 1 when findings exist; other non-zero codes are tool failures.
+set +e
+npm audit --json >"$tmp" 2>"$err"
+status=$?
+set -e
 
-python3 - "$tmp" "${allowlisted[@]}" <<'PY'
+python3 - "$tmp" "$err" "$status" "${allowlisted[@]}" <<'PY'
 import json
 import sys
 
-path = sys.argv[1]
-allow = set(sys.argv[2:])
-data = json.loads(open(path, encoding="utf-8").read())
+path, err_path, status_s, *allow_ids = sys.argv[1:]
+status = int(status_s)
+allow = set(allow_ids)
+raw = open(path, encoding="utf-8").read()
+stderr = open(err_path, encoding="utf-8").read()
+
+try:
+    data = json.loads(raw) if raw.strip() else None
+except json.JSONDecodeError as exc:
+    print(f"npm audit did not return JSON: {exc}", file=sys.stderr)
+    if raw.strip():
+        print(raw[:2000], file=sys.stderr)
+    if stderr.strip():
+        print(stderr[:2000], file=sys.stderr)
+    sys.exit(1)
+
+if not isinstance(data, dict):
+    print("npm audit returned empty output", file=sys.stderr)
+    if stderr.strip():
+        print(stderr[:2000], file=sys.stderr)
+    sys.exit(1)
+
+if "error" in data:
+    err = data["error"]
+    print(f"npm audit failed: {err}", file=sys.stderr)
+    sys.exit(1)
+
+if "vulnerabilities" not in data:
+    print("npm audit JSON missing 'vulnerabilities'", file=sys.stderr)
+    sys.exit(1)
+
+# 0 = clean, 1 = findings. Anything else is a failed audit request.
+if status not in (0, 1):
+    print(f"npm audit exited {status}", file=sys.stderr)
+    if stderr.strip():
+        print(stderr[:2000], file=sys.stderr)
+    sys.exit(status)
+
 blocking = []
 ignored = []
 seen = set()
-for vuln in data.get("vulnerabilities", {}).values():
+for vuln in data["vulnerabilities"].values():
     for via in vuln.get("via", []):
         if not isinstance(via, dict):
             continue
