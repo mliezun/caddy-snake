@@ -4,6 +4,7 @@ import socket
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
+from urllib.parse import unquote_to_bytes
 
 import psutil
 import requests
@@ -196,8 +197,39 @@ def check_lifespan_events_on_logs(logs: str):
     )
 
 
+def test_path_encoding_asgi_route_param():
+    """Issue #237: ASGI/FastAPI path params are UTF-8 text."""
+    r = requests.get(f"{BASE_URL}/encoding/param/åäö")
+    assert r.status_code == 200, r.text
+    data = r.json()
+    assert data["name"] == "åäö"
+    assert data["ords"] == ["0xe5", "0xe4", "0xf6"]
+
+
+def test_path_encoding_asgi_scope():
+    r = requests.get(f"{BASE_URL}/encoding/scope/åäö")
+    assert r.status_code == 200, r.text
+    data = r.json()
+    assert data["name"] == "åäö"
+    assert data["path"].endswith("/åäö")
+    assert data["path_ords"][-3:] == ["0xe5", "0xe4", "0xf6"]
+    raw = bytes.fromhex(data["raw_path_hex"])
+    assert unquote_to_bytes(raw).decode("utf-8") == data["path"]
+
+
+def test_path_encoding_asgi_cjk():
+    r = requests.get(f"{BASE_URL}/encoding/param/日")
+    assert r.status_code == 200, r.text
+    assert r.json()["name"] == "日"
+
+
 if __name__ == "__main__":
     import sys
+
+    test_path_encoding_asgi_route_param()
+    test_path_encoding_asgi_scope()
+    test_path_encoding_asgi_cjk()
+    print("Path encoding tests passed")
 
     count = int(sys.argv[1]) if len(sys.argv) > 1 else 2_500
     test_stream_client_disconnect()

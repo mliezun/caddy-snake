@@ -25,7 +25,7 @@ import sys
 import tempfile
 import traceback
 from http import HTTPStatus
-from urllib.parse import unquote
+from urllib.parse import unquote_to_bytes
 
 
 class ClientDisconnected(Exception):
@@ -139,6 +139,33 @@ def _split_path(path):
     if qmark >= 0:
         return path[:qmark], path[qmark + 1 :]
     return path, ""
+
+
+def _unquote_percent_bytes(path_part: str) -> bytes:
+    """Percent-decode a request-line path into raw octets.
+
+    ``path_part`` is the HTTP/1.1 target path decoded as latin-1 (so raw
+    UTF-8 on the wire becomes a latin-1 str). Passing bytes to
+    ``unquote_to_bytes`` avoids a UTF-8 round-trip that would double-encode
+    those octets.
+    """
+    raw = path_part.encode("latin-1")
+    if b"%" not in raw:
+        return raw
+    return unquote_to_bytes(raw)
+
+
+def _wsgi_path_info(path_part: str) -> str:
+    """PEP 3333 PATH_INFO: percent-decoded octets as a latin-1 str."""
+    return _unquote_percent_bytes(path_part).decode("latin-1")
+
+
+def _http_path_str(path_part: str) -> str:
+    """ASGI/ESGI path: percent-decoded octets interpreted as UTF-8.
+
+    Invalid UTF-8 is replaced with U+FFFD (ASGI and ESGI 0.1-draft).
+    """
+    return _unquote_percent_bytes(path_part).decode("utf-8", errors="replace")
 
 
 def _forwarded_scheme(raw_headers):
@@ -489,7 +516,7 @@ def _build_wsgi_environ(method, path, version, headers_list, raw_headers, wsgi_i
     environ = {
         "REQUEST_METHOD": method,
         "SCRIPT_NAME": "",
-        "PATH_INFO": unquote(path_part) if "%" in path_part else path_part,
+        "PATH_INFO": _wsgi_path_info(path_part),
         "QUERY_STRING": query_string,
         "SERVER_NAME": server_name,
         "SERVER_PORT": str(server_port),
@@ -1485,9 +1512,7 @@ def _esgi_headers_mapping(headers_list, raw_headers: dict) -> dict:
 
 
 def _esgi_decode_path(path_part: str) -> str:
-    if "%" not in path_part:
-        return path_part
-    return unquote(path_part, encoding="utf-8", errors="replace")
+    return _http_path_str(path_part)
 
 
 def _build_esgi_http_scope(method, path, version, headers_list, raw_headers: dict):
@@ -2026,7 +2051,7 @@ async def _handle_asgi_connection(reader, writer, app, state):
                 "asgi": _ASGI_VERSION,
                 "http_version": _http_version_str(version),
                 "method": method,
-                "path": unquote(path_part) if "%" in path_part else path_part,
+                "path": _http_path_str(path_part),
                 "raw_path": path_part.encode("latin-1"),
                 "query_string": query_string.encode("latin-1"),
                 "root_path": "",

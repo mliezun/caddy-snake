@@ -38,6 +38,18 @@ def http_roundtrip():
     assert_http_post_echo()
 
 
+def test_path_encoding_utf8():
+    r = requests.get(f"{BASE_URL}/encoding/åäö")
+    assert r.status_code == 200, r.text
+    assert r.text == "åäö, ['0xe5', '0xe4', '0xf6']", r.text
+
+
+def test_path_encoding_cjk():
+    r = requests.get(f"{BASE_URL}/encoding/日")
+    assert r.status_code == 200, r.text
+    assert r.text.startswith("日,"), r.text
+
+
 def test_http_hello():
     assert_http_hello()
 
@@ -146,6 +158,10 @@ def make_ws_sessions(max_workers: int, count: int):
 
 
 def main():
+    test_http_hello()
+    test_http_post_echo()
+    test_path_encoding_utf8()
+    test_path_encoding_cjk()
     test_websocket_echo_text()
     test_websocket_echo_binary()
 

@@ -875,6 +875,99 @@ class TestHandleAsgiConnection:
         await cs._handle_asgi_connection(reader, writer, app, {})
         assert seen_schemes == ["https"]
 
+    async def test_path_percent_encoded_utf8(self):
+        req = b"GET /%C3%A5%C3%A4%C3%B6 HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n"
+        reader = asyncio.StreamReader()
+        reader.feed_data(req)
+        reader.feed_eof()
+
+        async def _drain():
+            pass
+
+        async def _wait_closed():
+            pass
+
+        writer = mock.Mock()
+        writer.write = lambda d: None
+        writer.drain = _drain
+        writer.close = lambda: None
+        writer.wait_closed = _wait_closed
+        writer.is_closing = lambda: False
+
+        seen = []
+
+        async def app(scope, receive, send):
+            seen.append(scope)
+            await send({"type": "http.response.start", "status": 200, "headers": []})
+            await send({"type": "http.response.body", "body": b""})
+
+        await cs._handle_asgi_connection(reader, writer, app, {})
+        assert seen[0]["path"] == "/åäö"
+        assert seen[0]["raw_path"] == b"/%C3%A5%C3%A4%C3%B6"
+        assert seen[0]["query_string"] == b""
+
+    async def test_path_raw_utf8_request_line(self):
+        req = (
+            b"GET /" + "日".encode() + b"?q=%C3%A5 HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n"
+        )
+        reader = asyncio.StreamReader()
+        reader.feed_data(req)
+        reader.feed_eof()
+
+        async def _drain():
+            pass
+
+        async def _wait_closed():
+            pass
+
+        writer = mock.Mock()
+        writer.write = lambda d: None
+        writer.drain = _drain
+        writer.close = lambda: None
+        writer.wait_closed = _wait_closed
+        writer.is_closing = lambda: False
+
+        seen = []
+
+        async def app(scope, receive, send):
+            seen.append(scope)
+            await send({"type": "http.response.start", "status": 200, "headers": []})
+            await send({"type": "http.response.body", "body": b""})
+
+        await cs._handle_asgi_connection(reader, writer, app, {})
+        assert seen[0]["path"] == "/日"
+        assert seen[0]["raw_path"] == b"/" + "日".encode()
+        assert seen[0]["query_string"] == b"q=%C3%A5"
+
+    async def test_path_invalid_utf8_replaced(self):
+        req = b"GET /%FF HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n"
+        reader = asyncio.StreamReader()
+        reader.feed_data(req)
+        reader.feed_eof()
+
+        async def _drain():
+            pass
+
+        async def _wait_closed():
+            pass
+
+        writer = mock.Mock()
+        writer.write = lambda d: None
+        writer.drain = _drain
+        writer.close = lambda: None
+        writer.wait_closed = _wait_closed
+        writer.is_closing = lambda: False
+
+        seen = []
+
+        async def app(scope, receive, send):
+            seen.append(scope)
+            await send({"type": "http.response.start", "status": 200, "headers": []})
+            await send({"type": "http.response.body", "body": b""})
+
+        await cs._handle_asgi_connection(reader, writer, app, {})
+        assert seen[0]["path"] == "/\ufffd"
+
 
 # ==================== ASGI _handle_asgi_lifespan ====================
 
@@ -1019,6 +1112,49 @@ class TestBuildWsgiEnviron:
         env = cs._build_wsgi_environ("GET", "/hello%20world", "HTTP/1.1", [], {}, io.BytesIO(b""))
         assert env["PATH_INFO"] == "hello world" or env["PATH_INFO"] == "/hello world"
 
+    def test_path_info_percent_encoded_utf8_is_latin1(self):
+        """PEP 3333: PATH_INFO is percent-decoded octets as a latin-1 str (issue #237)."""
+        env = cs._build_wsgi_environ(
+            "GET", "/%C3%A5%C3%A4%C3%B6", "HTTP/1.1", [], {}, io.BytesIO(b"")
+        )
+        # åäö as UTF-8 bytes C3 A5 C3 A4 C3 B6, presented as latin-1 code points.
+        assert [hex(ord(c)) for c in env["PATH_INFO"]] == [
+            "0x2f",
+            "0xc3",
+            "0xa5",
+            "0xc3",
+            "0xa4",
+            "0xc3",
+            "0xb6",
+        ]
+
+    def test_path_info_cjk_percent_encoded_is_latin1(self):
+        env = cs._build_wsgi_environ("GET", "/%E6%97%A5", "HTTP/1.1", [], {}, io.BytesIO(b""))
+        # 日 is UTF-8 E6 97 A5 — must not become U+65E5 in PATH_INFO.
+        assert [hex(ord(c)) for c in env["PATH_INFO"]] == ["0x2f", "0xe6", "0x97", "0xa5"]
+
+    def test_path_info_raw_utf8_request_line(self):
+        # HTTP/1.1 request-line decoded as latin-1 (see _read_http_request).
+        path = "/åäö".encode().decode("latin-1")
+        env = cs._build_wsgi_environ("GET", path, "HTTP/1.1", [], {}, io.BytesIO(b""))
+        assert [hex(ord(c)) for c in env["PATH_INFO"]] == [
+            "0x2f",
+            "0xc3",
+            "0xa5",
+            "0xc3",
+            "0xa4",
+            "0xc3",
+            "0xb6",
+        ]
+
+    def test_query_string_is_not_percent_decoded(self):
+        env = cs._build_wsgi_environ("GET", "/x?name=%C3%A5", "HTTP/1.1", [], {}, io.BytesIO(b""))
+        assert env["QUERY_STRING"] == "name=%C3%A5"
+
+    def test_path_plus_is_not_a_space(self):
+        env = cs._build_wsgi_environ("GET", "/a+b", "HTTP/1.1", [], {}, io.BytesIO(b""))
+        assert env["PATH_INFO"] == "/a+b"
+
     def test_url_scheme_default_http(self):
         env = cs._build_wsgi_environ(
             "GET", "/", "HTTP/1.1", [(b"host", b"x")], {"host": "x"}, io.BytesIO(b"")
@@ -1136,6 +1272,30 @@ class TestBuildWsgiEnviron:
         assert env["REMOTE_ADDR"] == "::1"
 
 
+# ==================== Shared path encoding helpers ====================
+
+
+class TestPathEncodingHelpers:
+    def test_unquote_percent_bytes_percent_encoded_utf8(self):
+        assert cs._unquote_percent_bytes("/%C3%A5") == b"/\xc3\xa5"
+
+    def test_unquote_percent_bytes_raw_utf8_latin1_str(self):
+        path = "/åäö".encode().decode("latin-1")
+        assert cs._unquote_percent_bytes(path) == b"/" + "åäö".encode()
+
+    def test_wsgi_path_info_does_not_utf8_decode(self):
+        assert [hex(ord(c)) for c in cs._wsgi_path_info("/%E6%97%A5")] == [
+            "0x2f",
+            "0xe6",
+            "0x97",
+            "0xa5",
+        ]
+
+    def test_http_path_str_utf8_decodes(self):
+        assert cs._http_path_str("/%E6%97%A5") == "/日"
+        assert cs._http_path_str("/%FF") == "/\ufffd"
+
+
 # ==================== Forwarded scheme helper ====================
 
 
@@ -1247,6 +1407,42 @@ class TestEsgiHelpers:
         assert scope["scheme"] == "http"
         assert scope["authority"] == "example.com:9443"
 
+    def test_decode_path_percent_encoded_utf8(self):
+        assert cs._esgi_decode_path("/%C3%A5%C3%A4%C3%B6") == "/åäö"
+        assert cs._esgi_decode_path("/%E6%97%A5") == "/日"
+
+    def test_decode_path_raw_utf8_request_line(self):
+        path = "/åäö".encode().decode("latin-1")
+        assert cs._esgi_decode_path(path) == "/åäö"
+        path_cjk = "/日".encode().decode("latin-1")
+        assert cs._esgi_decode_path(path_cjk) == "/日"
+
+    def test_decode_path_invalid_utf8_replaced(self):
+        assert cs._esgi_decode_path("/%FF") == "/\ufffd"
+
+    def test_build_http_scope_utf8_path(self):
+        scope = cs._build_esgi_http_scope(
+            "GET",
+            "/%C3%A5%C3%A4%C3%B6?q=%C3%A5",
+            "HTTP/1.1",
+            [(b"host", b"x")],
+            {"host": "x"},
+        )
+        assert scope["path"] == "/åäö"
+        assert scope["query_string"] == "q=%C3%A5"
+
+    def test_build_ws_scope_utf8_path(self):
+        path = "/日".encode().decode("latin-1")
+        scope = cs._build_esgi_ws_scope(
+            "GET",
+            path,
+            "HTTP/1.1",
+            [(b"host", b"x")],
+            {"host": "x"},
+        )
+        assert scope["path"] == "/日"
+        assert scope["proto"] == "ws"
+
     def test_build_http_scope_trusted_client(self):
         raw = {
             "host": "x",
@@ -1338,6 +1534,50 @@ class TestWsgiHandler:
             app, b"GET /hello%20world HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n"
         )
         assert b"hello world" in resp
+
+    async def test_path_info_utf8_percent_encoded_latin1(self):
+        captured = []
+
+        def app(environ, start_response):
+            captured.append(environ["PATH_INFO"])
+            start_response("200 OK", [])
+            return [b"ok"]
+
+        resp = await _handle_wsgi_request(
+            app,
+            b"GET /%C3%A5%C3%A4%C3%B6 HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n",
+        )
+        assert b"200 OK" in resp
+        assert [hex(ord(c)) for c in captured[0]] == [
+            "0x2f",
+            "0xc3",
+            "0xa5",
+            "0xc3",
+            "0xa4",
+            "0xc3",
+            "0xb6",
+        ]
+
+    async def test_path_info_raw_utf8_request_line(self):
+        captured = []
+
+        def app(environ, start_response):
+            captured.append(environ["PATH_INFO"])
+            start_response("200 OK", [])
+            return [b"ok"]
+
+        req = b"GET /" + "åäö".encode() + b" HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n"
+        resp = await _handle_wsgi_request(app, req)
+        assert b"200 OK" in resp
+        assert [hex(ord(c)) for c in captured[0]] == [
+            "0x2f",
+            "0xc3",
+            "0xa5",
+            "0xc3",
+            "0xa4",
+            "0xc3",
+            "0xb6",
+        ]
 
     async def test_content_length_body(self):
         def app(environ, start_response):

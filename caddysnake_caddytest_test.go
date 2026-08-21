@@ -210,3 +210,108 @@ https:// {
 		t.Fatalf("unexpected body %q", string(body))
 	}
 }
+
+func TestCaddy_WSGIPathEncoding(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+	skipIfNoPython(t)
+
+	tempDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(tempDir, "app.py"), []byte(pathEncodingWSGIApp), 0644); err != nil {
+		t.Fatalf("failed to write app.py: %v", err)
+	}
+	workDir := filepath.ToSlash(tempDir)
+
+	caddyfile := fmt.Sprintf(`
+{
+  admin localhost:2999
+  http_port 9080
+  https_port 9443
+  grace_period 1ns
+}
+
+localhost:9080 {
+  python /* {
+    module_wsgi "app:app"
+    working_dir %q
+    workers 1
+  }
+}
+`, workDir)
+
+	tester := caddytest.NewTester(t)
+	tester.WithDefaultOverrides(caddytest.Config{
+		LoadRequestTimeout: 15 * time.Second,
+	})
+	tester.InitServer(caddyfile, "caddyfile")
+
+	resp, err := tester.Client.Get("http://localhost:9080/åäö")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != 200 {
+		t.Fatalf("status %d body %s", resp.StatusCode, body)
+	}
+	want := "0x2f,0xc3,0xa5,0xc3,0xa4,0xc3,0xb6"
+	if string(body) != want {
+		t.Fatalf("WSGI PATH_INFO ords = %q, want %q", body, want)
+	}
+}
+
+func TestCaddy_ASGIPathEncoding(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+	skipIfNoPython(t)
+
+	tempDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(tempDir, "app.py"), []byte(pathEncodingASGIApp), 0644); err != nil {
+		t.Fatalf("failed to write app.py: %v", err)
+	}
+	workDir := filepath.ToSlash(tempDir)
+
+	caddyfile := fmt.Sprintf(`
+{
+  admin localhost:2999
+  http_port 9080
+  https_port 9443
+  grace_period 1ns
+}
+
+localhost:9080 {
+  python /* {
+    module_asgi "app:app"
+    working_dir %q
+    workers 1
+  }
+}
+`, workDir)
+
+	tester := caddytest.NewTester(t)
+	tester.WithDefaultOverrides(caddytest.Config{
+		LoadRequestTimeout: 15 * time.Second,
+	})
+	tester.InitServer(caddyfile, "caddyfile")
+
+	resp, err := tester.Client.Get("http://localhost:9080/åäö")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != 200 {
+		t.Fatalf("status %d body %s", resp.StatusCode, body)
+	}
+	if !strings.Contains(string(body), "path=0x2f,0xe5,0xe4,0xf6") {
+		t.Fatalf("ASGI path ords = %q, want unicode åäö", body)
+	}
+}

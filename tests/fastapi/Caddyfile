@@ -34,6 +34,13 @@ localhost:9080 {
 		venv "./venv"
 	}
 
+	python /encoding/* {
+		module_asgi "main:app"
+		lifespan on
+		workers 1
+		venv "./venv"
+	}
+
 	route / {
 		respond 404
 	}
