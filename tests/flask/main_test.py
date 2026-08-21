@@ -89,29 +89,34 @@ def test_path_encoding_flask_route_param():
     """Issue #237: Flask route params must match gunicorn (UTF-8 text)."""
     r = requests.get(f"{BASE_URL}/encoding/param/åäö")
     assert r.status_code == 200, r.text
-    assert r.text == "åäö, ['0xe5', '0xe4', '0xf6']", r.text
+    data = r.json()
+    assert data["name"] == "åäö"
+    assert data["ords"] == ["0xe5", "0xe4", "0xf6"]
 
 
 def test_path_encoding_flask_raw_path_info():
     """Issue #237: PATH_INFO is latin-1 of the UTF-8 octets (PEP 3333)."""
     r = requests.get(f"{BASE_URL}/encoding/path_info/åäö")
     assert r.status_code == 200, r.text
-    assert r.text == "Ã¥Ã¤Ã¶, ['0xc3', '0xa5', '0xc3', '0xa4', '0xc3', '0xb6']", r.text
+    data = r.json()
+    assert data["name"] == "Ã¥Ã¤Ã¶"
+    assert data["ords"] == ["0xc3", "0xa5", "0xc3", "0xa4", "0xc3", "0xb6"]
 
 
 def test_path_encoding_flask_cjk():
     r = requests.get(f"{BASE_URL}/encoding/param/日")
     assert r.status_code == 200, r.text
-    assert r.text.startswith("日,"), r.text
+    assert r.json()["name"] == "日"
     r2 = requests.get(f"{BASE_URL}/encoding/path_info/日")
     assert r2.status_code == 200, r2.text
-    assert r2.text == "æ\x97¥, ['0xe6', '0x97', '0xa5']", r2.text
+    assert r2.json()["name"] == "æ\x97¥"
+    assert r2.json()["ords"] == ["0xe6", "0x97", "0xa5"]
 
 
 def test_path_encoding_flask_emoji():
     r = requests.get(f"{BASE_URL}/encoding/param/🐍")
     assert r.status_code == 200, r.text
-    assert r.text.startswith("🐍,"), r.text
+    assert r.json()["name"] == "🐍"
 
 
 if __name__ == "__main__":

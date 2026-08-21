@@ -1,6 +1,6 @@
 import wsgiref.validate
 
-from flask import Flask, request
+from flask import Flask, jsonify, request
 from kvstore import KVStore
 
 app = Flask(__name__)
@@ -38,13 +38,13 @@ def upload():
 @app.route("/encoding/param/<name>")
 def encoding_param(name):
     # Werkzeug decodes PATH_INFO latin-1 octets as UTF-8 (issue #237).
-    return f"{name}, {[hex(ord(c)) for c in name]}"
+    return jsonify(name=name, ords=[hex(ord(c)) for c in name])
 
 
 @app.route("/encoding/path_info/<name>")
 def encoding_path_info(name):
     raw = request.environ.get("PATH_INFO", "").rsplit("/", 1)[-1]
-    return f"{raw}, {[hex(ord(c)) for c in raw]}"
+    return jsonify(name=raw, ords=[hex(ord(c)) for c in raw])
 
 
 app = wsgiref.validate.validator(app)
