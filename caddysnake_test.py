@@ -7,6 +7,7 @@ import os
 import struct
 import sys
 import tempfile
+from typing import NamedTuple
 from unittest import mock
 
 import pytest
@@ -1273,6 +1274,145 @@ class TestBuildWsgiEnviron:
 
 
 # ==================== Shared path encoding helpers ====================
+#
+# Request-target encoding is a frequent source of WSGI/ASGI mismatches.
+# Cases below pin Gunicorn (PEP 3333 latin-1 PATH_INFO) vs Uvicorn/ESGI
+# (UTF-8 path, U+FFFD on invalid sequences). Expected strings are explicit
+# so the tests do not simply re-run production code.
+
+
+class PathEncodingCase(NamedTuple):
+    name: str
+    path: str  # request-line path, latin-1 decoded (same as _read_http_request)
+    wsgi: str
+    http: str  # ASGI / ESGI decoded path
+
+
+def _raw_utf8_path(text: str) -> str:
+    """Simulate a request-line that carried raw UTF-8 octets (curl-style)."""
+    return text.encode().decode("latin-1")
+
+
+PATH_ENCODING_CASES = [
+    # Issue #237: UTF-8 percent-encoding of åäö vs latin-1 presentation.
+    PathEncodingCase(
+        "issue237_utf8_percent",
+        "/%C3%A5%C3%A4%C3%B6",
+        "/\xc3\xa5\xc3\xa4\xc3\xb6",
+        "/åäö",
+    ),
+    PathEncodingCase(
+        "issue237_raw_utf8_request_line",
+        _raw_utf8_path("/åäö"),
+        "/\xc3\xa5\xc3\xa4\xc3\xb6",
+        "/åäö",
+    ),
+    PathEncodingCase(
+        "utf8_percent_lowercase_hex",
+        "/%c3%a5%c3%a4%c3%b6",
+        "/\xc3\xa5\xc3\xa4\xc3\xb6",
+        "/åäö",
+    ),
+    PathEncodingCase("utf8_percent_mixed_hex", "/%C3%a5", "/\xc3\xa5", "/å"),
+    # ISO-8859-1 single-byte å (%E5) is not UTF-8. WSGI keeps U+00E5; ASGI/ESGI → U+FFFD.
+    PathEncodingCase("iso8859_1_percent_e5", "/%E5", "/\xe5", "/\ufffd"),
+    PathEncodingCase("iso8859_1_percent_ff", "/%FF", "/\xff", "/\ufffd"),
+    PathEncodingCase("c1_control_percent_80", "/%80", "/\x80", "/\ufffd"),
+    PathEncodingCase("c1_control_percent_9f", "/%9F", "/\x9f", "/\ufffd"),
+    PathEncodingCase("utf8_y_with_diaeresis", "/%C3%BF", "/\xc3\xbf", "/ÿ"),
+    PathEncodingCase("incomplete_utf8_lead", "/%C3", "/\xc3", "/\ufffd"),
+    PathEncodingCase("overlong_utf8_nul", "/%C0%80", "/\xc0\x80", "/\ufffd\ufffd"),
+    PathEncodingCase(
+        "cesu8_surrogate_pair",
+        "/%ED%A0%BD%ED%B0%8D",
+        "/\xed\xa0\xbd\xed\xb0\x8d",
+        "/\ufffd\ufffd\ufffd\ufffd\ufffd\ufffd",
+    ),
+    PathEncodingCase("utf8_bom", "/%EF%BB%BF", "/\xef\xbb\xbf", "/\ufeff"),
+    PathEncodingCase("euro_sign_utf8", "/%E2%82%AC", "/\xe2\x82\xac", "/€"),
+    PathEncodingCase("cjk_utf8", "/%E6%97%A5", "/\xe6\x97\xa5", "/日"),
+    PathEncodingCase("emoji_4byte_utf8", "/%F0%9F%90%8D", "/\xf0\x9f\x90\x8d", "/🐍"),
+    PathEncodingCase("devanagari", "/%E0%A4%86", "/\xe0\xa4\x86", "/आ"),
+    PathEncodingCase("arabic", "/%D8%B9", "/\xd8\xb9", "/ع"),
+    PathEncodingCase("hebrew", "/%D7%A2", "/\xd7\xa2", "/ע"),
+    PathEncodingCase("thai", "/%E0%B8%81", "/\xe0\xb8\x81", "/ก"),
+    PathEncodingCase("hangul", "/%ED%95%9C", "/\xed\x95\x9c", "/한"),
+    PathEncodingCase("german_eszett", "/%C3%9F", "/\xc3\x9f", "/ß"),
+    PathEncodingCase("turkish_dotted_i", "/%C4%B0", "/\xc4\xb0", "/İ"),
+    PathEncodingCase("fullwidth_a", "/%EF%BC%A1", "/\xef\xbc\xa1", "/Ａ"),
+    PathEncodingCase("bidi_rlo", "/%E2%80%AE", "/\xe2\x80\xae", "/\u202e"),
+    # NFC vs NFD must stay distinct (no Unicode normalization).
+    PathEncodingCase("nfc_cafe", "/caf%C3%A9", "/caf\xc3\xa9", "/café"),
+    PathEncodingCase("nfd_cafe", "/cafe%CC%81", "/cafe\xcc\x81", "/cafe\u0301"),
+    PathEncodingCase("space_percent20", "/hello%20world", "/hello world", "/hello world"),
+    PathEncodingCase("plus_stays_plus", "/a+b", "/a+b", "/a+b"),
+    PathEncodingCase("percent_2b_is_plus", "/%2B", "/+", "/+"),
+    PathEncodingCase("tilde_percent7e", "/%7E", "/~", "/~"),
+    PathEncodingCase("encoded_question", "/%3Ffoo", "/?foo", "/?foo"),
+    PathEncodingCase("encoded_hash", "/%23hash", "/#hash", "/#hash"),
+    PathEncodingCase("encoded_dotdot", "/%2e%2e", "/..", "/.."),
+    PathEncodingCase("encoded_slash", "/a%2Fb", "/a/b", "/a/b"),
+    PathEncodingCase("encoded_slash_lower", "/a%2fb", "/a/b", "/a/b"),
+    PathEncodingCase("double_encoded_slash", "/a%252Fb", "/a%2Fb", "/a%2Fb"),
+    # IIS-style %uXXXX is not RFC 3986; leave it literal.
+    PathEncodingCase("iis_percent_u", "/%u00E5", "/%u00E5", "/%u00E5"),
+    PathEncodingCase("invalid_percent_zz", "/%ZZ", "/%ZZ", "/%ZZ"),
+    PathEncodingCase("trailing_percent", "/%", "/%", "/%"),
+    PathEncodingCase("nul_percent00", "/%00", "/\x00", "/\x00"),
+    PathEncodingCase("empty", "", "", ""),
+    PathEncodingCase("root_slash", "/", "/", "/"),
+    PathEncodingCase(
+        "mixed_raw_utf8_and_percent_slash",
+        _raw_utf8_path("/å") + "%2Ffoo",
+        "/\xc3\xa5/foo",
+        "/å/foo",
+    ),
+]
+
+
+QUERY_STRING_CASES = [
+    ("utf8_percent_stays", "/x?name=%C3%A5", "name=%C3%A5"),
+    ("latin1_percent_stays", "/x?q=%E5", "q=%E5"),
+    ("plus_not_form_space", "/x?a+b", "a+b"),
+    ("space_percent20", "/x?a%20b", "a%20b"),
+    ("second_question_mark", "/x?a=1?b=2", "a=1?b=2"),
+    ("encoded_question_in_path", "/foo%3Fbar?q=1", "q=1"),
+]
+
+
+def _http_get_bytes(path: str, query: str = "") -> bytes:
+    target = path if not query else f"{path}?{query}"
+    return f"GET {target} HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n".encode("latin-1")
+
+
+async def _capture_asgi_scope(request_bytes: bytes) -> dict:
+    reader = asyncio.StreamReader()
+    reader.feed_data(request_bytes)
+    reader.feed_eof()
+
+    async def _drain():
+        pass
+
+    async def _wait_closed():
+        pass
+
+    writer = mock.Mock()
+    writer.write = lambda d: None
+    writer.drain = _drain
+    writer.close = lambda: None
+    writer.wait_closed = _wait_closed
+    writer.is_closing = lambda: False
+
+    seen = []
+
+    async def app(scope, receive, send):
+        seen.append(scope)
+        await send({"type": "http.response.start", "status": 200, "headers": []})
+        await send({"type": "http.response.body", "body": b""})
+
+    await cs._handle_asgi_connection(reader, writer, app, {})
+    assert seen, "ASGI app was not invoked"
+    return seen[0]
 
 
 class TestPathEncodingHelpers:
@@ -1295,72 +1435,94 @@ class TestPathEncodingHelpers:
         assert cs._http_path_str("/%E6%97%A5") == "/日"
         assert cs._http_path_str("/%FF") == "/\ufffd"
 
-    def test_shared_helpers_cover_edge_cases(self):
-        """Pin WSGI vs ASGI/ESGI presentation for forms that often regress."""
-        snake = "/%F0%9F%90%8D"  # 🐍
-        cases = [
-            (
-                snake,
-                b"/\xf0\x9f\x90\x8d",
-                "/\xf0\x9f\x90\x8d",
-                "/🐍",
-            ),
-            (
-                "/a%2Fb",
-                b"/a/b",
-                "/a/b",
-                "/a/b",
-            ),
-            (
-                "/a%252Fb",
-                b"/a%2Fb",
-                "/a%2Fb",
-                "/a%2Fb",
-            ),
-            (
-                "/%00",
-                b"/\x00",
-                "/\x00",
-                "/\x00",
-            ),
-            (
-                "/%ZZ",
-                b"/%ZZ",
-                "/%ZZ",
-                "/%ZZ",
-            ),
-            (
-                "/%",
-                b"/%",
-                "/%",
-                "/%",
-            ),
-            (
-                "",
-                b"",
-                "",
-                "",
-            ),
-            (
-                "/a+b",
-                b"/a+b",
-                "/a+b",
-                "/a+b",
-            ),
-        ]
-        for encoded, raw, wsgi, http in cases:
-            assert cs._unquote_percent_bytes(encoded) == raw, encoded
-            assert cs._wsgi_path_info(encoded) == wsgi, encoded
-            assert cs._http_path_str(encoded) == http, encoded
+    @pytest.mark.parametrize("case", PATH_ENCODING_CASES, ids=lambda c: c.name)
+    def test_helpers_match_wsgi_and_http_specs(self, case: PathEncodingCase):
+        assert cs._wsgi_path_info(case.path) == case.wsgi, case.name
+        assert cs._http_path_str(case.path) == case.http, case.name
+        assert cs._esgi_decode_path(case.path) == case.http, case.name
 
-        mixed = "/å".encode().decode("latin-1") + "%2Ffoo"
-        assert cs._unquote_percent_bytes(mixed) == b"/" + "å".encode() + b"/foo"
-        assert cs._http_path_str(mixed) == "/å/foo"
+    def test_nfc_and_nfd_are_not_normalized(self):
+        nfc = next(c for c in PATH_ENCODING_CASES if c.name == "nfc_cafe")
+        nfd = next(c for c in PATH_ENCODING_CASES if c.name == "nfd_cafe")
+        assert nfc.http != nfd.http
+        assert nfc.wsgi != nfd.wsgi
+
+    def test_utf8_percent_and_iso8859_1_percent_differ(self):
+        utf8 = cs._wsgi_path_info("/%C3%A5")
+        latin1 = cs._wsgi_path_info("/%E5")
+        assert utf8 != latin1
+        assert [hex(ord(c)) for c in utf8] == ["0x2f", "0xc3", "0xa5"]
+        assert [hex(ord(c)) for c in latin1] == ["0x2f", "0xe5"]
 
     def test_split_path_keeps_second_question_mark_in_query(self):
         path, query = cs._split_path("/x?a=1?b=2")
         assert path == "/x"
         assert query == "a=1?b=2"
+
+    @pytest.mark.parametrize(
+        ("name", "target", "query"),
+        QUERY_STRING_CASES,
+        ids=[c[0] for c in QUERY_STRING_CASES],
+    )
+    def test_query_string_not_percent_decoded(self, name, target, query):
+        path_part, qs = cs._split_path(target)
+        assert qs == query, name
+        env = cs._build_wsgi_environ("GET", target, "HTTP/1.1", [], {}, io.BytesIO(b""))
+        assert env["QUERY_STRING"] == query
+        scope = cs._build_esgi_http_scope(
+            "GET", target, "HTTP/1.1", [(b"host", b"x")], {"host": "x"}
+        )
+        assert scope["query_string"] == query
+        # Path side still decodes; query must not leak into PATH_INFO.
+        if name == "encoded_question_in_path":
+            assert env["PATH_INFO"] == "/foo?bar"
+            assert path_part == "/foo%3Fbar"
+
+    @pytest.mark.asyncio
+    async def test_asgi_query_string_bytes_not_decoded(self):
+        scope = await _capture_asgi_scope(_http_get_bytes("/x", "name=%C3%A5"))
+        assert scope["query_string"] == b"name=%C3%A5"
+
+
+HANDLER_PATH_CASES = [c for c in PATH_ENCODING_CASES if c.path]
+
+
+class TestPathEncodingProtocols:
+    """Same matrix through WSGI environ, ASGI scope, and ESGI HTTP/WS scopes."""
+
+    @pytest.mark.parametrize("case", HANDLER_PATH_CASES, ids=lambda c: c.name)
+    def test_wsgi_environ_and_esgi_scopes(self, case: PathEncodingCase):
+        env = cs._build_wsgi_environ("GET", case.path, "HTTP/1.1", [], {}, io.BytesIO(b""))
+        assert env["PATH_INFO"] == case.wsgi, case.name
+        http_scope = cs._build_esgi_http_scope(
+            "GET", case.path, "HTTP/1.1", [(b"host", b"x")], {"host": "x"}
+        )
+        assert http_scope["path"] == case.http, case.name
+        ws_scope = cs._build_esgi_ws_scope(
+            "GET", case.path, "HTTP/1.1", [(b"host", b"x")], {"host": "x"}
+        )
+        assert ws_scope["path"] == case.http, case.name
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("case", HANDLER_PATH_CASES, ids=lambda c: c.name)
+    async def test_wsgi_handler_request_line(self, case: PathEncodingCase):
+        captured = []
+
+        def app(environ, start_response):
+            captured.append(environ["PATH_INFO"])
+            start_response("200 OK", [])
+            return [b"ok"]
+
+        resp = await _handle_wsgi_request(app, _http_get_bytes(case.path))
+        assert b"200 OK" in resp, case.name
+        assert captured[0] == case.wsgi, case.name
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("case", HANDLER_PATH_CASES, ids=lambda c: c.name)
+    async def test_asgi_handler_request_line(self, case: PathEncodingCase):
+        scope = await _capture_asgi_scope(_http_get_bytes(case.path))
+        assert scope["path"] == case.http, case.name
+        assert scope["raw_path"] == case.path.encode("latin-1"), case.name
 
 
 # ==================== Forwarded scheme helper ====================

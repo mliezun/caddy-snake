@@ -56,6 +56,24 @@ def test_path_encoding_emoji():
     assert r.text.startswith("🐍,"), r.text
 
 
+def test_path_encoding_iso8859_1_vs_utf8():
+    utf8 = requests.get(f"{BASE_URL}/encoding/%C3%A5")
+    assert utf8.status_code == 200, utf8.text
+    assert utf8.text.startswith("å,"), utf8.text
+    latin1 = requests.get(f"{BASE_URL}/encoding/%E5")
+    assert latin1.status_code == 200, latin1.text
+    assert latin1.text.startswith("\ufffd,"), latin1.text
+
+
+def test_path_encoding_normalization_distinct():
+    nfc = requests.get(f"{BASE_URL}/encoding/caf%C3%A9")
+    nfd = requests.get(f"{BASE_URL}/encoding/cafe%CC%81")
+    assert nfc.status_code == 200 and nfd.status_code == 200
+    assert nfc.text.startswith("café,")
+    assert nfd.text.startswith("cafe\u0301,")
+    assert nfc.text != nfd.text
+
+
 def test_http_hello():
     assert_http_hello()
 
@@ -169,6 +187,8 @@ def main():
     test_path_encoding_utf8()
     test_path_encoding_cjk()
     test_path_encoding_emoji()
+    test_path_encoding_iso8859_1_vs_utf8()
+    test_path_encoding_normalization_distinct()
     test_websocket_echo_text()
     test_websocket_echo_binary()
 

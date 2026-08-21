@@ -229,6 +229,26 @@ def test_path_encoding_asgi_emoji():
     assert r.json()["name"] == "🐍"
 
 
+def test_path_encoding_iso8859_1_vs_utf8():
+    utf8 = requests.get(f"{BASE_URL}/encoding/param/%C3%A5")
+    assert utf8.status_code == 200, utf8.text
+    assert utf8.json()["name"] == "å"
+    latin1 = requests.get(f"{BASE_URL}/encoding/param/%E5")
+    assert latin1.status_code == 200, latin1.text
+    assert latin1.json()["name"] == "\ufffd"
+
+
+def test_path_encoding_euro_and_normalization():
+    euro = requests.get(f"{BASE_URL}/encoding/param/%E2%82%AC")
+    assert euro.status_code == 200, euro.text
+    assert euro.json()["name"] == "€"
+    nfc = requests.get(f"{BASE_URL}/encoding/param/caf%C3%A9")
+    nfd = requests.get(f"{BASE_URL}/encoding/param/cafe%CC%81")
+    assert nfc.json()["name"] == "café"
+    assert nfd.json()["name"] == "cafe\u0301"
+    assert nfc.json()["name"] != nfd.json()["name"]
+
+
 if __name__ == "__main__":
     import sys
 
@@ -236,6 +256,8 @@ if __name__ == "__main__":
     test_path_encoding_asgi_scope()
     test_path_encoding_asgi_cjk()
     test_path_encoding_asgi_emoji()
+    test_path_encoding_iso8859_1_vs_utf8()
+    test_path_encoding_euro_and_normalization()
     print("Path encoding tests passed")
 
     count = int(sys.argv[1]) if len(sys.argv) > 1 else 2_500

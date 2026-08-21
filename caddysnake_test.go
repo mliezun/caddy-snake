@@ -1,6 +1,7 @@
 package caddysnake
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"crypto/tls"
@@ -12,6 +13,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/http/httputil"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -2429,6 +2431,45 @@ func getBody(t *testing.T, rawURL string) string {
 	return string(body)
 }
 
+func rawGetTarget(t *testing.T, baseURL, target string) string {
+	t.Helper()
+	u, err := url.Parse(baseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	conn, err := net.Dial("tcp", u.Host)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	req := fmt.Sprintf("GET %s HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n", target)
+	if _, err := conn.Write([]byte(req)); err != nil {
+		t.Fatal(err)
+	}
+	resp, err := http.ReadResponse(bufio.NewReader(conn), nil)
+	if err != nil {
+		t.Fatalf("read response for %s: %v", target, err)
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != 200 {
+		t.Fatalf("GET %s: status %d body %s", target, resp.StatusCode, body)
+	}
+	return string(body)
+}
+
+func asgiPathOrds(body string) string {
+	for _, line := range strings.Split(body, "\n") {
+		if strings.HasPrefix(line, "path=") {
+			return strings.TrimPrefix(line, "path=")
+		}
+	}
+	return body
+}
+
 func TestPythonWorkerGroup_WSGIPathEncoding(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")
@@ -2508,6 +2549,88 @@ func TestPythonWorkerGroup_ESGIPathEncoding(t *testing.T) {
 	if got := getBody(t, baseURL+"/日"); got != "0x2f,0x65e5" {
 		t.Errorf("ESGI CJK path ords = %q, want U+65E5", got)
 	}
+	if got := rawGetTarget(t, baseURL, "/%E5"); got != "0x2f,0xfffd" {
+		t.Errorf("ESGI ISO-8859-1 %%E5 = %q, want U+FFFD", got)
+	}
+	if got := rawGetTarget(t, baseURL, "/caf%C3%A9"); got == rawGetTarget(t, baseURL, "/cafe%CC%81") {
+		t.Errorf("ESGI NFC and NFD café paths must remain distinct")
+	}
+}
+
+func TestPythonWorkerGroup_PathEncodingMatrix(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+	skipIfNoPython(t)
+
+	cases := []struct {
+		name   string
+		target string
+		wsgi   string
+		asgi   string
+	}{
+		{"issue237_utf8", "/%C3%A5%C3%A4%C3%B6", "0x2f,0xc3,0xa5,0xc3,0xa4,0xc3,0xb6", "0x2f,0xe5,0xe4,0xf6"},
+		{"utf8_lowercase_hex", "/%c3%a5", "0x2f,0xc3,0xa5", "0x2f,0xe5"},
+		{"iso8859_1_e5", "/%E5", "0x2f,0xe5", "0x2f,0xfffd"},
+		{"iso8859_1_ff", "/%FF", "0x2f,0xff", "0x2f,0xfffd"},
+		{"euro", "/%E2%82%AC", "0x2f,0xe2,0x82,0xac", "0x2f,0x20ac"},
+		{"cjk", "/%E6%97%A5", "0x2f,0xe6,0x97,0xa5", "0x2f,0x65e5"},
+		{"emoji", "/%F0%9F%90%8D", "0x2f,0xf0,0x9f,0x90,0x8d", "0x2f,0x1f40d"},
+		{"nfc_cafe", "/caf%C3%A9", "0x2f,0x63,0x61,0x66,0xc3,0xa9", "0x2f,0x63,0x61,0x66,0xe9"},
+		{"nfd_cafe", "/cafe%CC%81", "0x2f,0x63,0x61,0x66,0x65,0xcc,0x81", "0x2f,0x63,0x61,0x66,0x65,0x301"},
+		{"space", "/hello%20world", "0x2f,0x68,0x65,0x6c,0x6c,0x6f,0x20,0x77,0x6f,0x72,0x6c,0x64", "0x2f,0x68,0x65,0x6c,0x6c,0x6f,0x20,0x77,0x6f,0x72,0x6c,0x64"},
+		{"plus", "/a+b", "0x2f,0x61,0x2b,0x62", "0x2f,0x61,0x2b,0x62"},
+		{"percent_2b", "/%2B", "0x2f,0x2b", "0x2f,0x2b"},
+		{"tilde", "/%7E", "0x2f,0x7e", "0x2f,0x7e"},
+		{"encoded_slash", "/a%2Fb", "0x2f,0x61,0x2f,0x62", "0x2f,0x61,0x2f,0x62"},
+		{"double_encoded_slash", "/a%252Fb", "0x2f,0x61,0x25,0x32,0x46,0x62", "0x2f,0x61,0x25,0x32,0x46,0x62"},
+		{"encoded_question", "/%3Ffoo", "0x2f,0x3f,0x66,0x6f,0x6f", "0x2f,0x3f,0x66,0x6f,0x6f"},
+		{"raw_utf8_aao", "/" + "åäö", "0x2f,0xc3,0xa5,0xc3,0xa4,0xc3,0xb6", "0x2f,0xe5,0xe4,0xf6"},
+	}
+
+	wsgiDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(wsgiDir, "app.py"), []byte(pathEncodingWSGIApp), 0644); err != nil {
+		t.Fatal(err)
+	}
+	wsgiURL, wsgiCleanup := startWorkerHTTPServer(t, "wsgi", "app:app", wsgiDir, "sync")
+	defer wsgiCleanup()
+
+	asgiDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(asgiDir, "app.py"), []byte(pathEncodingASGIApp), 0644); err != nil {
+		t.Fatal(err)
+	}
+	asgiURL, asgiCleanup := startWorkerHTTPServer(t, "asgi", "app:app", asgiDir, "uvloop")
+	defer asgiCleanup()
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := rawGetTarget(t, wsgiURL, tc.target); got != tc.wsgi {
+				t.Errorf("WSGI PATH_INFO ords = %q, want %q", got, tc.wsgi)
+			}
+			if got := asgiPathOrds(rawGetTarget(t, asgiURL, tc.target)); got != tc.asgi {
+				t.Errorf("ASGI path ords = %q, want %q", got, tc.asgi)
+			}
+		})
+	}
+
+	// net/http rejects non-RFC percent sequences before they reach Python.
+	t.Run("malformed_percent_rejected", func(t *testing.T) {
+		host := strings.TrimPrefix(wsgiURL, "http://")
+		conn, err := net.Dial("tcp", host)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer conn.Close()
+		_, _ = conn.Write([]byte("GET /%u00E5 HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n"))
+		resp, err := http.ReadResponse(bufio.NewReader(conn), nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusBadRequest {
+			t.Fatalf("malformed %%uXXXX: status %d, want 400", resp.StatusCode)
+		}
+	})
 }
 
 func TestPythonWorkerGroup_LoadsAndServesESGI(t *testing.T) {

@@ -74,6 +74,14 @@ The HTTP/1.1 request-target is treated as raw octets (latin-1 on the Python side
 
 `QUERY_STRING` / ASGI `query_string` stay encoded. This matches Gunicorn/Uvicorn so `/åäö` and `/%C3%A5%C3%A4%C3%B6` round-trip the same way.
 
+Tricky encodings we explicitly cover:
+
+- **UTF-8 vs ISO-8859-1 percent escapes** — `%C3%A5` is UTF-8 å; `%E5` is a single latin-1 octet (WSGI `PATH_INFO` keeps U+00E5; ASGI/ESGI replace it with U+FFFD).
+- **Hex case** — `%c3%a5` and `%C3%a5` decode the same.
+- **NFC vs NFD** — `caf%C3%A9` and `cafe%CC%81` stay distinct (no Unicode normalization).
+- **Invalid UTF-8** — truncated sequences, overlong encodings, C1 controls (`%80`–`%9F`), and IIS-style `%uXXXX` (left literal if the request reaches Python; Caddy/`net/http` rejects malformed `%` sequences with HTTP 400).
+- **Reserved percent-decoding** — `%2F` becomes `/`, `%252F` stays `%2F`, `+` is not a space, `%3F` becomes `?` in the path only after the query is split off.
+
 ---
 
 ## Limits to know
