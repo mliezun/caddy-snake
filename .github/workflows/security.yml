@@ -22,7 +22,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: "1.26.5"
+          go-version: "1.26.6"
           cache: false
       - name: govulncheck
         run: |
@@ -57,10 +57,7 @@ jobs:
           cache: npm
           cache-dependency-path: docs/package-lock.json
       - name: npm audit
-        working-directory: docs
-        run: |
-          npm ci
-          npm audit --audit-level=high
+        run: ./scripts/audit-npm-docs.sh
 
   gosec:
     name: gosec
@@ -71,7 +68,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: "1.26.5"
+          go-version: "1.26.6"
           cache: false
       - name: Run gosec
         run: |
