@@ -1354,7 +1354,8 @@ PATH_ENCODING_CASES = [
     PathEncodingCase("encoded_slash", "/a%2Fb", "/a/b", "/a/b"),
     PathEncodingCase("encoded_slash_lower", "/a%2fb", "/a/b", "/a/b"),
     PathEncodingCase("double_encoded_slash", "/a%252Fb", "/a%2Fb", "/a%2Fb"),
-    # IIS-style %uXXXX is not RFC 3986; leave it literal.
+    # IIS-style %uXXXX is not RFC 3986; leave it literal when it reaches Python.
+    # Go's net/http may 400 the same request-target before the worker.
     PathEncodingCase("iis_percent_u", "/%u00E5", "/%u00E5", "/%u00E5"),
     PathEncodingCase("invalid_percent_zz", "/%ZZ", "/%ZZ", "/%ZZ"),
     PathEncodingCase("trailing_percent", "/%", "/%", "/%"),

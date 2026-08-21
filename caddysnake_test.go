@@ -2613,8 +2613,10 @@ func TestPythonWorkerGroup_PathEncodingMatrix(t *testing.T) {
 		})
 	}
 
-	// net/http rejects non-RFC percent sequences before they reach Python.
-	t.Run("malformed_percent_rejected", func(t *testing.T) {
+	// IIS-style %uXXXX is not RFC 3986. Python leaves it literal when the
+	// request reaches the worker. Go's net/http may reject the request-target
+	// as a malformed percent-escape (400) before that, depending on version.
+	t.Run("iis_percent_u", func(t *testing.T) {
 		host := strings.TrimPrefix(wsgiURL, "http://")
 		conn, err := net.Dial("tcp", host)
 		if err != nil {
@@ -2627,8 +2629,20 @@ func TestPythonWorkerGroup_PathEncodingMatrix(t *testing.T) {
 			t.Fatal(err)
 		}
 		defer resp.Body.Close()
-		if resp.StatusCode != http.StatusBadRequest {
-			t.Fatalf("malformed %%uXXXX: status %d, want 400", resp.StatusCode)
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		switch resp.StatusCode {
+		case http.StatusBadRequest:
+			// net/http treated "%u0" as an invalid percent-escape.
+		case http.StatusOK:
+			const want = "0x2f,0x25,0x75,0x30,0x30,0x45,0x35" // /%u00E5 as latin-1
+			if got := string(body); got != want {
+				t.Fatalf("IIS %%uXXXX PATH_INFO ords = %q, want %q", got, want)
+			}
+		default:
+			t.Fatalf("IIS %%uXXXX: status %d, want 400 or 200 with literal PATH_INFO; body %s", resp.StatusCode, body)
 		}
 	})
 }

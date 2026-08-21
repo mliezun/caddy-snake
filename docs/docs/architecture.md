@@ -79,7 +79,7 @@ Tricky encodings we explicitly cover:
 - **UTF-8 vs ISO-8859-1 percent escapes** — `%C3%A5` is UTF-8 å; `%E5` is a single latin-1 octet (WSGI `PATH_INFO` keeps U+00E5; ASGI/ESGI replace it with U+FFFD).
 - **Hex case** — `%c3%a5` and `%C3%a5` decode the same.
 - **NFC vs NFD** — `caf%C3%A9` and `cafe%CC%81` stay distinct (no Unicode normalization).
-- **Invalid UTF-8** — truncated sequences, overlong encodings, C1 controls (`%80`–`%9F`), and IIS-style `%uXXXX` (left literal if the request reaches Python; Caddy/`net/http` rejects malformed `%` sequences with HTTP 400).
+- **Invalid UTF-8** — truncated sequences, overlong encodings, C1 controls (`%80`–`%9F`), and IIS-style `%uXXXX`. When the request reaches Python, `%u00E5` is left as the six literal characters `/` `%` `u` `0` `0` `E` `5`. Go's `net/http` may instead reject the request-target as a malformed percent-escape (HTTP 400) before it reaches the worker.
 - **Reserved percent-decoding** — `%2F` becomes `/`, `%252F` stays `%2F`, `+` is not a space, `%3F` becomes `?` in the path only after the query is split off.
 
 ---
