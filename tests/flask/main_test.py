@@ -85,8 +85,78 @@ def make_objects(max_workers: int, count: int):
     print(f"Elapsed: {time.time() - start}s")
 
 
+def test_path_encoding_flask_route_param():
+    """Issue #237: Flask route params must match gunicorn (UTF-8 text)."""
+    r = requests.get(f"{BASE_URL}/encoding/param/åäö")
+    assert r.status_code == 200, r.text
+    data = r.json()
+    assert data["name"] == "åäö"
+    assert data["ords"] == ["0xe5", "0xe4", "0xf6"]
+
+
+def test_path_encoding_flask_raw_path_info():
+    """Issue #237: PATH_INFO is latin-1 of the UTF-8 octets (PEP 3333)."""
+    r = requests.get(f"{BASE_URL}/encoding/path_info/åäö")
+    assert r.status_code == 200, r.text
+    data = r.json()
+    assert data["name"] == "Ã¥Ã¤Ã¶"
+    assert data["ords"] == ["0xc3", "0xa5", "0xc3", "0xa4", "0xc3", "0xb6"]
+
+
+def test_path_encoding_flask_cjk():
+    r = requests.get(f"{BASE_URL}/encoding/param/日")
+    assert r.status_code == 200, r.text
+    assert r.json()["name"] == "日"
+    r2 = requests.get(f"{BASE_URL}/encoding/path_info/日")
+    assert r2.status_code == 200, r2.text
+    assert r2.json()["name"] == "æ\x97¥"
+    assert r2.json()["ords"] == ["0xe6", "0x97", "0xa5"]
+
+
+def test_path_encoding_flask_emoji():
+    r = requests.get(f"{BASE_URL}/encoding/param/🐍")
+    assert r.status_code == 200, r.text
+    assert r.json()["name"] == "🐍"
+
+
+def test_path_encoding_iso8859_1_vs_utf8():
+    """%C3%A5 is UTF-8 å; %E5 is ISO-8859-1 å (invalid UTF-8)."""
+    utf8 = requests.get(f"{BASE_URL}/encoding/path_info/%C3%A5")
+    assert utf8.status_code == 200, utf8.text
+    assert utf8.json()["ords"] == ["0xc3", "0xa5"]
+    param = requests.get(f"{BASE_URL}/encoding/param/%C3%A5")
+    assert param.json()["name"] == "å"
+
+    latin1 = requests.get(f"{BASE_URL}/encoding/path_info/%E5")
+    assert latin1.status_code == 200, latin1.text
+    assert latin1.json()["ords"] == ["0xe5"]
+    broken = requests.get(f"{BASE_URL}/encoding/param/%E5")
+    assert broken.json()["name"] == "\ufffd"
+
+
+def test_path_encoding_lowercase_hex_euro_and_normalization():
+    lower = requests.get(f"{BASE_URL}/encoding/param/%c3%a5")
+    assert lower.status_code == 200, lower.text
+    assert lower.json()["name"] == "å"
+    euro = requests.get(f"{BASE_URL}/encoding/param/%E2%82%AC")
+    assert euro.json()["name"] == "€"
+    nfc = requests.get(f"{BASE_URL}/encoding/param/caf%C3%A9")
+    nfd = requests.get(f"{BASE_URL}/encoding/param/cafe%CC%81")
+    assert nfc.json()["name"] == "café"
+    assert nfd.json()["name"] == "cafe\u0301"
+    assert nfc.json()["name"] != nfd.json()["name"]
+
+
 if __name__ == "__main__":
     import sys
+
+    test_path_encoding_flask_route_param()
+    test_path_encoding_flask_raw_path_info()
+    test_path_encoding_flask_cjk()
+    test_path_encoding_flask_emoji()
+    test_path_encoding_iso8859_1_vs_utf8()
+    test_path_encoding_lowercase_hex_euro_and_normalization()
+    print("Path encoding tests passed")
 
     count = int(sys.argv[1]) if len(sys.argv) > 1 else 2_500
     make_objects(max_workers=4, count=count)

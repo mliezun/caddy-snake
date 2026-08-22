@@ -3,6 +3,14 @@
 
 def application(scope, protocol):
     if scope["proto"] == "http":
+        if scope["path"].startswith("/encoding/") and scope["method"] == "GET":
+            name = scope["path"].rsplit("/", 1)[-1]
+            protocol.response_str(
+                200,
+                [("Content-Type", "text/plain; charset=utf-8")],
+                f"{name}, {[hex(ord(c)) for c in name]}",
+            )
+            return
         if scope["path"] == "/hello" and scope["method"] == "GET":
             protocol.response_bytes(
                 200,

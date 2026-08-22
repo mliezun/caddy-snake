@@ -50,6 +50,25 @@ async def app(scope, receive, send):
             }
         )
         await send({"type": "http.response.body", "body": body})
+    elif path.startswith("/encoding/"):
+        name = path.rsplit("/", 1)[-1]
+        raw_path = scope.get("raw_path", b"")
+        payload = json.dumps(
+            {
+                "name": name,
+                "ords": [hex(ord(c)) for c in name],
+                "path": path,
+                "raw_path_hex": raw_path.hex(),
+            }
+        ).encode()
+        await send(
+            {
+                "type": "http.response.start",
+                "status": 200,
+                "headers": [(b"Content-Type", b"application/json")],
+            }
+        )
+        await send({"type": "http.response.body", "body": payload})
     else:
         await send(
             {

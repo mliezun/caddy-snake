@@ -94,6 +94,8 @@ python {
 
 You must specify exactly one of `module_wsgi`, `module_asgi`, or `module_esgi`.
 
+Request paths are percent-decoded from the HTTP request-target, then presented per protocol: WSGI `PATH_INFO` is a **latin-1** `str` of the decoded octets (PEP 3333, matching Gunicorn); ASGI `scope["path"]` and ESGI `scope["path"]` are **UTF-8** text. See [Architecture: request path encoding](architecture.md#request-path-encoding).
+
 ### `module_asgi`
 
 Specifies an ASGI application using the `module:variable` pattern. Use this for async frameworks like FastAPI, Starlette, Django Channels, etc.

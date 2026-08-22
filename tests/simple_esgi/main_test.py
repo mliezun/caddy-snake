@@ -38,6 +38,42 @@ def http_roundtrip():
     assert_http_post_echo()
 
 
+def test_path_encoding_utf8():
+    r = requests.get(f"{BASE_URL}/encoding/åäö")
+    assert r.status_code == 200, r.text
+    assert r.text == "åäö, ['0xe5', '0xe4', '0xf6']", r.text
+
+
+def test_path_encoding_cjk():
+    r = requests.get(f"{BASE_URL}/encoding/日")
+    assert r.status_code == 200, r.text
+    assert r.text.startswith("日,"), r.text
+
+
+def test_path_encoding_emoji():
+    r = requests.get(f"{BASE_URL}/encoding/🐍")
+    assert r.status_code == 200, r.text
+    assert r.text.startswith("🐍,"), r.text
+
+
+def test_path_encoding_iso8859_1_vs_utf8():
+    utf8 = requests.get(f"{BASE_URL}/encoding/%C3%A5")
+    assert utf8.status_code == 200, utf8.text
+    assert utf8.text.startswith("å,"), utf8.text
+    latin1 = requests.get(f"{BASE_URL}/encoding/%E5")
+    assert latin1.status_code == 200, latin1.text
+    assert latin1.text.startswith("\ufffd,"), latin1.text
+
+
+def test_path_encoding_normalization_distinct():
+    nfc = requests.get(f"{BASE_URL}/encoding/caf%C3%A9")
+    nfd = requests.get(f"{BASE_URL}/encoding/cafe%CC%81")
+    assert nfc.status_code == 200 and nfd.status_code == 200
+    assert nfc.text.startswith("café,")
+    assert nfd.text.startswith("cafe\u0301,")
+    assert nfc.text != nfd.text
+
+
 def test_http_hello():
     assert_http_hello()
 
@@ -146,6 +182,13 @@ def make_ws_sessions(max_workers: int, count: int):
 
 
 def main():
+    test_http_hello()
+    test_http_post_echo()
+    test_path_encoding_utf8()
+    test_path_encoding_cjk()
+    test_path_encoding_emoji()
+    test_path_encoding_iso8859_1_vs_utf8()
+    test_path_encoding_normalization_distinct()
     test_websocket_echo_text()
     test_websocket_echo_binary()
 

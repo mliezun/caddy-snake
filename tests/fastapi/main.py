@@ -4,7 +4,7 @@ import sys
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, UploadFile
+from fastapi import FastAPI, Request, UploadFile
 from fastapi.responses import Response, StreamingResponse
 from kvstore import KVStore
 from pydantic import BaseModel
@@ -73,3 +73,21 @@ async def stream_slow() -> StreamingResponse:
 async def upload_file(file: UploadFile):
     contents = await file.read()
     return Response(content=contents, media_type="application/octet-stream")
+
+
+@app.get("/encoding/param/{name}")
+async def encoding_param(name: str):
+    return {"name": name, "ords": [hex(ord(c)) for c in name]}
+
+
+@app.get("/encoding/scope/{name}")
+async def encoding_scope(name: str, request: Request):
+    path = request.scope["path"]
+    raw_path = request.scope["raw_path"]
+    return {
+        "name": name,
+        "name_ords": [hex(ord(c)) for c in name],
+        "path": path,
+        "path_ords": [hex(ord(c)) for c in path],
+        "raw_path_hex": raw_path.hex(),
+    }

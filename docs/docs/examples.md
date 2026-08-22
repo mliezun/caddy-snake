@@ -19,13 +19,16 @@ from pydantic import BaseModel
 
 app = FastAPI()
 
+
 class Item(BaseModel):
     name: str
     price: float
 
+
 @app.get("/")
 def read_root():
     return {"Hello": "World"}
+
 
 @app.post("/items/")
 def create_item(item: Item):
@@ -57,6 +60,7 @@ caddy run --config Caddyfile
 from flask import Flask, jsonify
 
 app = Flask(__name__)
+
 
 @app.route("/")
 def hello():
@@ -109,6 +113,7 @@ from socketio.asgi import ASGIApp
 app = FastAPI()
 sio = AsyncServer(async_mode="asgi")
 app.mount("/", ASGIApp(sio))
+
 
 @sio.event
 async def message(sid, data):

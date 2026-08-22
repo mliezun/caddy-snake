@@ -4,6 +4,7 @@ import socket
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
+from urllib.parse import unquote_to_bytes
 
 import psutil
 import requests
@@ -196,8 +197,68 @@ def check_lifespan_events_on_logs(logs: str):
     )
 
 
+def test_path_encoding_asgi_route_param():
+    """Issue #237: ASGI/FastAPI path params are UTF-8 text."""
+    r = requests.get(f"{BASE_URL}/encoding/param/åäö")
+    assert r.status_code == 200, r.text
+    data = r.json()
+    assert data["name"] == "åäö"
+    assert data["ords"] == ["0xe5", "0xe4", "0xf6"]
+
+
+def test_path_encoding_asgi_scope():
+    r = requests.get(f"{BASE_URL}/encoding/scope/åäö")
+    assert r.status_code == 200, r.text
+    data = r.json()
+    assert data["name"] == "åäö"
+    assert data["path"].endswith("/åäö")
+    assert data["path_ords"][-3:] == ["0xe5", "0xe4", "0xf6"]
+    raw = bytes.fromhex(data["raw_path_hex"])
+    assert unquote_to_bytes(raw).decode("utf-8") == data["path"]
+
+
+def test_path_encoding_asgi_cjk():
+    r = requests.get(f"{BASE_URL}/encoding/param/日")
+    assert r.status_code == 200, r.text
+    assert r.json()["name"] == "日"
+
+
+def test_path_encoding_asgi_emoji():
+    r = requests.get(f"{BASE_URL}/encoding/param/🐍")
+    assert r.status_code == 200, r.text
+    assert r.json()["name"] == "🐍"
+
+
+def test_path_encoding_iso8859_1_vs_utf8():
+    utf8 = requests.get(f"{BASE_URL}/encoding/param/%C3%A5")
+    assert utf8.status_code == 200, utf8.text
+    assert utf8.json()["name"] == "å"
+    latin1 = requests.get(f"{BASE_URL}/encoding/param/%E5")
+    assert latin1.status_code == 200, latin1.text
+    assert latin1.json()["name"] == "\ufffd"
+
+
+def test_path_encoding_euro_and_normalization():
+    euro = requests.get(f"{BASE_URL}/encoding/param/%E2%82%AC")
+    assert euro.status_code == 200, euro.text
+    assert euro.json()["name"] == "€"
+    nfc = requests.get(f"{BASE_URL}/encoding/param/caf%C3%A9")
+    nfd = requests.get(f"{BASE_URL}/encoding/param/cafe%CC%81")
+    assert nfc.json()["name"] == "café"
+    assert nfd.json()["name"] == "cafe\u0301"
+    assert nfc.json()["name"] != nfd.json()["name"]
+
+
 if __name__ == "__main__":
     import sys
+
+    test_path_encoding_asgi_route_param()
+    test_path_encoding_asgi_scope()
+    test_path_encoding_asgi_cjk()
+    test_path_encoding_asgi_emoji()
+    test_path_encoding_iso8859_1_vs_utf8()
+    test_path_encoding_euro_and_normalization()
+    print("Path encoding tests passed")
 
     count = int(sys.argv[1]) if len(sys.argv) > 1 else 2_500
     test_stream_client_disconnect()

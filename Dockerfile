@@ -1,6 +1,6 @@
 FROM ubuntu:22.04 AS builder
 
-ARG GO_VERSION=1.26.5
+ARG GO_VERSION=1.26.6
 
 RUN export DEBIAN_FRONTEND=noninteractive &&\
     apt-get update -yyqq &&\
@@ -26,7 +26,7 @@ ARG PY_VERSION=3.13
 
 RUN export DEBIAN_FRONTEND=noninteractive &&\
     apt-get update -yyqq &&\
-    apt-get upgrade -yyqq libssl3 openssl &&\
+    apt-get upgrade -yyqq &&\
     apt-get install -yyqq wget software-properties-common &&\
     add-apt-repository -y ppa:deadsnakes/ppa &&\
     apt-get update -yyqq &&\

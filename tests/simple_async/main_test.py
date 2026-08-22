@@ -3,6 +3,7 @@ import os
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
+from urllib.parse import unquote_to_bytes
 
 import requests
 
@@ -71,8 +72,22 @@ def make_objects(max_workers: int, count: int):
     print(f"Elapsed: {time.time() - start}s")
 
 
+def test_path_encoding_asgi():
+    r = requests.get(f"{BASE_URL}/encoding/åäö")
+    assert r.status_code == 200, r.text
+    data = r.json()
+    assert data["name"] == "åäö"
+    assert data["ords"] == ["0xe5", "0xe4", "0xf6"]
+    assert data["path"].endswith("/åäö")
+    raw = bytes.fromhex(data["raw_path_hex"])
+    assert unquote_to_bytes(raw).decode("utf-8") == data["path"]
+
+
 if __name__ == "__main__":
     import sys
+
+    test_path_encoding_asgi()
+    print("Path encoding tests passed")
 
     count = int(sys.argv[1]) if len(sys.argv) > 1 else 2_500
     make_objects(max_workers=4, count=count)
