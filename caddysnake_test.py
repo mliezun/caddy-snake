@@ -422,9 +422,7 @@ class TestReadHttpRequest:
 
     async def test_multi_gigabyte_content_length_accepted(self):
         cl = 2 * 1024 * 1024 * 1024
-        req = (
-            f"POST /upload HTTP/1.1\r\nHost: localhost\r\nContent-Length: {cl}\r\n\r\n"
-        ).encode()
+        req = (f"POST /upload HTTP/1.1\r\nHost: localhost\r\nContent-Length: {cl}\r\n\r\n").encode()
         result = await self._feed_and_read(req)
         assert result is not None
         _, _, _, _, _, body_stream = result
