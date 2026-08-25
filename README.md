@@ -31,6 +31,7 @@ To make it easier to get started you can also grab one of the precompiled binari
 - **On-demand TLS permission (`tls.permission.python_dir`)** — gate HTTPS issuance with filesystem checks so wildcard-style hosts work without running a separate ACME [`ask`](https://caddyserver.com/docs/caddyfile/options#on-demand-tls) service (pairs with dynamic `working_dir`)
 - **Virtual environment support** — point to a `venv` and dependencies are available automatically
 - **WebSocket support** — full WebSocket handling for ASGI apps
+- **Streaming uploads** — request bodies are proxied in chunks with no worker-imposed size cap (limit with Caddy `request_body` if needed)
 - **ASGI lifespan events** — optional startup/shutdown lifecycle hooks
 - **Static file serving** — built-in static file support via the CLI
 - **Pre-built binaries** — download and run with Python embedded, no compilation required

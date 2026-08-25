@@ -106,6 +106,8 @@ python {
 }
 ```
 
+Request bodies are streamed to the app; there is no worker-imposed upload size cap. Limit bodies with Caddy's [`request_body`](https://caddyserver.com/docs/caddyfile/directives/request_body) directive if needed. See [Architecture: limits](architecture.md#limits-to-know).
+
 ### `module_esgi`
 
 Specifies an [ESGI](esgi) application using the `module:variable` pattern (a synchronous `application(scope, protocol)` or `__esgi__` callable).

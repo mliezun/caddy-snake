@@ -18,6 +18,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -2351,6 +2352,159 @@ func TestPythonWorkerGroup_LoadsAndServesASGI(t *testing.T) {
 	}
 	if !bytes.Contains(body, []byte("Hello from ASGI")) {
 		t.Errorf("expected body to contain 'Hello from ASGI', got: %s", body)
+	}
+}
+
+// countingASGIApp streams the request body and returns the byte count. It does
+// not buffer the upload, so multi-hundred-megabyte (and larger) POSTs stay
+// within worker memory limits.
+const countingASGIApp = `async def app(scope, receive, send):
+    if scope["type"] != "http":
+        return
+    n = 0
+    more = True
+    while more:
+        event = await receive()
+        if event["type"] != "http.request":
+            break
+        n += len(event.get("body") or b"")
+        more = bool(event.get("more_body", False))
+    body = str(n).encode("ascii")
+    await send({"type": "http.response.start", "status": 200, "headers": [(b"content-type", b"text/plain")]})
+    await send({"type": "http.response.body", "body": body})
+`
+
+// infiniteZeros is an infinite stream of zero bytes for large-upload tests.
+type infiniteZeros struct{}
+
+func (infiniteZeros) Read(p []byte) (int, error) {
+	clear(p)
+	return len(p), nil
+}
+
+func serveWorkerGroup(t *testing.T, wg *PythonWorkerGroup) string {
+	t.Helper()
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("failed to listen: %v", err)
+	}
+	t.Cleanup(func() { _ = listener.Close() })
+	server := &http.Server{
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			_ = wg.HandleRequest(w, r)
+		}),
+		ReadHeaderTimeout: 5 * time.Second,
+	}
+	go server.Serve(listener)
+	t.Cleanup(func() { _ = server.Close() })
+	return "http://" + listener.Addr().String()
+}
+
+func postZeroUpload(t *testing.T, baseURL string, size int64) *http.Response {
+	t.Helper()
+	req, err := http.NewRequest(http.MethodPost, baseURL+"/upload", io.LimitReader(infiniteZeros{}, size))
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	req.ContentLength = size
+	req.Header.Set("Content-Type", "application/octet-stream")
+	req.Header.Del("Expect")
+	client := &http.Client{Timeout: 3 * time.Minute}
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("POST %d-byte upload failed: %v", size, err)
+	}
+	return resp
+}
+
+func TestPythonWorkerGroup_ASGILargeUpload(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+	skipIfNoPython(t)
+
+	// Just over the historical 128 MiB worker body cap that closed the Unix
+	// socket mid-upload (https://github.com/mliezun/caddy-snake/issues/239).
+	const size int64 = 140 * 1024 * 1024
+
+	tempDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(tempDir, "app.py"), []byte(countingASGIApp), 0644); err != nil {
+		t.Fatalf("failed to write app.py: %v", err)
+	}
+
+	var logBuf bytes.Buffer
+	logger := zap.New(zapcore.NewCore(
+		zapcore.NewJSONEncoder(zap.NewProductionEncoderConfig()),
+		zapcore.AddSync(&logBuf),
+		zapcore.ErrorLevel,
+	))
+
+	wg, err := NewPythonWorkerGroup("asgi", "app:app", tempDir, "", "", "uvloop", 1, "python3", "", "", nil, nil, 0, nil, logger)
+	if err != nil {
+		t.Fatalf("NewPythonWorkerGroup failed: %v", err)
+	}
+	defer wg.Cleanup()
+
+	baseURL := serveWorkerGroup(t, wg)
+
+	resp := postZeroUpload(t, baseURL, size)
+	body, err := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if err != nil {
+		t.Fatalf("failed to read response: %v", err)
+	}
+	if resp.StatusCode != 200 {
+		t.Fatalf("140MiB upload: status %d, body %q, worker logs: %s", resp.StatusCode, body, logBuf.String())
+	}
+	if got := string(body); got != strconv.FormatInt(size, 10) {
+		t.Fatalf("140MiB upload: counted %s bytes, want %d; worker logs: %s", got, size, logBuf.String())
+	}
+
+	// The worker process must still be alive after the large upload.
+	resp, err = http.Get(baseURL + "/")
+	if err != nil {
+		t.Fatalf("follow-up GET after large upload failed: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		t.Fatalf("follow-up GET status %d, worker logs: %s", resp.StatusCode, logBuf.String())
+	}
+}
+
+func TestPythonWorkerGroup_ASGIMultiGigabyteUpload(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+	if os.Getenv("CADDYSNAKE_MULTI_GB_UPLOAD") == "" {
+		t.Skip("set CADDYSNAKE_MULTI_GB_UPLOAD=1 to run a 2GiB streaming upload")
+	}
+	skipIfNoPython(t)
+
+	const size int64 = 2 * 1024 * 1024 * 1024
+
+	tempDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(tempDir, "app.py"), []byte(countingASGIApp), 0644); err != nil {
+		t.Fatalf("failed to write app.py: %v", err)
+	}
+
+	wg, err := NewPythonWorkerGroup("asgi", "app:app", tempDir, "", "", "uvloop", 1, "python3", "", "", nil, nil, 0, nil, nil)
+	if err != nil {
+		t.Fatalf("NewPythonWorkerGroup failed: %v", err)
+	}
+	defer wg.Cleanup()
+
+	baseURL := serveWorkerGroup(t, wg)
+	resp := postZeroUpload(t, baseURL, size)
+	body, err := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if err != nil {
+		t.Fatalf("failed to read response: %v", err)
+	}
+	if resp.StatusCode != 200 {
+		t.Fatalf("2GiB upload: status %d, body %q", resp.StatusCode, body)
+	}
+	if got := string(body); got != strconv.FormatInt(size, 10) {
+		t.Fatalf("2GiB upload: counted %s bytes, want %d", got, size)
 	}
 }
 

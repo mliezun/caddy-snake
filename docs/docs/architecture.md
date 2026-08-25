@@ -86,6 +86,20 @@ Tricky encodings we explicitly cover:
 
 ## Limits to know
 
+- Request bodies are **streamed** to the app in 64 KiB chunks with no worker-imposed size cap, so multi-gigabyte uploads work when the app reads incrementally (ASGI `receive()`, WSGI `wsgi.input.read(size)`, ESGI `iter_body()`). Apps that buffer the whole body (`UploadFile.read()` with no streaming, `wsgi.input.read()` with no size, ESGI `read_body()`) can still exhaust worker memory. Cap uploads at the Caddy layer with [`request_body`](https://caddyserver.com/docs/caddyfile/directives/request_body):
+
+```caddyfile
+route {
+    request_body {
+        max_size 2GB
+    }
+    python {
+        module_asgi "main:app"
+    }
+}
+```
+
+- Joined WSGI responses are capped at **64 MiB** in the worker. Stream large downloads from ASGI instead.
 - The [shared worker cache](reference.md#shared-worker-cache) is **not** a tenant boundary — prefix keys or use an external store.
 - Dynamic app cache is bounded; large tenant counts need higher limits or external routing.
 - Docker isolation hardens the worker sandbox; it does not isolate the shared cache.

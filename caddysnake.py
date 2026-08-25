@@ -259,7 +259,6 @@ _DRAIN_HIGH_WATER = 64 * 1024
 
 MAX_REQUEST_LINE = 8192
 MAX_HEADERS_SIZE = 64 * 1024  # 64 KB total header block
-MAX_BODY_SIZE = 128 * 1024 * 1024  # 128 MB (internal IPC; external limits enforced by Caddy)
 MAX_WSGI_RESPONSE_BODY = 64 * 1024 * 1024  # 64 MB joined WSGI response cap
 MAX_HEADER_COUNT = 100
 MAX_WS_FRAME_SIZE = 16 * 1024 * 1024  # 16 MB
@@ -274,15 +273,7 @@ class _HttpBodyStream:
         self._remaining = content_length
         self._chunked = chunked
         self._chunk_remaining = 0
-        self._total_read = 0
         self._done = (content_length == 0) and not chunked
-
-    def _bump_total(self, size):
-        if size <= 0:
-            return
-        self._total_read += size
-        if self._total_read > MAX_BODY_SIZE:
-            raise ValueError("HTTP request body too large")
 
     async def read(self, max_bytes=64 * 1024):
         """Read up to max_bytes from the request body. Returns b"" on EOF."""
@@ -297,7 +288,6 @@ class _HttpBodyStream:
                 return b""
             to_read = min(max_bytes, self._remaining)
             data = await self._reader.readexactly(to_read)
-            self._bump_total(len(data))
             self._remaining -= len(data)
             if self._remaining == 0:
                 self._done = True
@@ -337,7 +327,6 @@ class _HttpBodyStream:
 
             to_read = min(max_bytes, self._chunk_remaining)
             data = await self._reader.readexactly(to_read)
-            self._bump_total(len(data))
             self._chunk_remaining -= len(data)
             if self._chunk_remaining == 0:
                 ending = await self._reader.readexactly(2)
@@ -876,7 +865,7 @@ async def _read_http_request(reader):
             cl = int(content_length)
         except ValueError:
             return None
-        if cl < 0 or cl > MAX_BODY_SIZE:
+        if cl < 0:
             return None
         body_stream = _HttpBodyStream(reader, content_length=cl)
     elif "chunked" in transfer_encoding.lower():
@@ -1351,7 +1340,7 @@ def _read_http_request_sync(sock):
             cl = int(content_length)
         except ValueError:
             return None
-        if cl < 0 or cl > MAX_BODY_SIZE:
+        if cl < 0:
             return None
         body_stream = _SyncHttpBodyStream(sock, leftover, content_length=cl)
     elif "chunked" in transfer_encoding.lower():
@@ -1371,15 +1360,7 @@ class _SyncHttpBodyStream:
         self._remaining = content_length
         self._chunked = chunked
         self._chunk_remaining = 0
-        self._total_read = 0
         self._done = (content_length == 0) and not chunked
-
-    def _bump_total(self, size):
-        if size <= 0:
-            return
-        self._total_read += size
-        if self._total_read > MAX_BODY_SIZE:
-            raise ValueError("HTTP request body too large")
 
     def read(self, max_bytes=64 * 1024):
         if self._done:
@@ -1400,7 +1381,6 @@ class _SyncHttpBodyStream:
                 self._buf.extend(chunk)
             data = bytes(self._buf[:to_read])
             del self._buf[:to_read]
-            self._bump_total(len(data))
             self._remaining -= len(data)
             if self._remaining == 0:
                 self._done = True
@@ -1446,7 +1426,6 @@ class _SyncHttpBodyStream:
                 self._buf.extend(chunk)
             data = bytes(self._buf[:to_read])
             del self._buf[:to_read]
-            self._bump_total(len(data))
             self._chunk_remaining -= len(data)
             if self._chunk_remaining == 0:
                 ending = self._readexactly(2)
