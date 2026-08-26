@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -332,16 +333,22 @@ func TestCaddytest_PythonRequestBodyMaxSizeWithoutRoute(t *testing.T) {
 	cases := []struct {
 		name      string
 		directive string
+		under     int
+		over      int
 	}{
 		{
 			name: "block",
 			directive: `request_body {
       max_size 1KiB
     }`,
+			under: 512,
+			over:  2048,
 		},
 		{
 			name:      "shorthand",
-			directive: "request_body 1KiB",
+			directive: "request_body 2KiB",
+			under:     1500,
+			over:      3000,
 		},
 	}
 
@@ -385,7 +392,7 @@ localhost:9080 {
 				return resp
 			}
 
-			resp := post(512)
+			resp := post(tc.under)
 			body, err := io.ReadAll(resp.Body)
 			resp.Body.Close()
 			if err != nil {
@@ -394,11 +401,11 @@ localhost:9080 {
 			if resp.StatusCode != http.StatusOK {
 				t.Fatalf("under-limit status %d, body %q", resp.StatusCode, body)
 			}
-			if got := string(body); got != "512" {
-				t.Fatalf("under-limit counted %s bytes, want 512", got)
+			if got := string(body); got != strconv.Itoa(tc.under) {
+				t.Fatalf("under-limit counted %s bytes, want %d", got, tc.under)
 			}
 
-			resp = post(2048)
+			resp = post(tc.over)
 			body, err = io.ReadAll(resp.Body)
 			resp.Body.Close()
 			if err != nil {
