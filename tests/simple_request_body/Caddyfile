@@ -1,0 +1,24 @@
+{
+	http_port 9080
+	https_port 9443
+	log {
+		level info
+	}
+}
+localhost:9080 {
+	python /block/* {
+		module_asgi "main:app"
+		workers 1
+		venv "./venv"
+		request_body {
+			max_size 1KiB
+		}
+	}
+
+	python /shorthand/* {
+		module_asgi "main:app"
+		workers 1
+		venv "./venv"
+		request_body 1KiB
+	}
+}

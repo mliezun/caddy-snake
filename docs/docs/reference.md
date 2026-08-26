@@ -75,6 +75,9 @@ python {
     python_path <path>
     autoreload
     isolation none|docker { ... }
+    request_body {
+        max_size <size>
+    }
 }
 ```
 
@@ -106,7 +109,7 @@ python {
 }
 ```
 
-Request bodies are streamed to the app; there is no worker-imposed upload size cap. Limit bodies with Caddy's [`request_body`](https://caddyserver.com/docs/caddyfile/directives/request_body) directive if needed. See [Architecture: limits](architecture.md#limits-to-know).
+Request bodies are streamed to the app; there is no worker-imposed upload size cap. Limit bodies with the [`request_body`](#request_body) subdirective (or Caddy's site-level [`request_body`](https://caddyserver.com/docs/caddyfile/directives/request_body) handler). See [Architecture: limits](architecture.md#limits-to-know).
 
 ### `module_esgi`
 
@@ -369,6 +372,34 @@ python {
 **Platform:** Linux only in v1. Not supported on Windows.
 
 See also: [Isolation](isolation.md).
+
+### `request_body`
+
+Maximum size of the inbound HTTP request body. Optional; omit for unlimited (the Python worker also does not cap upload size).
+
+Use this when the `python` handler is **not** wrapped in a `route` block. Sizes use the same units as Caddy's [`request_body`](https://caddyserver.com/docs/caddyfile/directives/request_body) `max_size` (`1KB` = 1000 bytes, `1KiB` = 1024 bytes). Bodies larger than the limit receive **HTTP 413**.
+
+```caddyfile
+python {
+    module_asgi "main:app"
+    request_body {
+        max_size 2GB
+    }
+}
+```
+
+Shorthand form:
+
+```caddyfile
+python {
+    module_asgi "main:app"
+    request_body 1KiB
+}
+```
+
+Site-level `request_body` (or wrapping `route { request_body { ... } python { ... } }`) still works. The python-block setting applies only to this handler.
+
+On the CLI: `--request-body-max-size 2GB`.
 
 ---
 
@@ -753,6 +784,7 @@ caddy python-server --server-type asgi --app main:app \
 | `env_var <name> <value>` | `--env-var NAME=VALUE` (repeatable) |
 | `isolation docker { image ... }` | `--isolation docker` + `--isolation-image` (+ optional `--isolation-network`, `--isolation-docker-host`, `--isolation-memory`, `--isolation-cpus`, `--isolation-read-only`) |
 | `isolation none` | `--isolation none` |
+| `request_body { max_size <size> }` | `--request-body-max-size` |
 
 CLI-only: `--domain`, `--listen` (default **`127.0.0.1:9080`** when no `--domain`), `--static-path`, `--static-route`, `--debug`, `--access-logs`.
 

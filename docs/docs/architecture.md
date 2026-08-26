@@ -86,15 +86,13 @@ Tricky encodings we explicitly cover:
 
 ## Limits to know
 
-- Request bodies are **streamed** to the app in 64 KiB chunks with no worker-imposed size cap, so multi-gigabyte uploads work when the app reads incrementally (ASGI `receive()`, WSGI `wsgi.input.read(size)`, ESGI `iter_body()`). Apps that buffer the whole body (`UploadFile.read()` with no streaming, `wsgi.input.read()` with no size, ESGI `read_body()`) can still exhaust worker memory. Cap uploads at the Caddy layer with [`request_body`](https://caddyserver.com/docs/caddyfile/directives/request_body):
+- Request bodies are **streamed** to the app in 64 KiB chunks with no worker-imposed size cap, so multi-gigabyte uploads work when the app reads incrementally (ASGI `receive()`, WSGI `wsgi.input.read(size)`, ESGI `iter_body()`). Apps that buffer the whole body (`UploadFile.read()` with no streaming, `wsgi.input.read()` with no size, ESGI `read_body()`) can still exhaust worker memory. Cap uploads on the `python` handler with [`request_body`](reference.md#request_body) (no wrapping `route` required):
 
 ```caddyfile
-route {
+python {
+    module_asgi "main:app"
     request_body {
         max_size 2GB
-    }
-    python {
-        module_asgi "main:app"
     }
 }
 ```

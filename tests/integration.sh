@@ -15,13 +15,13 @@ set -euo pipefail
 #
 # Valid tool names:
 #   django, django_channels, flask, fastapi, simple_autoreload, simple_async,
-#   simple_esgi, simple_cache, simple_start_timeout, simple_isolation, socketio, dynamic
+#   simple_esgi, simple_cache, simple_start_timeout, simple_isolation, simple_request_body, socketio, dynamic
 #
 # Valid python versions:
 #   3.12, 3.13, 3.13-nogil, 3.14, 3.14-nogil
 # ---------------------------------------------------------------------------
 
-VALID_TOOLS=("django" "django_channels" "flask" "fastapi" "simple_autoreload" "simple_async" "simple_esgi" "simple_cache" "simple_start_timeout" "simple_isolation" "socketio" "dynamic")
+VALID_TOOLS=("django" "django_channels" "flask" "fastapi" "simple_autoreload" "simple_async" "simple_esgi" "simple_cache" "simple_start_timeout" "simple_isolation" "simple_request_body" "socketio" "dynamic")
 VALID_PYVERSIONS=("3.12" "3.13" "3.13-nogil" "3.14" "3.14-nogil")
 
 usage() {

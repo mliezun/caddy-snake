@@ -345,6 +345,9 @@ func TestUnmarshalCaddyfile_BlockAllOptions(t *testing.T) {
 		workers 4
 		max_dynamic_apps 12
 		start_timeout 180s
+		request_body {
+			max_size 2MiB
+		}
 	}`
 	d := caddyfile.NewTestDispenser(input)
 	var cs CaddySnake
@@ -369,6 +372,15 @@ func TestUnmarshalCaddyfile_BlockAllOptions(t *testing.T) {
 	}
 	if cs.StartTimeout != "180s" {
 		t.Errorf("expected StartTimeout '180s', got %q", cs.StartTimeout)
+	}
+	if cs.RequestBodyMaxSize != "2MiB" {
+		t.Errorf("expected RequestBodyMaxSize '2MiB', got %q", cs.RequestBodyMaxSize)
+	}
+	if err := cs.Validate(); err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+	if cs.requestBodyMaxBytes != 2*1024*1024 {
+		t.Errorf("expected requestBodyMaxBytes %d, got %d", 2*1024*1024, cs.requestBodyMaxBytes)
 	}
 }
 
@@ -411,6 +423,143 @@ func TestParseStartTimeout(t *testing.T) {
 	}
 	if _, err := parseStartTimeout("nope"); err == nil {
 		t.Fatal("expected error for invalid duration")
+	}
+}
+
+func TestParseRequestBodyMaxSize(t *testing.T) {
+	n, err := parseRequestBodyMaxSize("")
+	if err != nil || n != 0 {
+		t.Fatalf("empty: got %d, %v; want 0, nil", n, err)
+	}
+	n, err = parseRequestBodyMaxSize("1KiB")
+	if err != nil || n != 1024 {
+		t.Fatalf("1KiB: got %d, %v; want 1024, nil", n, err)
+	}
+	n, err = parseRequestBodyMaxSize("1KB")
+	if err != nil || n != 1000 {
+		t.Fatalf("1KB: got %d, %v; want 1000, nil", n, err)
+	}
+	n, err = parseRequestBodyMaxSize("2MiB")
+	if err != nil || n != 2*1024*1024 {
+		t.Fatalf("2MiB: got %d, %v; want %d, nil", n, err, 2*1024*1024)
+	}
+	if _, err := parseRequestBodyMaxSize("0"); err == nil {
+		t.Fatal("expected error for 0")
+	}
+	if _, err := parseRequestBodyMaxSize("nope"); err == nil {
+		t.Fatal("expected error for invalid size")
+	}
+}
+
+func TestLimitRequestBody(t *testing.T) {
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/", bytes.NewReader(bytes.Repeat([]byte("a"), 40)))
+	req.ContentLength = 40
+	if err := limitRequestBody(rec, req, 50); err != nil {
+		t.Fatalf("under limit: %v", err)
+	}
+	got, err := io.ReadAll(req.Body)
+	if err != nil {
+		t.Fatalf("read under limit: %v", err)
+	}
+	if len(got) != 40 {
+		t.Fatalf("read %d bytes, want 40", len(got))
+	}
+
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodPost, "/", bytes.NewReader(bytes.Repeat([]byte("a"), 100)))
+	req.ContentLength = 100
+	err = limitRequestBody(rec, req, 50)
+	if err == nil {
+		t.Fatal("expected 413 for Content-Length over limit")
+	}
+	var he caddyhttp.HandlerError
+	if !errors.As(err, &he) || he.StatusCode != http.StatusRequestEntityTooLarge {
+		t.Fatalf("expected HandlerError 413, got %v", err)
+	}
+
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodPost, "/", bytes.NewReader(bytes.Repeat([]byte("x"), 100)))
+	req.ContentLength = -1
+	if err := limitRequestBody(rec, req, 50); err != nil {
+		t.Fatalf("chunked wrap: %v", err)
+	}
+	_, err = io.ReadAll(req.Body)
+	if !isRequestBodyTooLarge(err) {
+		t.Fatalf("chunked over limit: got %v", err)
+	}
+}
+
+func TestUnmarshalCaddyfile_RequestBodyShorthand(t *testing.T) {
+	input := `python {
+		module_asgi main:app
+		request_body 1KiB
+		workers 2
+	}`
+	d := caddyfile.NewTestDispenser(input)
+	var cs CaddySnake
+	if err := cs.UnmarshalCaddyfile(d); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cs.RequestBodyMaxSize != "1KiB" {
+		t.Fatalf("expected RequestBodyMaxSize '1KiB', got %q", cs.RequestBodyMaxSize)
+	}
+	if cs.Workers != "2" {
+		t.Fatalf("expected Workers '2' after shorthand request_body, got %q", cs.Workers)
+	}
+}
+
+func TestUnmarshalCaddyfile_RequestBodyInvalid(t *testing.T) {
+	input := `python {
+		module_asgi main:app
+		request_body nope
+	}`
+	d := caddyfile.NewTestDispenser(input)
+	var cs CaddySnake
+	if err := cs.UnmarshalCaddyfile(d); err == nil {
+		t.Fatal("expected error for invalid request_body size")
+	}
+}
+
+func TestUnmarshalCaddyfile_RequestBodyMissingMaxSize(t *testing.T) {
+	input := `python {
+		module_asgi main:app
+		request_body {
+		}
+	}`
+	d := caddyfile.NewTestDispenser(input)
+	var cs CaddySnake
+	if err := cs.UnmarshalCaddyfile(d); err == nil {
+		t.Fatal("expected error for request_body without max_size")
+	}
+}
+
+func TestUnmarshalCaddyfile_RequestBodyUnknownSubdirective(t *testing.T) {
+	input := `python {
+		module_asgi main:app
+		request_body {
+			max_size 1KiB
+			read_timeout 5s
+		}
+	}`
+	d := caddyfile.NewTestDispenser(input)
+	var cs CaddySnake
+	if err := cs.UnmarshalCaddyfile(d); err == nil {
+		t.Fatal("expected error for unknown request_body subdirective")
+	}
+}
+
+func TestValidate_RequestBodyMaxSize(t *testing.T) {
+	m := &CaddySnake{ModuleAsgi: "main:app", RequestBodyMaxSize: "1KiB"}
+	if err := m.Validate(); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if m.requestBodyMaxBytes != 1024 {
+		t.Fatalf("expected requestBodyMaxBytes 1024, got %d", m.requestBodyMaxBytes)
+	}
+	m.RequestBodyMaxSize = "nope"
+	if err := m.Validate(); err == nil {
+		t.Fatal("expected error for invalid request_body_max_size")
 	}
 }
 
@@ -2374,6 +2523,19 @@ const countingASGIApp = `async def app(scope, receive, send):
     await send({"type": "http.response.body", "body": body})
 `
 
+// countingWSGIApp streams wsgi.input and returns the byte count.
+const countingWSGIApp = `def app(environ, start_response):
+    n = 0
+    inp = environ["wsgi.input"]
+    while True:
+        chunk = inp.read(65536)
+        if not chunk:
+            break
+        n += len(chunk)
+    start_response("200 OK", [("Content-Type", "text/plain")])
+    return [str(n).encode("ascii")]
+`
+
 // infiniteZeros is an infinite stream of zero bytes for large-upload tests.
 type infiniteZeros struct{}
 
@@ -2398,6 +2560,100 @@ func serveWorkerGroup(t *testing.T, wg *PythonWorkerGroup) string {
 	go server.Serve(listener)
 	t.Cleanup(func() { _ = server.Close() })
 	return "http://" + listener.Addr().String()
+}
+
+func serveCaddySnake(t *testing.T, f *CaddySnake) string {
+	t.Helper()
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("failed to listen: %v", err)
+	}
+	t.Cleanup(func() { _ = listener.Close() })
+	server := &http.Server{
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			err := f.ServeHTTP(w, r, nil)
+			if err == nil {
+				return
+			}
+			var he caddyhttp.HandlerError
+			if errors.As(err, &he) && he.StatusCode > 0 {
+				http.Error(w, he.Error(), he.StatusCode)
+				return
+			}
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+		}),
+		ReadHeaderTimeout: 5 * time.Second,
+	}
+	go server.Serve(listener)
+	t.Cleanup(func() { _ = server.Close() })
+	return "http://" + listener.Addr().String()
+}
+
+func TestCaddySnake_RequestBodyMaxSize(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+	skipIfNoPython(t)
+
+	const maxBytes int64 = 1024
+	cases := []struct {
+		name    string
+		iface   string
+		runtime string
+		appSrc  string
+	}{
+		{name: "asgi", iface: "asgi", runtime: "uvloop", appSrc: countingASGIApp},
+		{name: "wsgi", iface: "wsgi", runtime: "sync", appSrc: countingWSGIApp},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			tempDir := t.TempDir()
+			if err := os.WriteFile(filepath.Join(tempDir, "app.py"), []byte(tc.appSrc), 0644); err != nil {
+				t.Fatalf("failed to write app.py: %v", err)
+			}
+			wg, err := NewPythonWorkerGroup(tc.iface, "app:app", tempDir, "", "", tc.runtime, 1, "python3", "", "", nil, nil, 0, nil, nil)
+			if err != nil {
+				t.Fatalf("NewPythonWorkerGroup failed: %v", err)
+			}
+			t.Cleanup(func() { _ = wg.Cleanup() })
+
+			f := &CaddySnake{app: wg, requestBodyMaxBytes: maxBytes}
+			baseURL := serveCaddySnake(t, f)
+
+			resp := postZeroUpload(t, baseURL, 512)
+			body, err := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			if err != nil {
+				t.Fatalf("read under-limit response: %v", err)
+			}
+			if resp.StatusCode != http.StatusOK {
+				t.Fatalf("under-limit status %d, body %q", resp.StatusCode, body)
+			}
+			if got := string(body); got != "512" {
+				t.Fatalf("under-limit counted %s bytes, want 512", got)
+			}
+
+			resp = postZeroUpload(t, baseURL, 2048)
+			body, err = io.ReadAll(resp.Body)
+			resp.Body.Close()
+			if err != nil {
+				t.Fatalf("read over-limit response: %v", err)
+			}
+			if resp.StatusCode != http.StatusRequestEntityTooLarge {
+				t.Fatalf("over-limit status %d, body %q; want 413", resp.StatusCode, body)
+			}
+
+			resp = postZeroUpload(t, baseURL, 64)
+			body, err = io.ReadAll(resp.Body)
+			resp.Body.Close()
+			if err != nil {
+				t.Fatalf("read follow-up response: %v", err)
+			}
+			if resp.StatusCode != http.StatusOK || string(body) != "64" {
+				t.Fatalf("follow-up after 413: status %d body %q", resp.StatusCode, body)
+			}
+		})
+	}
 }
 
 func postZeroUpload(t *testing.T, baseURL string, size int64) *http.Response {

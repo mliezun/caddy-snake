@@ -31,7 +31,7 @@ To make it easier to get started you can also grab one of the precompiled binari
 - **On-demand TLS permission (`tls.permission.python_dir`)** — gate HTTPS issuance with filesystem checks so wildcard-style hosts work without running a separate ACME [`ask`](https://caddyserver.com/docs/caddyfile/options#on-demand-tls) service (pairs with dynamic `working_dir`)
 - **Virtual environment support** — point to a `venv` and dependencies are available automatically
 - **WebSocket support** — full WebSocket handling for ASGI apps
-- **Streaming uploads** — request bodies are proxied in chunks with no worker-imposed size cap (limit with Caddy `request_body` if needed)
+- **Streaming uploads** — request bodies are proxied in chunks with no worker-imposed size cap (limit with `request_body` inside the `python` block if needed)
 - **ASGI lifespan events** — optional startup/shutdown lifecycle hooks
 - **Static file serving** — built-in static file support via the CLI
 - **Pre-built binaries** — download and run with Python embedded, no compilation required
@@ -77,6 +77,7 @@ This starts a server on port `9080` serving your app. See `./caddy python-server
 --runtime <name>          WSGI: sync|gevent; ESGI: gevent only; ASGI: native|uvloop (see docs)
 --autoreload              Watch .py files and reload on changes
 --max-dynamic-apps <n>    Max distinct dynamic Python apps (default: 128)
+--request-body-max-size <size>  Max HTTP request body (e.g. 1KiB, 2GB; empty = unlimited)
 ```
 
 ### Option 2: Build from source
@@ -263,6 +264,9 @@ python {
     isolation docker {                  # Run workers in Docker (Linux; requires Docker engine)
         image "python:3.13-slim"
     }
+    request_body {                      # Max inbound body size (HTTP 413 if exceeded)
+        max_size 2GB
+    }
 }
 ```
 
@@ -379,6 +383,21 @@ python {
     autoreload
 }
 ```
+
+### `request_body`
+
+Maximum inbound HTTP request body size. Optional; omit for unlimited. Over-limit requests receive HTTP 413. Same size units as Caddy (`1KB` = 1000, `1KiB` = 1024). Use this inside the `python` block so you do not need a wrapping `route { request_body { ... } python { ... } }`.
+
+```Caddyfile
+python {
+    module_asgi "main:app"
+    request_body {
+        max_size 2GB
+    }
+}
+```
+
+Shorthand: `request_body 1KiB`. CLI: `--request-body-max-size 2GB`.
 
 ---
 
