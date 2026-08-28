@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"net/http"
@@ -27,6 +28,7 @@ import (
 	caddycmd "github.com/caddyserver/caddy/v2/cmd"
 	"github.com/caddyserver/caddy/v2/modules/caddyhttp"
 	"github.com/caddyserver/certmagic"
+	"github.com/dustin/go-humanize"
 	"github.com/spf13/cobra"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
@@ -174,10 +176,15 @@ type CaddySnake struct {
 	// MaxDynamicApps: empty uses env/default (CADDYSNAKE_MAX_DYNAMIC_APPS, usually 128);
 	// a positive value sets the site cap (0 is rejected).
 	MaxDynamicApps string `json:"max_dynamic_apps,omitempty"`
+	// Maximum request body size, as a human-readable size (e.g. "10MB", "2GiB").
+	// Empty means unlimited. Caddyfile: request_body { max_size <size> } (or
+	// request_body <size>). CLI: --request-body-max-size.
+	RequestBodyMaxSize string `json:"request_body_max_size,omitempty"`
 
-	logger   *zap.Logger
-	app      AppServer
-	cacheSrv *cacheServer
+	logger              *zap.Logger
+	app                 AppServer
+	cacheSrv            *cacheServer
+	requestBodyMaxBytes int64
 }
 
 // parseStartTimeout parses a Caddyfile/JSON/CLI start_timeout value.
@@ -212,6 +219,107 @@ func effectiveStartTimeout(d time.Duration) time.Duration {
 		return DefaultStartTimeout
 	}
 	return d
+}
+
+// parseRequestBodyMaxSize parses a Caddyfile/JSON/CLI request body size.
+// Empty means unlimited (0). Values use github.com/dustin/go-humanize sizes
+// (1KB = 1000, 1KiB = 1024), matching Caddy's request_body max_size.
+func parseRequestBodyMaxSize(s string) (int64, error) {
+	if s == "" {
+		return 0, nil
+	}
+	n, err := humanize.ParseBytes(s)
+	if err != nil {
+		return 0, fmt.Errorf("invalid request_body max_size %q: %w", s, err)
+	}
+	if n == 0 {
+		return 0, fmt.Errorf("request_body max_size must be greater than 0, got %q", s)
+	}
+	if n > uint64(^uint64(0)>>1) {
+		return 0, fmt.Errorf("request_body max_size %q overflows int64", s)
+	}
+	return int64(n), nil
+}
+
+func parseRequestBodyCaddyfile(d *caddyfile.Dispenser, f *CaddySnake) error {
+	if f.RequestBodyMaxSize != "" {
+		return d.Errf("request_body specified more than once")
+	}
+	args := d.RemainingArgs()
+	switch len(args) {
+	case 1:
+		if _, err := parseRequestBodyMaxSize(args[0]); err != nil {
+			return d.Errf("%v", err)
+		}
+		f.RequestBodyMaxSize = args[0]
+		return nil
+	case 0:
+		// block form: request_body { max_size <size> }
+	default:
+		return d.ArgErr()
+	}
+	got := false
+	for nesting := d.Nesting(); d.NextBlock(nesting); {
+		switch d.Val() {
+		case "max_size":
+			if f.RequestBodyMaxSize != "" {
+				return d.Errf("max_size specified more than once")
+			}
+			var sizeStr string
+			if !d.Args(&sizeStr) {
+				return d.Errf("expected exactly one argument for max_size")
+			}
+			if _, err := parseRequestBodyMaxSize(sizeStr); err != nil {
+				return d.Errf("%v", err)
+			}
+			f.RequestBodyMaxSize = sizeStr
+			got = true
+		default:
+			return d.Errf("unrecognized request_body subdirective %q (want max_size)", d.Val())
+		}
+	}
+	if !got {
+		return d.Errf("request_body requires max_size")
+	}
+	return nil
+}
+
+func isRequestBodyTooLarge(err error) bool {
+	var mbe *http.MaxBytesError
+	if errors.As(err, &mbe) {
+		return true
+	}
+	var he caddyhttp.HandlerError
+	return errors.As(err, &he) && he.StatusCode == http.StatusRequestEntityTooLarge
+}
+
+// maxBytesBody converts http.MaxBytesError into a Caddy 413 HandlerError so
+// ReverseProxy and the HTTP server return Request Entity Too Large.
+type maxBytesBody struct {
+	io.ReadCloser
+}
+
+func (b maxBytesBody) Read(p []byte) (int, error) {
+	n, err := b.ReadCloser.Read(p)
+	var mbe *http.MaxBytesError
+	if errors.As(err, &mbe) {
+		err = caddyhttp.Error(http.StatusRequestEntityTooLarge, err)
+	}
+	return n, err
+}
+
+func limitRequestBody(w http.ResponseWriter, r *http.Request, max int64) error {
+	if max <= 0 {
+		return nil
+	}
+	if r.ContentLength > max {
+		return caddyhttp.Error(http.StatusRequestEntityTooLarge,
+			fmt.Errorf("request body exceeds %d bytes", max))
+	}
+	if r.Body != nil {
+		r.Body = maxBytesBody{http.MaxBytesReader(w, r.Body, max)}
+	}
+	return nil
 }
 
 // effectivePythonRuntime returns the runtime string passed to the Python worker.
@@ -327,6 +435,10 @@ func (f *CaddySnake) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 					f.EnvVars[name] = value
 				case "isolation":
 					if err := parseIsolationCaddyfile(d, &f.Isolation); err != nil {
+						return err
+					}
+				case "request_body":
+					if err := parseRequestBodyCaddyfile(d, f); err != nil {
 						return err
 					}
 				case "max_dynamic_apps":
@@ -576,6 +688,11 @@ func (m *CaddySnake) Validate() error {
 	if _, err := parseDynamicAppLimits(m.MaxDynamicApps); err != nil {
 		return err
 	}
+	nBytes, err := parseRequestBodyMaxSize(m.RequestBodyMaxSize)
+	if err != nil {
+		return err
+	}
+	m.requestBodyMaxBytes = nBytes
 	return nil
 }
 
@@ -597,6 +714,9 @@ func (m *CaddySnake) Cleanup() error {
 
 // ServeHTTP implements caddyhttp.MiddlewareHandler.
 func (f CaddySnake) ServeHTTP(w http.ResponseWriter, r *http.Request, next caddyhttp.Handler) error {
+	if err := limitRequestBody(w, r, f.requestBodyMaxBytes); err != nil {
+		return err
+	}
 	if err := f.app.HandleRequest(w, r); err != nil {
 		return err
 	}
@@ -809,6 +929,10 @@ func (w *PythonWorker) Start() error {
 		Transport:  w.Transport,
 		BufferPool: sharedProxyBufferPool,
 		ErrorHandler: func(rw http.ResponseWriter, req *http.Request, err error) {
+			if isRequestBodyTooLarge(err) {
+				http.Error(rw, http.StatusText(http.StatusRequestEntityTooLarge), http.StatusRequestEntityTooLarge)
+				return
+			}
 			if w.logger != nil {
 				w.logger.Error("python worker proxy error",
 					zap.String("app", w.App),
@@ -1073,6 +1197,7 @@ func init() {
 			"[--runtime <name>] [--lifespan on|off] " +
 			"[--isolation none|docker] [--isolation-image <image>] " +
 			"[--max-dynamic-apps <count>] " +
+			"[--request-body-max-size <size>] " +
 			"[--debug] [--access-logs] [--autoreload]",
 		Short: "Spins up a Python server",
 		Long: `
@@ -1080,7 +1205,7 @@ A Python WSGI, ASGI, or ESGI server designed for apps and frameworks.
 
 Python-block options mirror the Caddyfile python directive (workers, venv,
 working_dir, env_file, env_var, start_timeout, runtime, lifespan, autoreload,
-python_path). CLI-only flags cover listen address, HTTPS domain, and static files.
+python_path, request_body). CLI-only flags cover listen address, HTTPS domain, and static files.
 
 For an indefinite readiness wait use --start-timeout=-1 (equals form) or
 --start-timeout forever. Do not pass a bare "-1" as a separate argv token;
@@ -1118,6 +1243,7 @@ Ensure DNS A/AAAA records are correctly set up if using a public domain for secu
 			cmd.Flags().String("isolation-cpus", "", "Docker CPU limit for isolated workers (e.g. 1.0)")
 			cmd.Flags().Bool("isolation-read-only", false, "Mount container root filesystem read-only for isolated workers")
 			cmd.Flags().String("max-dynamic-apps", "", "Max distinct dynamic Python apps (empty = env/default, usually 128)")
+			cmd.Flags().String("request-body-max-size", "", "Maximum HTTP request body size (e.g. 1KiB, 2GB). Empty means unlimited.")
 			cmd.RunE = caddycmd.WrapCommandFuncForCobra(pythonServer)
 		},
 	})
@@ -1143,6 +1269,7 @@ func pythonServer(fs caddycmd.Flags) (int, error) {
 	lifespan := fs.String("lifespan")
 	runtimeFlag := fs.String("runtime")
 	maxDynamicApps := fs.String("max-dynamic-apps")
+	requestBodyMaxSize := fs.String("request-body-max-size")
 	startTimeout := fs.String("start-timeout")
 	isolationFlag := fs.String("isolation")
 	isolationImage := fs.String("isolation-image")
@@ -1214,6 +1341,7 @@ func pythonServer(fs caddycmd.Flags) (int, error) {
 	pythonHandler.Runtime = runtimeFlag
 	pythonHandler.StartTimeout = startTimeout
 	pythonHandler.MaxDynamicApps = maxDynamicApps
+	pythonHandler.RequestBodyMaxSize = requestBodyMaxSize
 	pythonHandler.EnvFiles = cloneEnvFiles(envFiles)
 	pythonHandler.EnvVars = envVars
 	if iso, err := buildIsolationFromCLI(isolationFlag, isolationImage, isolationNetwork, isolationDockerHost, isolationMemory, isolationCPUs, isolationReadOnly); err != nil {

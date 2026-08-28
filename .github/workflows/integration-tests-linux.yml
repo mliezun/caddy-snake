@@ -51,6 +51,7 @@ jobs:
           - "simple_cache"
           - "simple_start_timeout"
           - "simple_isolation"
+          - "simple_request_body"
           - "socketio"
           - "dynamic"
         python-version: ["3.12", "3.13", "3.13t", "3.14", "3.14t"]

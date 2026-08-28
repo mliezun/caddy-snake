@@ -82,6 +82,10 @@ import click
     help="Mount isolated container root filesystem read-only",
 )
 @click.option("--max-dynamic-apps", help="Max distinct dynamic Python apps (default: 128)")
+@click.option(
+    "--request-body-max-size",
+    help="Maximum HTTP request body size (e.g. 1KiB, 2GB). Empty means unlimited.",
+)
 def main(
     server_type,
     domain,
@@ -109,6 +113,7 @@ def main(
     isolation_cpus,
     isolation_read_only,
     max_dynamic_apps,
+    request_body_max_size,
 ):
     """
     A Python WSGI, ASGI, or ESGI server designed for apps and frameworks.
@@ -184,6 +189,8 @@ def main(
         args.append("--isolation-read-only")
     if max_dynamic_apps:
         args.extend(["--max-dynamic-apps", max_dynamic_apps])
+    if request_body_max_size:
+        args.extend(["--request-body-max-size", request_body_max_size])
 
     # Execute the binary with the constructed arguments
     os.execv(binary_path, args)

@@ -3,12 +3,14 @@
 package caddysnake
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -313,5 +315,105 @@ localhost:9080 {
 	}
 	if !strings.Contains(string(body), "path=0x2f,0xe5,0xe4,0xf6") {
 		t.Fatalf("ASGI path ords = %q, want unicode åäö", body)
+	}
+}
+
+func TestCaddytest_PythonRequestBodyMaxSizeWithoutRoute(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+	skipIfNoPython(t)
+
+	tempDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(tempDir, "app.py"), []byte(countingASGIApp), 0644); err != nil {
+		t.Fatalf("failed to write app.py: %v", err)
+	}
+	workDir := filepath.ToSlash(tempDir)
+
+	cases := []struct {
+		name      string
+		directive string
+		under     int
+		over      int
+	}{
+		{
+			name: "block",
+			directive: `request_body {
+      max_size 1KiB
+    }`,
+			under: 512,
+			over:  2048,
+		},
+		{
+			name:      "shorthand",
+			directive: "request_body 2KiB",
+			under:     1500,
+			over:      3000,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			caddyfile := fmt.Sprintf(`
+{
+  admin localhost:2999
+  http_port 9080
+  https_port 9443
+  grace_period 1ns
+}
+
+localhost:9080 {
+  python {
+    module_asgi "app:app"
+    working_dir %q
+    workers 1
+    %s
+  }
+}
+`, workDir, tc.directive)
+
+			tester := caddytest.NewTester(t)
+			tester.WithDefaultOverrides(caddytest.Config{
+				LoadRequestTimeout: 15 * time.Second,
+			})
+			tester.InitServer(caddyfile, "caddyfile")
+
+			post := func(n int) *http.Response {
+				t.Helper()
+				req, err := http.NewRequest(http.MethodPost, "http://localhost:9080/upload", bytes.NewReader(make([]byte, n)))
+				if err != nil {
+					t.Fatalf("new request: %v", err)
+				}
+				req.Header.Set("Content-Type", "application/octet-stream")
+				resp, err := tester.Client.Do(req)
+				if err != nil {
+					t.Fatalf("POST %d bytes: %v", n, err)
+				}
+				return resp
+			}
+
+			resp := post(tc.under)
+			body, err := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			if err != nil {
+				t.Fatalf("read under-limit: %v", err)
+			}
+			if resp.StatusCode != http.StatusOK {
+				t.Fatalf("under-limit status %d, body %q", resp.StatusCode, body)
+			}
+			if got := string(body); got != strconv.Itoa(tc.under) {
+				t.Fatalf("under-limit counted %s bytes, want %d", got, tc.under)
+			}
+
+			resp = post(tc.over)
+			body, err = io.ReadAll(resp.Body)
+			resp.Body.Close()
+			if err != nil {
+				t.Fatalf("read over-limit: %v", err)
+			}
+			if resp.StatusCode != http.StatusRequestEntityTooLarge {
+				t.Fatalf("over-limit status %d, body %q; want 413 (python block without wrapping route)", resp.StatusCode, body)
+			}
+		})
 	}
 }

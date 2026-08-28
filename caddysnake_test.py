@@ -420,6 +420,19 @@ class TestReadHttpRequest:
         _, _, _, _, _, body_stream = result
         assert await self._read_all(body_stream) == b"hello world"
 
+    async def test_multi_gigabyte_content_length_accepted(self):
+        cl = 2 * 1024 * 1024 * 1024
+        req = (f"POST /upload HTTP/1.1\r\nHost: localhost\r\nContent-Length: {cl}\r\n\r\n").encode()
+        result = await self._feed_and_read(req)
+        assert result is not None
+        _, _, _, _, _, body_stream = result
+        assert body_stream._remaining == cl
+
+    async def test_negative_content_length_rejected(self):
+        req = b"POST / HTTP/1.1\r\nHost: localhost\r\nContent-Length: -1\r\n\r\n"
+        result = await self._feed_and_read(req)
+        assert result is None
+
     async def test_chunked_body(self):
         req = (
             b"POST / HTTP/1.1\r\n"
@@ -507,6 +520,19 @@ class TestReadHttpRequestSync:
         assert result is not None
         with pytest.raises(ValueError, match="Invalid chunk terminator"):
             result[-1].read()
+
+    def test_multi_gigabyte_content_length_accepted(self):
+        cl = 2 * 1024 * 1024 * 1024
+        headers = (
+            f"POST /upload HTTP/1.1\r\nHost: localhost\r\nContent-Length: {cl}\r\n\r\n"
+        ).encode()
+        result = cs._read_http_request_sync(_RecvSocket(headers))
+        assert result is not None
+        assert result[-1]._remaining == cl
+
+    def test_negative_content_length_rejected(self):
+        sock = _RecvSocket(b"POST / HTTP/1.1\r\nHost: localhost\r\nContent-Length: -1\r\n\r\n")
+        assert cs._read_http_request_sync(sock) is None
 
 
 # ==================== ASGI _handle_asgi_http ====================
