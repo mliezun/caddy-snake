@@ -203,8 +203,10 @@ def test_runtime_exception_is_logged(log_path: str = "caddy.log"):
         fd.seek(0, os.SEEK_END)
         log_offset = fd.tell()
 
-    response = requests.get(f"{BASE_URL}/boom", timeout=5)
-    assert response.status_code == 500
+    response = requests.get(f"{BASE_URL}/stream/boom", timeout=5)
+    assert response.status_code == 500, (
+        f"expected 500 from /stream/boom, got {response.status_code}: {response.text[:500]!r}"
+    )
     # Frameworks may send a 500 body; never echo the Python traceback to clients.
     assert b"intentional-boom" not in response.content
     assert b"Traceback" not in response.content
@@ -220,11 +222,11 @@ def test_runtime_exception_is_logged(log_path: str = "caddy.log"):
         time.sleep(0.1)
     else:
         raise AssertionError(
-            "expected worker traceback for /boom in caddy.log, got:\n" + logs[-4000:]
+            "expected worker traceback for /stream/boom in caddy.log, got:\n" + logs[-4000:]
         )
 
     assert "ASGI HTTP handler" in logs
-    assert "GET /boom" in logs
+    assert "GET /stream/boom" in logs
     assert "RuntimeError: intentional-boom" in logs
     assert "Traceback (most recent call last)" in logs
 

@@ -93,7 +93,10 @@ async def encoding_scope(name: str, request: Request):
     }
 
 
-@app.get("/boom")
+@app.get("/stream/boom")
 async def boom():
-    """Used by integration tests to verify runtime exceptions are logged."""
+    """Used by integration tests to verify runtime exceptions are logged.
+
+    Mounted under /stream/* so the FastAPI Caddyfile routes it to a worker.
+    """
     raise RuntimeError("intentional-boom")
