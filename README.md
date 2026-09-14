@@ -518,6 +518,21 @@ Note that this restarts the entire Caddy process on changes.
 
 ---
 
+## Debugging runtime errors
+
+Unhandled exceptions in the Python app return HTTP 500 to the client. The traceback is printed to **Caddy's stderr** (workers inherit it), tagged with the worker id and request path:
+
+```text
+Unhandled exception in ASGI HTTP handler (worker 0, GET /boom):
+Traceback (most recent call last):
+  ...
+RuntimeError: ...
+```
+
+This includes FastAPI/Starlette apps, which send a 500 and then re-raise so the server can log. Tracebacks are never included in the HTTP response. See [Architecture: runtime errors](https://caddy-snake.readthedocs.io/en/latest/docs/architecture/#runtime-errors).
+
+---
+
 ## Build with Docker
 
 There's a template file in the project: [builder.Dockerfile](/builder.Dockerfile). It supports build arguments to configure which Python or Go version to use.

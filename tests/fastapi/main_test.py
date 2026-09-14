@@ -197,6 +197,38 @@ def check_lifespan_events_on_logs(logs: str):
     )
 
 
+def test_runtime_exception_is_logged(log_path: str = "caddy.log"):
+    """Issue #243: FastAPI/Starlette 500s must leave a traceback in worker logs."""
+    with open(log_path, "rb") as fd:
+        fd.seek(0, os.SEEK_END)
+        log_offset = fd.tell()
+
+    response = requests.get(f"{BASE_URL}/boom", timeout=5)
+    assert response.status_code == 500
+    # Frameworks may send a 500 body; never echo the Python traceback to clients.
+    assert b"intentional-boom" not in response.content
+    assert b"Traceback" not in response.content
+
+    deadline = time.time() + 5
+    logs = ""
+    while time.time() < deadline:
+        with open(log_path, encoding="utf-8", errors="replace") as fd:
+            fd.seek(log_offset)
+            logs = fd.read()
+        if "intentional-boom" in logs and "Unhandled exception" in logs:
+            break
+        time.sleep(0.1)
+    else:
+        raise AssertionError(
+            "expected worker traceback for /boom in caddy.log, got:\n" + logs[-4000:]
+        )
+
+    assert "ASGI HTTP handler" in logs
+    assert "GET /boom" in logs
+    assert "RuntimeError: intentional-boom" in logs
+    assert "Traceback (most recent call last)" in logs
+
+
 def test_path_encoding_asgi_route_param():
     """Issue #237: ASGI/FastAPI path params are UTF-8 text."""
     r = requests.get(f"{BASE_URL}/encoding/param/åäö")
@@ -261,6 +293,7 @@ if __name__ == "__main__":
     print("Path encoding tests passed")
 
     count = int(sys.argv[1]) if len(sys.argv) > 1 else 2_500
+    test_runtime_exception_is_logged()
     test_stream_client_disconnect()
     make_objects(max_workers=4, count=count)
     find_and_terminate_process("caddy")

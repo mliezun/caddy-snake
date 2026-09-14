@@ -84,6 +84,27 @@ Tricky encodings we explicitly cover:
 
 ---
 
+## Runtime errors
+
+Workers print unhandled application exceptions to **stderr**, which Caddy inherits from the worker process. The HTTP client still receives a generic `500 Internal Server Error`; the traceback is not included in the response.
+
+A typical log line looks like:
+
+```text
+Unhandled exception in ASGI HTTP handler (worker 0, GET /boom):
+Traceback (most recent call last):
+  ...
+RuntimeError: ...
+```
+
+This is the same stream as import/syntax errors at worker start. If Caddy's own logs go to a file (`log { output file ... }`), Python tracebacks still appear on the **Caddy process stderr** (or whatever you redirected when you started `caddy run`).
+
+**FastAPI / Starlette:** those frameworks send a 500 and then re-raise so the ASGI server can log. caddy-snake logs that exception even after the 500 has already been written.
+
+Client disconnects mid-response are not treated as application errors and do not print a traceback.
+
+---
+
 ## Limits to know
 
 - Request bodies are **streamed** to the app in 64 KiB chunks with no worker-imposed size cap, so multi-gigabyte uploads work when the app reads incrementally (ASGI `receive()`, WSGI `wsgi.input.read(size)`, ESGI `iter_body()`). Apps that buffer the whole body (`UploadFile.read()` with no streaming, `wsgi.input.read()` with no size, ESGI `read_body()`) can still exhaust worker memory. Cap uploads on the `python` handler with [`request_body`](reference.md#request_body) (no wrapping `route` required):

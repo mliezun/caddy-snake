@@ -91,3 +91,9 @@ async def encoding_scope(name: str, request: Request):
         "path_ords": [hex(ord(c)) for c in path],
         "raw_path_hex": raw_path.hex(),
     }
+
+
+@app.get("/boom")
+async def boom():
+    """Used by integration tests to verify runtime exceptions are logged."""
+    raise RuntimeError("intentional-boom")

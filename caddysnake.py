@@ -39,6 +39,39 @@ class ClientDisconnected(Exception):
 _CLIENT_DISCONNECT_ERRORS = (OSError, RuntimeError)
 
 
+def _request_context(scope):
+    """Return a short ``METHOD path`` label from an ASGI/ESGI scope or WSGI environ."""
+    if not isinstance(scope, dict):
+        return ""
+    method = scope.get("method") or scope.get("REQUEST_METHOD") or ""
+    path = scope.get("path") or scope.get("PATH_INFO") or ""
+    if method and path:
+        return f"{method} {path}"
+    return method or path
+
+
+def _log_app_exception(where, scope=None):
+    """Print an unhandled app exception to worker stderr and flush.
+
+    Tracebacks stay in the Caddy/worker logs (workers inherit Caddy's stderr).
+    They are never included in the HTTP response.
+
+    Frameworks such as Starlette/FastAPI send a 500 and then re-raise so the
+    server can log. Always log, even after the response is already complete.
+    """
+    extras = []
+    worker_id = os.environ.get("CADDYSNAKE_WORKER_ID", "")
+    if worker_id:
+        extras.append(f"worker {worker_id}")
+    ctx = _request_context(scope)
+    if ctx:
+        extras.append(ctx)
+    suffix = f" ({', '.join(extras)})" if extras else ""
+    print(f"Unhandled exception in {where}{suffix}:", file=sys.stderr)
+    traceback.print_exc(file=sys.stderr)
+    sys.stderr.flush()
+
+
 def setup_paths(working_dir, venv):
     """Configure sys.path for working directory and virtualenv."""
     if working_dir:
@@ -466,7 +499,7 @@ def _call_wsgi_app(app, environ):
         body = b"".join(output)
         return status_code, response_headers, body
     except Exception:
-        traceback.print_exc(file=sys.stderr)
+        _log_app_exception("WSGI handler", environ)
         return 500, [("Content-Type", "text/plain")], b"Internal Server Error"
     finally:
         if result is not None and hasattr(result, "close"):
@@ -1049,8 +1082,11 @@ async def _handle_asgi_http(writer, app, scope, body_stream):
     except ClientDisconnected:
         pass
     except Exception:
-        if not disconnect_event.is_set():
-            traceback.print_exc(file=sys.stderr)
+        # Always log. Starlette/FastAPI send a 500 then re-raise; that sets
+        # disconnect_event when the error response completes, which used to
+        # swallow the traceback (https://github.com/mliezun/caddy-snake/issues/243).
+        _log_app_exception("ASGI HTTP handler", scope)
+        if not response_complete:
             await _send_error_response()
     finally:
         disconnect_event.set()
@@ -1234,7 +1270,7 @@ async def _handle_asgi_websocket(reader, writer, app, scope, raw_headers):
     try:
         await app(scope, receive, send)
     except Exception:
-        traceback.print_exc(file=sys.stderr)
+        _log_app_exception("ASGI WebSocket handler", scope)
         if not ws_accepted.is_set():
             writer.write(
                 b"HTTP/1.1 500 Internal Server Error\r\n"
@@ -1812,7 +1848,7 @@ def _handle_esgi_http_sync(
     try:
         _invoke_esgi_app(app, scope, protocol)
     except Exception:
-        traceback.print_exc(file=sys.stderr)
+        _log_app_exception("ESGI HTTP handler", scope)
         if not protocol._responded:
             with contextlib.suppress(Exception):
                 protocol.response_bytes(
@@ -1830,7 +1866,7 @@ def _handle_esgi_websocket_sync(sock, app, raw_headers, headers_list, version, p
     try:
         _invoke_esgi_app(app, scope, ws_proto)
     except Exception:
-        traceback.print_exc(file=sys.stderr)
+        _log_app_exception("ESGI WebSocket handler", scope)
         if not ws_proto._accepted:
             with contextlib.suppress(OSError):
                 sock.sendall(
