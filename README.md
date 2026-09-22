@@ -25,7 +25,7 @@ To make it easier to get started you can also grab one of the precompiled binari
 
 - **WSGI, ASGI & ESGI** — serve WSGI and ASGI frameworks, plus [ESGI](https://github.com/mliezun/esgi) apps (blocking `application(scope, protocol)` per connection)
 - **Multi-worker** — process-based workers for concurrent request handling
-- **Shared worker cache** — optional key/value store in the Caddy (Go) process so Python **process** workers can share state via a small RESP client; on Linux/macOS the transport is a **Unix domain socket** (`unix://…` in `CADDYSNAKE_CACHE_ADDR`), on Windows it uses **loopback TCP**
+- **Shared worker cache** — key/value store in the Caddy (Go) process so Python **process** workers can share state via a small RESP client; optionally shard scalar keys across a static Caddy cluster with authenticated peer RPC
 - **Auto-reload** — watches `.py` files and hot-reloads your app on changes during development
 - **Dynamic module loading** — use Caddy placeholders to load different apps per subdomain or route
 - **On-demand TLS permission (`tls.permission.python_dir`)** — gate HTTPS issuance with filesystem checks so wildcard-style hosts work without running a separate ACME [`ask`](https://caddyserver.com/docs/caddyfile/options#on-demand-tls) service (pairs with dynamic `working_dir`)
@@ -76,6 +76,12 @@ This starts a server on port `9080` serving your app. See `./caddy python-server
 --lifespan on|off         Enable ASGI lifespan events (default: off)
 --runtime <name>          WSGI: sync|gevent; ESGI: gevent only; ASGI: native|uvloop (see docs)
 --autoreload              Watch .py files and reload on changes
+--cache-mode local|cluster       Cache topology (default: local)
+--cache-listen <host:port>       Cluster peer RPC listener
+--cache-advertise <host:port>    Dialable address for this cluster peer
+--cache-peer <host:port>         Static cluster peer (repeatable)
+--cache-namespace <name>         Namespace shared by every cluster peer
+--cache-secret <secret>          Shared peer secret (16-4096 bytes)
 --max-dynamic-apps <n>    Max distinct dynamic Python apps (default: 128)
 --request-body-max-size <size>  Max HTTP request body (e.g. 1KiB, 2GB; empty = unlimited)
 ```
@@ -264,6 +270,13 @@ python {
     isolation docker {                  # Run workers in Docker (Linux; requires Docker engine)
         image "python:3.13-slim"
     }
+    cache cluster {                     # Optional: shard scalar keys across Caddy nodes
+        listen ":7447"
+        advertise "caddy-0.internal:7447"
+        peers "caddy-0.internal:7447" "caddy-1.internal:7447"
+        namespace "my-app"
+        secret "{$CADDYSNAKE_CLUSTER_SECRET}"
+    }
     request_body {                      # Max inbound body size (HTTP 413 if exceeded)
         max_size 2GB
     }
@@ -350,7 +363,7 @@ python {
 
 Number of worker processes to spawn. Defaults to the number of CPUs (`GOMAXPROCS`). Maximum: **256**.
 
-When the `python` handler is provisioned, Caddy Snake starts an **in-process shared cache** in the Go plugin and passes connection details to each worker via environment variables (see [Shared worker cache](#shared-worker-cache)).
+When the `python` handler is provisioned, Caddy Snake starts a shared cache in the Go plugin and passes connection details to each worker. The default is process-local; [`cache cluster`](#cluster-cache) is opt-in.
 
 ### `max_dynamic_apps`
 
@@ -410,7 +423,7 @@ Process-based workers run in **separate Python interpreters**, so they do not sh
 
 Caddy also sets **`CADDYSNAKE_WORKER_INTERFACE`** (`wsgi`, `asgi`, `esgi`, …), **`CADDYSNAKE_WORKER_ID`** (stable index `0`…`N-1` per worker group), **`CADDYSNAKE_CACHE_TIMEOUT`** (read/connect hint in seconds), and **`CADDYSNAKE_WORKER_TOKEN`** (shared secret checked on inbound proxy requests) for the Python client.
 
-The cache supports **scalars**, **FIFO lists**, **sets** (`sadd`/`srem`/`smembers`), atomic **`setnx`**, prefix **`keys`**, and one-shot **`publish`/`subscribe`** for cross-worker coordination.
+The default local cache supports **scalars**, **FIFO lists**, **sets** (`sadd`/`srem`/`smembers`), atomic **`setnx`**, prefix **`keys`**, and one-shot **`publish`/`subscribe`** for cross-worker coordination.
 
 From app code (with the **`caddysnake`** PyPI package / CLI wheel installed in your venv), use the façade described in the [configuration reference](https://caddy-snake.readthedocs.io/en/latest/docs/reference/#shared-worker-cache):
 
@@ -426,6 +439,25 @@ msg = cache.subscribe("myapp:events", timeout=10.0)  # one-shot blocking receive
 ```
 
 Thread workers and single-worker setups do not need this path. See the [configuration reference](https://caddy-snake.readthedocs.io/en/latest/docs/reference/#shared-worker-cache) for the full API (sets, `setnx`, prefix `keys`, `publish`/`subscribe`, limits, and security notes).
+
+### Cluster cache
+
+Cluster mode shards scalar keys across a fixed set of Caddy nodes using rendezvous hashing. It supports only `get`, `set` (with optional TTL), and `delete`; other cache methods return an error. Every node must use the same peer list, namespace, and secret:
+
+```Caddyfile
+python {
+    module_asgi "main:app"
+    cache cluster {
+        listen ":7447"
+        advertise "caddy-0.myapp.internal:7447"
+        peers "caddy-0.myapp.internal:7447" "caddy-1.myapp.internal:7447"
+        namespace "myapp"
+        secret "{$CADDYSNAKE_CLUSTER_SECRET}"
+    }
+}
+```
+
+Each key has one authoritative owner. There is no replication or fallback write: if that owner is unavailable, the operation fails, preventing split-brain values. Changing the peer set remaps some keys without migrating them, and restarting an owner loses its ephemeral keys. Peer RPC is authenticated but not encrypted; bind it only to a private trusted network and never expose the port publicly.
 
 ---
 

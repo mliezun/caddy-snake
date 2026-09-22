@@ -46,6 +46,12 @@ Python-handler flags mirror the Caddyfile `python` block. Extra flags cover list
 | `--start-timeout` | | Worker readiness wait (`120s` default; use `=-1` or `forever` for indefinite) | `120s` |
 | `--runtime` | | WSGI: `sync\|gevent`; ESGI: `gevent`; ASGI: `native\|uvloop` | per interface |
 | `--lifespan` | | ASGI lifespan events (`on\|off`) | `off` |
+| `--cache-mode` | | Cache topology: `local\|cluster` | `local` |
+| `--cache-listen` | | Cluster peer TCP listener (`host:port`) | — |
+| `--cache-advertise` | | Dialable address identifying this peer | — |
+| `--cache-peer` | | Static cluster peer address (repeatable) | — |
+| `--cache-namespace` | | Namespace shared by every cluster peer | — |
+| `--cache-secret` | | Shared peer secret (16–4096 bytes) | — |
 | `--static-path` | | Path to a static files directory | — |
 | `--static-route` | | Route prefix for static files | `/static` |
 | `--debug` | | Enable debug logging | `false` |

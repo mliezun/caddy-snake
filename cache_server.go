@@ -849,8 +849,11 @@ func respReadArray(r *bufio.Reader) ([][]byte, error) {
 type cacheServer struct {
 	store       *cacheStore
 	pubsub      *pubSub
+	cluster     *clusterCache
 	ln          net.Listener
 	done        chan struct{}
+	peerLn      net.Listener
+	peerDone    chan struct{}
 	closeMu     sync.Mutex
 	closed      bool
 	requireAuth bool
@@ -955,7 +958,15 @@ func (s *cacheServer) Close() error {
 	s.store.Shutdown()
 	s.pubsub.Shutdown()
 	err := s.ln.Close()
+	if s.peerLn != nil {
+		if peerErr := s.peerLn.Close(); peerErr != nil && err == nil {
+			err = peerErr
+		}
+	}
 	<-s.done
+	if s.peerDone != nil {
+		<-s.peerDone
+	}
 	if s.sockDir != "" {
 		_ = os.RemoveAll(s.sockDir)
 	}
@@ -1014,6 +1025,19 @@ func (s *cacheServer) handleConn(conn net.Conn) {
 				_ = respWriteError(w, "wrong number of arguments for CSGET")
 				return
 			}
+			if s.cluster != nil {
+				scalar, ok, err := s.cluster.Get(parts[1])
+				if err != nil {
+					_ = respWriteError(w, err.Error())
+					continue
+				}
+				if !ok {
+					_ = respWriteBulk(w, nil)
+					continue
+				}
+				_ = respWriteBulk(w, scalar)
+				continue
+			}
 			scalar, list, _, kind, ok := s.store.Get(parts[1])
 			if !ok {
 				_ = respWriteBulk(w, nil) // $-1
@@ -1040,7 +1064,16 @@ func (s *cacheServer) handleConn(conn net.Conn) {
 				_ = respWriteError(w, "wrong number of arguments for CSDEL")
 				return
 			}
-			n := s.store.Delete(parts[1])
+			var n int
+			if s.cluster != nil {
+				n, err = s.cluster.Delete(parts[1])
+				if err != nil {
+					_ = respWriteError(w, err.Error())
+					continue
+				}
+			} else {
+				n = s.store.Delete(parts[1])
+			}
 			_ = respWriteInt(w, int64(n))
 		case "CSSET":
 			if len(parts) != 3 && len(parts) != 4 {
@@ -1056,12 +1089,22 @@ func (s *cacheServer) handleConn(conn net.Conn) {
 				}
 				ttl = t
 			}
-			if err := s.store.Set(parts[1], parts[2], ttl); err != nil {
-				_ = respWriteError(w, err.Error())
+			var setErr error
+			if s.cluster != nil {
+				setErr = s.cluster.Set(parts[1], parts[2], ttl)
+			} else {
+				setErr = s.store.Set(parts[1], parts[2], ttl)
+			}
+			if setErr != nil {
+				_ = respWriteError(w, setErr.Error())
 				continue
 			}
 			_ = respWriteSimpleString(w, "OK")
 		case "CSAPPEND":
+			if s.cluster != nil {
+				_ = respWriteError(w, clusterUnsupportedError)
+				continue
+			}
 			if len(parts) != 3 {
 				_ = respWriteError(w, "wrong number of arguments for CSAPPEND")
 				return
@@ -1076,6 +1119,10 @@ func (s *cacheServer) handleConn(conn net.Conn) {
 			}
 			_ = respWriteSimpleString(w, "OK")
 		case "CSPOP":
+			if s.cluster != nil {
+				_ = respWriteError(w, clusterUnsupportedError)
+				continue
+			}
 			if len(parts) != 2 && len(parts) != 3 {
 				_ = respWriteError(w, "wrong number of arguments for CSPOP")
 				return
@@ -1098,6 +1145,10 @@ func (s *cacheServer) handleConn(conn net.Conn) {
 			}
 			_ = respWriteBulk(w, v)
 		case "CSSADD":
+			if s.cluster != nil {
+				_ = respWriteError(w, clusterUnsupportedError)
+				continue
+			}
 			if len(parts) != 3 {
 				_ = respWriteError(w, "wrong number of arguments for CSSADD")
 				return
@@ -1113,6 +1164,10 @@ func (s *cacheServer) handleConn(conn net.Conn) {
 			}
 			_ = respWriteInt(w, int64(n))
 		case "CSSREM":
+			if s.cluster != nil {
+				_ = respWriteError(w, clusterUnsupportedError)
+				continue
+			}
 			if len(parts) != 3 {
 				_ = respWriteError(w, "wrong number of arguments for CSSREM")
 				return
@@ -1128,6 +1183,10 @@ func (s *cacheServer) handleConn(conn net.Conn) {
 			}
 			_ = respWriteInt(w, int64(n))
 		case "CSSMEMBERS":
+			if s.cluster != nil {
+				_ = respWriteError(w, clusterUnsupportedError)
+				continue
+			}
 			if len(parts) != 2 {
 				_ = respWriteError(w, "wrong number of arguments for CSSMEMBERS")
 				return
@@ -1150,6 +1209,10 @@ func (s *cacheServer) handleConn(conn net.Conn) {
 			}
 			_ = respWriteArrayOfBulks(w, members)
 		case "CSSETNX":
+			if s.cluster != nil {
+				_ = respWriteError(w, clusterUnsupportedError)
+				continue
+			}
 			if len(parts) != 3 && len(parts) != 4 {
 				_ = respWriteError(w, "wrong number of arguments for CSSETNX")
 				return
@@ -1170,6 +1233,10 @@ func (s *cacheServer) handleConn(conn net.Conn) {
 			}
 			_ = respWriteInt(w, int64(n))
 		case "CSKEYS":
+			if s.cluster != nil {
+				_ = respWriteError(w, clusterUnsupportedError)
+				continue
+			}
 			if len(parts) != 1 && len(parts) != 2 && len(parts) != 3 {
 				_ = respWriteError(w, "wrong number of arguments for CSKEYS")
 				return
@@ -1201,6 +1268,10 @@ func (s *cacheServer) handleConn(conn net.Conn) {
 			}
 			_ = respWriteArrayOfBulks(w, keys)
 		case "CSPUBLISH":
+			if s.cluster != nil {
+				_ = respWriteError(w, clusterUnsupportedError)
+				continue
+			}
 			if len(parts) != 3 {
 				_ = respWriteError(w, "wrong number of arguments for CSPUBLISH")
 				return
@@ -1212,6 +1283,10 @@ func (s *cacheServer) handleConn(conn net.Conn) {
 			}
 			_ = respWriteInt(w, int64(n))
 		case "CSSUBSCRIBE":
+			if s.cluster != nil {
+				_ = respWriteError(w, clusterUnsupportedError)
+				continue
+			}
 			if len(parts) != 3 {
 				_ = respWriteError(w, "wrong number of arguments for CSSUBSCRIBE")
 				return
