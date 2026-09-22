@@ -23,6 +23,7 @@ import signal
 import struct
 import sys
 import tempfile
+import threading
 import traceback
 from http import HTTPStatus
 from urllib.parse import unquote_to_bytes
@@ -37,6 +38,66 @@ class ClientDisconnected(Exception):
 # is included because uvloop raises it ("unable to perform operation ...; the
 # handler is closed") when the underlying socket has already been torn down.
 _CLIENT_DISCONNECT_ERRORS = (OSError, RuntimeError)
+
+_APP_EXCEPTION_LOG_LOCK = threading.Lock()
+_LOG_METHOD_MAX = 32
+_LOG_PATH_MAX = 512
+_LOG_WORKER_ID_MAX = 64
+
+
+def _log_safe(value, max_length):
+    """Return bounded, single-line text suitable for an exception log header."""
+    text = str(value)
+    escaped = []
+    for char in text:
+        if char.isprintable() and char not in "\r\n":
+            escaped.append(char)
+        else:
+            escaped.append(char.encode("unicode_escape", errors="backslashreplace").decode("ascii"))
+    text = "".join(escaped)
+    if len(text) > max_length:
+        text = text[: max_length - 3] + "..."
+    return text
+
+
+def _request_context(scope):
+    """Return a short ``METHOD path`` label from an ASGI/ESGI scope or WSGI environ."""
+    if not isinstance(scope, dict):
+        return ""
+    method = scope.get("method") or scope.get("REQUEST_METHOD") or ""
+    path = scope.get("path") or scope.get("PATH_INFO") or ""
+    method = _log_safe(method, _LOG_METHOD_MAX) if method else ""
+    path = _log_safe(path, _LOG_PATH_MAX) if path else ""
+    if method and path:
+        return f"{method} {path}"
+    return method or path
+
+
+def _log_app_exception(where, exc, scope=None):
+    """Print an unhandled app exception to worker stderr and flush.
+
+    Tracebacks stay in the Caddy/worker logs (workers inherit Caddy's stderr).
+    They are never included in the HTTP response.
+
+    Frameworks such as Starlette/FastAPI send a 500 and then re-raise so the
+    server can log. Always log, even after the response is already complete.
+    """
+    extras = []
+    worker_id = os.environ.get("CADDYSNAKE_WORKER_ID", "")
+    if worker_id:
+        extras.append(f"worker {_log_safe(worker_id, _LOG_WORKER_ID_MAX)}")
+    ctx = _request_context(scope)
+    if ctx:
+        extras.append(ctx)
+    suffix = f" ({', '.join(extras)})" if extras else ""
+    message = f"Unhandled exception in {where}{suffix}:\n"
+    message += "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
+
+    # WSGI apps run concurrently in a thread pool. Emit each header/traceback
+    # as one locked record so failures from different requests cannot interleave.
+    with _APP_EXCEPTION_LOG_LOCK:
+        sys.stderr.write(message)
+        sys.stderr.flush()
 
 
 def setup_paths(working_dir, venv):
@@ -356,7 +417,10 @@ class _WsgiInputStream:
         if self._eof:
             return b""
         fut = asyncio.run_coroutine_threadsafe(self._body_stream.read(max_bytes), self._loop)
-        data = fut.result()
+        try:
+            data = fut.result()
+        except (asyncio.IncompleteReadError, ConnectionError, OSError, ValueError) as exc:
+            raise ClientDisconnected from exc
         if not data:
             self._eof = True
         return data
@@ -445,6 +509,7 @@ def _call_wsgi_app(app, environ):
         return lambda s: None
 
     result = None
+    response = None
     try:
         result = app(environ, start_response)
         output = []
@@ -453,24 +518,36 @@ def _call_wsgi_app(app, environ):
             if chunk:
                 total += len(chunk)
                 if total > MAX_WSGI_RESPONSE_BODY:
-                    return (
+                    response = (
                         500,
                         [("Content-Type", "text/plain")],
                         b"WSGI response body exceeds 64 MiB limit",
                     )
+                    break
                 output.append(chunk)
-        if not response_started:
-            return 500, [("Content-Type", "text/plain")], b"Internal Server Error"
-        status_str, response_headers = response_started[0]
-        status_code = int(status_str.split(" ", 1)[0])
-        body = b"".join(output)
-        return status_code, response_headers, body
-    except Exception:
-        traceback.print_exc(file=sys.stderr)
-        return 500, [("Content-Type", "text/plain")], b"Internal Server Error"
+        if response is None:
+            if not response_started:
+                response = 500, [("Content-Type", "text/plain")], b"Internal Server Error"
+            else:
+                status_str, response_headers = response_started[0]
+                status_code = int(status_str.split(" ", 1)[0])
+                body = b"".join(output)
+                response = status_code, response_headers, body
+    except ClientDisconnected:
+        response = 500, [("Content-Type", "text/plain")], b"Internal Server Error"
+    except Exception as exc:
+        _log_app_exception("WSGI handler", exc, environ)
+        response = 500, [("Content-Type", "text/plain")], b"Internal Server Error"
     finally:
         if result is not None and hasattr(result, "close"):
-            result.close()
+            try:
+                result.close()
+            except ClientDisconnected:
+                response = 500, [("Content-Type", "text/plain")], b"Internal Server Error"
+            except Exception as exc:
+                _log_app_exception("WSGI response close", exc, environ)
+                response = 500, [("Content-Type", "text/plain")], b"Internal Server Error"
+    return response
 
 
 def _client_from_caddy_snake_headers(raw_headers):
@@ -891,7 +968,12 @@ async def _handle_asgi_http(writer, app, scope, body_stream):
     async def receive():
         nonlocal body_done
         if not body_done:
-            chunk = await body_stream.read()
+            try:
+                chunk = await body_stream.read()
+            except (asyncio.IncompleteReadError, ConnectionError, OSError, ValueError):
+                body_done = True
+                disconnect_event.set()
+                return {"type": "http.disconnect"}
             if chunk:
                 return {"type": "http.request", "body": chunk, "more_body": True}
             body_done = True
@@ -1026,7 +1108,11 @@ async def _handle_asgi_http(writer, app, scope, body_stream):
         if disconnect_event.is_set():
             return
         try:
-            if not response_started:
+            # response.start is buffered until the first body event. If those
+            # headers are still pending, no response bytes have reached Caddy
+            # and it is safe to replace any status with a generic 500.
+            if not response_started or pending_headers is not None:
+                pending_headers = None
                 _write_to_client(
                     b"HTTP/1.1 500 Internal Server Error\r\n"
                     b"Content-Length: 21\r\n\r\n"
@@ -1034,13 +1120,14 @@ async def _handle_asgi_http(writer, app, scope, body_stream):
                 )
                 await _drain_to_client()
             else:
-                if pending_headers is not None:
-                    pending_headers.extend(b"\r\n")
-                    _write_to_client(pending_headers)
-                    pending_headers = None
                 if use_chunked and not response_complete:
                     _write_to_client(b"0\r\n\r\n")
                 await _drain_to_client()
+                if not use_chunked and not response_complete:
+                    # A partial Content-Length response cannot be repaired or
+                    # reused safely. Closing prevents the next response from
+                    # being interpreted as bytes belonging to this one.
+                    writer.close()
         except ClientDisconnected:
             pass
 
@@ -1048,14 +1135,20 @@ async def _handle_asgi_http(writer, app, scope, body_stream):
         await app(scope, receive, send)
     except ClientDisconnected:
         pass
-    except Exception:
-        if not disconnect_event.is_set():
-            traceback.print_exc(file=sys.stderr)
+    except Exception as exc:
+        # Always log. Starlette/FastAPI send a 500 then re-raise; that sets
+        # disconnect_event when the error response completes, which used to
+        # swallow the traceback (https://github.com/mliezun/caddy-snake/issues/243).
+        _log_app_exception("ASGI HTTP handler", exc, scope)
+        if not response_complete:
             await _send_error_response()
     finally:
         disconnect_event.set()
         if not body_stream._done:
-            await body_stream.discard()
+            with contextlib.suppress(
+                asyncio.IncompleteReadError, ConnectionError, OSError, ValueError
+            ):
+                await body_stream.discard()
 
 
 async def _ws_close_with_code(writer, code):
@@ -1065,7 +1158,7 @@ async def _ws_close_with_code(writer, code):
     try:
         writer.write(frame)
         await writer.drain()
-    except (ConnectionError, OSError):
+    except _CLIENT_DISCONNECT_ERRORS:
         pass
 
 
@@ -1172,6 +1265,29 @@ async def _handle_asgi_websocket(reader, writer, app, scope, raw_headers):
     async def receive():
         return await receive_queue.get()
 
+    def _client_gone():
+        is_closing = getattr(writer, "is_closing", None)
+        if not callable(is_closing):
+            return False
+        try:
+            return is_closing() is True
+        except _CLIENT_DISCONNECT_ERRORS:
+            return True
+
+    def _write_to_client(data):
+        if _client_gone():
+            raise ClientDisconnected
+        try:
+            writer.write(data)
+        except _CLIENT_DISCONNECT_ERRORS:
+            raise ClientDisconnected from None
+
+    async def _drain_to_client():
+        try:
+            await writer.drain()
+        except _CLIENT_DISCONNECT_ERRORS:
+            raise ClientDisconnected from None
+
     async def send(message):
         nonlocal read_task
         msg_type = message["type"]
@@ -1194,8 +1310,8 @@ async def _handle_asgi_websocket(reader, writer, app, scope, raw_headers):
                     h_value = h_value.decode("latin-1")
                 response += f"{h_name}: {h_value}\r\n"
             response += "\r\n"
-            writer.write(response.encode("latin-1"))
-            await writer.drain()
+            _write_to_client(response.encode("latin-1"))
+            await _drain_to_client()
             ws_accepted.set()
             read_task = asyncio.create_task(_ws_read_loop(reader, receive_queue, ws_closed, writer))
 
@@ -1206,18 +1322,18 @@ async def _handle_asgi_websocket(reader, writer, app, scope, raw_headers):
                 frame = ws_build_frame(WS_OPCODE_BINARY, message["bytes"])
             else:
                 return
-            writer.write(frame)
-            await writer.drain()
+            _write_to_client(frame)
+            await _drain_to_client()
 
         elif msg_type == "websocket.close":
             if not ws_accepted.is_set():
                 # ASGI app rejected connection before accept: respond with HTTP 403
                 try:
-                    writer.write(
+                    _write_to_client(
                         b"HTTP/1.1 403 Forbidden\r\nContent-Length: 13\r\n\r\n403 Forbidden"
                     )
-                    await writer.drain()
-                except (ConnectionError, OSError):
+                    await _drain_to_client()
+                except ClientDisconnected:
                     pass
             else:
                 code = message.get("code", 1000)
@@ -1225,23 +1341,30 @@ async def _handle_asgi_websocket(reader, writer, app, scope, raw_headers):
                 payload = struct.pack("!H", code) + reason.encode("utf-8")
                 frame = ws_build_frame(WS_OPCODE_CLOSE, payload)
                 try:
-                    writer.write(frame)
-                    await writer.drain()
-                except (ConnectionError, OSError):
+                    _write_to_client(frame)
+                    await _drain_to_client()
+                except ClientDisconnected:
                     pass
             ws_closed.set()
 
     try:
         await app(scope, receive, send)
-    except Exception:
-        traceback.print_exc(file=sys.stderr)
+    except ClientDisconnected:
+        pass
+    except Exception as exc:
+        _log_app_exception("ASGI WebSocket handler", exc, scope)
         if not ws_accepted.is_set():
-            writer.write(
-                b"HTTP/1.1 500 Internal Server Error\r\n"
-                b"Content-Length: 21\r\n\r\n"
-                b"Internal Server Error"
-            )
-            await writer.drain()
+            try:
+                _write_to_client(
+                    b"HTTP/1.1 500 Internal Server Error\r\n"
+                    b"Content-Length: 21\r\n\r\n"
+                    b"Internal Server Error"
+                )
+                await _drain_to_client()
+            except ClientDisconnected:
+                pass
+        elif not ws_closed.is_set():
+            await _ws_close_with_code(writer, 1011)
     finally:
         ws_closed.set()
         if read_task and not read_task.done():
@@ -1643,10 +1766,16 @@ class _EsgiWsTransportSync:
         return self._q.get()
 
     def send_bytes(self, data: bytes) -> None:
-        self._sock.sendall(ws_build_frame(WS_OPCODE_BINARY, data))
+        try:
+            self._sock.sendall(ws_build_frame(WS_OPCODE_BINARY, data))
+        except OSError:
+            raise ClientDisconnected from None
 
     def send_str(self, data: str) -> None:
-        self._sock.sendall(ws_build_frame(WS_OPCODE_TEXT, data.encode("utf-8")))
+        try:
+            self._sock.sendall(ws_build_frame(WS_OPCODE_TEXT, data.encode("utf-8")))
+        except OSError:
+            raise ClientDisconnected from None
 
 
 class _EsgiWsRootProtocolSync:
@@ -1673,7 +1802,10 @@ class _EsgiWsRootProtocolSync:
             "Connection: Upgrade\r\n"
             f"Sec-WebSocket-Accept: {accept_value}\r\n\r\n"
         )
-        self._sock.sendall(response.encode("latin-1"))
+        try:
+            self._sock.sendall(response.encode("latin-1"))
+        except OSError:
+            raise ClientDisconnected from None
         self._q = gevent.queue.Queue()
         import gevent
 
@@ -1724,11 +1856,14 @@ class _EsgiHttpProtocolSync:
             raise RuntimeError("request body already consumed")
         self._body_started = True
         chunks = []
-        while True:
-            chunk = self._body_stream.read()
-            if not chunk:
-                break
-            chunks.append(chunk)
+        try:
+            while True:
+                chunk = self._body_stream.read()
+                if not chunk:
+                    break
+                chunks.append(chunk)
+        except (OSError, ValueError):
+            raise ClientDisconnected from None
         return b"".join(chunks)
 
     def iter_body(self):
@@ -1737,11 +1872,14 @@ class _EsgiHttpProtocolSync:
         self._body_started = True
 
         def gen():
-            while True:
-                chunk = self._body_stream.read()
-                if not chunk:
-                    break
-                yield chunk
+            try:
+                while True:
+                    chunk = self._body_stream.read()
+                    if not chunk:
+                        break
+                    yield chunk
+            except (OSError, ValueError):
+                raise ClientDisconnected from None
 
         return gen()
 
@@ -1764,7 +1902,10 @@ class _EsgiHttpProtocolSync:
         buf.extend(b"\r\n")
         buf.extend(body)
         # sendall accepts any buffer; avoid copying the full response again.
-        self._sock.sendall(buf)
+        try:
+            self._sock.sendall(buf)
+        except OSError:
+            raise ClientDisconnected from None
 
     def response_empty(self, status: int, headers: list) -> None:
         self.response_bytes(status, headers, b"")
@@ -1811,8 +1952,10 @@ def _handle_esgi_http_sync(
     protocol = _EsgiHttpProtocolSync(sock, body_stream)
     try:
         _invoke_esgi_app(app, scope, protocol)
-    except Exception:
-        traceback.print_exc(file=sys.stderr)
+    except ClientDisconnected:
+        pass
+    except Exception as exc:
+        _log_app_exception("ESGI HTTP handler", exc, scope)
         if not protocol._responded:
             with contextlib.suppress(Exception):
                 protocol.response_bytes(
@@ -1829,8 +1972,10 @@ def _handle_esgi_websocket_sync(sock, app, raw_headers, headers_list, version, p
     ws_proto = _EsgiWsRootProtocolSync(sock, raw_headers)
     try:
         _invoke_esgi_app(app, scope, ws_proto)
-    except Exception:
-        traceback.print_exc(file=sys.stderr)
+    except ClientDisconnected:
+        pass
+    except Exception as exc:
+        _log_app_exception("ESGI WebSocket handler", exc, scope)
         if not ws_proto._accepted:
             with contextlib.suppress(OSError):
                 sock.sendall(
@@ -1900,8 +2045,8 @@ def run_esgi_server(app, socket_path: str, runtime: str):
     if hasattr(app, "__esgi_init__"):
         try:
             app.__esgi_init__()
-        except Exception:
-            traceback.print_exc(file=sys.stderr)
+        except Exception as exc:
+            _log_app_exception("ESGI startup", exc)
             sys.exit(1)
 
     def handle(sock, _addr):
@@ -1953,8 +2098,8 @@ def run_esgi_server(app, socket_path: str, runtime: str):
         if hasattr(app, "__esgi_del__"):
             try:
                 app.__esgi_del__()
-            except Exception:
-                traceback.print_exc(file=sys.stderr)
+            except Exception as exc:
+                _log_app_exception("ESGI shutdown", exc)
         if server is not None:
             with contextlib.suppress(Exception):
                 server.close()
@@ -2113,8 +2258,8 @@ async def _handle_asgi_lifespan(app, state, startup_timeout=None):
         nonlocal startup_failed
         try:
             await app(scope, receive, send)
-        except Exception:
-            traceback.print_exc(file=sys.stderr)
+        except Exception as exc:
+            _log_app_exception("ASGI lifespan handler", exc, scope)
             startup_failed = True
             if not startup_complete.is_set():
                 startup_failed = True

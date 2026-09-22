@@ -42,7 +42,12 @@ async def store_item(id: str, item: Item):
 
 @app.delete("/item/{id}")
 async def delete_item(id: str):
-    del db[id]
+    try:
+        del db[id]
+    except KeyError:
+        # The load test deliberately deletes each item twice. Keep that
+        # expected 404 out of the unhandled-exception log coverage.
+        return Response(status_code=404)
     return "Deleted"
 
 
@@ -91,3 +96,12 @@ async def encoding_scope(name: str, request: Request):
         "path_ords": [hex(ord(c)) for c in path],
         "raw_path_hex": raw_path.hex(),
     }
+
+
+@app.get("/stream/boom")
+async def boom():
+    """Used by integration tests to verify runtime exceptions are logged.
+
+    Mounted under /stream/* so the FastAPI Caddyfile routes it to a worker.
+    """
+    raise RuntimeError("intentional-boom")

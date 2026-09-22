@@ -111,6 +111,8 @@ python {
 
 Request bodies are streamed to the app; there is no worker-imposed upload size cap. Limit bodies with the [`request_body`](#request_body) subdirective (or Caddy's site-level [`request_body`](https://caddyserver.com/docs/caddyfile/directives/request_body) handler). See [Architecture: limits](architecture.md#limits-to-know).
 
+Unhandled exceptions in WSGI, ASGI, and ESGI apps are printed to the **Caddy process stderr** (inherited by local workers and relayed for Docker-isolated workers), including the request method and path — not in the HTTP response. The client receives a generic HTTP 500 if a response has not started; an already-started response is safely terminated. FastAPI/Starlette send a 500 and re-raise so the server can log; caddy-snake logs that re-raise. See [Architecture: runtime errors](architecture.md#runtime-errors).
+
 ### `module_esgi`
 
 Specifies an [ESGI](esgi) application using the `module:variable` pattern (a synchronous `application(scope, protocol)` or `__esgi__` callable).

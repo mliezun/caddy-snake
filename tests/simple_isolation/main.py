@@ -28,6 +28,9 @@ def wsgi_app(environ, start_response):
         }
         return respond(200, json.dumps(payload).encode(), "application/json")
 
+    if path == "/boom":
+        raise RuntimeError("isolated-intentional-boom")
+
     if path == "/fs/outside":
         target = qs.split("=", 1)[1] if qs.startswith("path=") else ""
         if not target:
