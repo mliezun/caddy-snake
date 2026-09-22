@@ -81,6 +81,16 @@ import click
     is_flag=True,
     help="Mount isolated container root filesystem read-only",
 )
+@click.option(
+    "--cache-mode",
+    type=click.Choice(["local", "cluster"], case_sensitive=False),
+    help="Cache topology: local (default) or cluster",
+)
+@click.option("--cache-listen", help="TCP host:port for cluster peer RPC")
+@click.option("--cache-advertise", help="Dialable host:port identifying this cluster peer")
+@click.option("--cache-peer", multiple=True, help="Static cluster peer host:port (repeatable)")
+@click.option("--cache-namespace", help="Cluster cache namespace shared by all peers")
+@click.option("--cache-secret", help="Cluster peer shared secret (16-4096 bytes)")
 @click.option("--max-dynamic-apps", help="Max distinct dynamic Python apps (default: 128)")
 @click.option(
     "--request-body-max-size",
@@ -112,6 +122,12 @@ def main(
     isolation_memory,
     isolation_cpus,
     isolation_read_only,
+    cache_mode,
+    cache_listen,
+    cache_advertise,
+    cache_peer,
+    cache_namespace,
+    cache_secret,
     max_dynamic_apps,
     request_body_max_size,
 ):
@@ -187,6 +203,18 @@ def main(
         args.extend(["--isolation-cpus", isolation_cpus])
     if isolation_read_only:
         args.append("--isolation-read-only")
+    if cache_mode:
+        args.extend(["--cache-mode", cache_mode])
+    if cache_listen:
+        args.extend(["--cache-listen", cache_listen])
+    if cache_advertise:
+        args.extend(["--cache-advertise", cache_advertise])
+    for peer in cache_peer:
+        args.extend(["--cache-peer", peer])
+    if cache_namespace:
+        args.extend(["--cache-namespace", cache_namespace])
+    if cache_secret:
+        args.extend(["--cache-secret", cache_secret])
     if max_dynamic_apps:
         args.extend(["--max-dynamic-apps", max_dynamic_apps])
     if request_body_max_size:

@@ -120,5 +120,6 @@ python {
 
 - Joined WSGI responses are capped at **64 MiB** in the worker. Stream large downloads from ASGI instead.
 - The [shared worker cache](reference.md#shared-worker-cache) is **not** a tenant boundary — prefix keys or use an external store.
+- Optional cluster-cache mode rendezvous-hashes each scalar key to one static peer. It has no replication, migration, or fallback writes; an unavailable owner makes its keys unavailable.
 - Dynamic app cache is bounded; large tenant counts need higher limits or external routing.
 - Docker isolation hardens the worker sandbox; it does not isolate the shared cache.

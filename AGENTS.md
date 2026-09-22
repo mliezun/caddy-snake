@@ -80,6 +80,8 @@ Whenever you add or change a `python { ... }` subdirective (or a field on `Caddy
 | `env_var <name> <value>` | `--env-var NAME=VALUE` (repeatable) |
 | `isolation docker { image ... }` | `--isolation docker` + `--isolation-image` (+ optional `--isolation-network`, `--isolation-docker-host`, `--isolation-memory`, `--isolation-cpus`, `--isolation-read-only`) |
 | `isolation none` | `--isolation none` |
+| `cache local` | `--cache-mode local` |
+| `cache cluster { ... }` | `--cache-mode cluster` + `--cache-listen` + `--cache-advertise` + repeatable `--cache-peer` + `--cache-namespace` + `--cache-secret` |
 | `request_body { max_size <size> }` | `--request-body-max-size` |
 
 CLI-only conveniences (no Caddyfile `python` equivalent) are fine to keep separate: `--domain`, `--listen` (default `127.0.0.1:9080`), `--static-path`, `--static-route`, `--debug`, `--access-logs`.
@@ -141,7 +143,7 @@ For full CI-like integration tests without local Python/venv setup:
 ./tests/integration.sh fastapi 3.13
 ```
 
-Valid tools: `django`, `django_channels`, `flask`, `fastapi`, `simple_autoreload`, `simple_async`, `simple_esgi`, `simple_cache`, `simple_start_timeout`, `simple_isolation`, `simple_request_body`, `socketio`, `dynamic`
+Valid tools: `django`, `django_channels`, `flask`, `fastapi`, `simple_autoreload`, `simple_async`, `simple_esgi`, `simple_cache`, `simple_cluster_cache`, `simple_start_timeout`, `simple_isolation`, `simple_request_body`, `socketio`, `dynamic`
 Valid Python versions: `3.12`, `3.13`, `3.13-nogil`, `3.14`, `3.14-nogil`
 
 Requires **Docker** (linux/amd64 container).
