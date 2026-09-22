@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+import time
 from pathlib import Path
 
 import requests
@@ -41,6 +42,36 @@ def test_filesystem_isolation():
         timeout=30,
     )
     assert r.status_code == 403, r.text
+
+
+def test_runtime_exception_is_relayed_to_caddy_log(log_path: str = "caddy.log"):
+    """Docker-isolated workers must expose runtime tracebacks like local workers."""
+    with open(log_path, "rb") as fd:
+        fd.seek(0, os.SEEK_END)
+        log_offset = fd.tell()
+
+    response = requests.get(f"{BASE_URL}/boom", timeout=30)
+    assert response.status_code == 500, response.text
+    assert b"isolated-intentional-boom" not in response.content
+    assert b"Traceback" not in response.content
+
+    deadline = time.time() + 5
+    logs = ""
+    while time.time() < deadline:
+        with open(log_path, encoding="utf-8", errors="replace") as fd:
+            fd.seek(log_offset)
+            logs = fd.read()
+        if "RuntimeError: isolated-intentional-boom" in logs:
+            break
+        time.sleep(0.1)
+    else:
+        raise AssertionError(
+            "expected isolated worker traceback in caddy.log, got:\n" + logs[-4000:]
+        )
+
+    assert "Unhandled exception in WSGI handler" in logs
+    assert "GET /boom" in logs
+    assert "Traceback (most recent call last)" in logs
 
 
 def test_no_leftover_worker_containers_leftover():

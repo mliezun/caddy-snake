@@ -42,14 +42,21 @@ class TestRequestContext:
         assert cs._request_context({"method": "GET"}) == "GET"
         assert cs._request_context({"path": "/only"}) == "/only"
 
+    def test_context_is_single_line_and_bounded(self):
+        context = cs._request_context({"method": "GET\nforged", "path": "/" + "x" * 600})
+        assert "\n" not in context
+        assert "GET\\nforged" in context
+        assert context.endswith("...")
+        assert len(context) <= cs._LOG_METHOD_MAX + 1 + cs._LOG_PATH_MAX
+
 
 class TestLogAppException:
     def test_includes_where_and_traceback(self, capsys, monkeypatch):
         monkeypatch.setenv("CADDYSNAKE_WORKER_ID", "3")
         try:
             raise ValueError("nope")
-        except ValueError:
-            cs._log_app_exception("unit test", {"method": "GET", "path": "/x"})
+        except ValueError as exc:
+            cs._log_app_exception("unit test", exc, {"method": "GET", "path": "/x"})
         err = capsys.readouterr().err
         assert "Unhandled exception in unit test (worker 3, GET /x):" in err
         assert "ValueError: nope" in err
@@ -663,6 +670,61 @@ class TestHandleAsgiHttp:
         out = b"".join(written)
         assert b"500 Internal Server Error" in out
 
+    async def test_app_exception_after_buffered_start_replaces_status_with_500(self):
+        async def app(scope, receive, send):
+            await send({"type": "http.response.start", "status": 200, "headers": []})
+            raise RuntimeError("boom-after-start")
+
+        async def _drain():
+            pass
+
+        written = []
+        writer = mock.Mock()
+        writer.write = lambda data: written.append(data)
+        writer.drain = _drain
+        writer.is_closing = lambda: False
+
+        scope = {"type": "http", "method": "GET", "path": "/buffered"}
+        body_stream = cs._HttpBodyStream(asyncio.StreamReader(), content_length=0)
+        await cs._handle_asgi_http(writer, app, scope, body_stream)
+
+        out = b"".join(written)
+        assert b"HTTP/1.1 500 Internal Server Error" in out
+        assert b"HTTP/1.1 200 OK" not in out
+
+    async def test_app_exception_after_partial_content_length_closes_connection(self):
+        async def app(scope, receive, send):
+            await send(
+                {
+                    "type": "http.response.start",
+                    "status": 200,
+                    "headers": [(b"content-length", b"10")],
+                }
+            )
+            await send(
+                {
+                    "type": "http.response.body",
+                    "body": b"short",
+                    "more_body": True,
+                }
+            )
+            raise RuntimeError("boom-mid-body")
+
+        async def _drain():
+            pass
+
+        writer = mock.Mock()
+        writer.write = lambda data: None
+        writer.drain = _drain
+        writer.is_closing = lambda: False
+        writer.close = mock.Mock()
+
+        scope = {"type": "http", "method": "GET", "path": "/partial"}
+        body_stream = cs._HttpBodyStream(asyncio.StreamReader(), content_length=0)
+        await cs._handle_asgi_http(writer, app, scope, body_stream)
+
+        writer.close.assert_called_once_with()
+
     async def test_app_exception_before_start_logs_traceback(self, capsys):
         async def app(scope, receive, send):
             raise RuntimeError("boom-before-start")
@@ -750,6 +812,32 @@ class TestHandleAsgiHttp:
         body_stream = cs._HttpBodyStream(asyncio.StreamReader(), content_length=0)
         await cs._handle_asgi_http(writer, app, scope, body_stream)
 
+        err = capsys.readouterr().err
+        assert "Unhandled exception" not in err
+        assert "Traceback" not in err
+
+    async def test_client_disconnect_while_reading_body_does_not_log_traceback(self, capsys):
+        events = []
+
+        async def app(scope, receive, send):
+            events.append(await receive())
+
+        async def _drain():
+            pass
+
+        writer = mock.Mock()
+        writer.write = lambda data: None
+        writer.drain = _drain
+        writer.is_closing = lambda: False
+
+        reader = asyncio.StreamReader()
+        reader.feed_data(b"partial")
+        reader.feed_eof()
+        body_stream = cs._HttpBodyStream(reader, content_length=20)
+        scope = {"type": "http", "method": "POST", "path": "/upload"}
+        await cs._handle_asgi_http(writer, app, scope, body_stream)
+
+        assert events == [{"type": "http.disconnect"}]
         err = capsys.readouterr().err
         assert "Unhandled exception" not in err
         assert "Traceback" not in err
@@ -978,6 +1066,58 @@ class TestHandleAsgiWebsocket:
         assert "GET /ws" in err
         assert "RuntimeError: ws-boom" in err
 
+    async def test_app_exception_after_accept_logs_and_closes_1011(self, capsys):
+        async def _drain():
+            pass
+
+        written = []
+        writer = mock.Mock()
+        writer.write = lambda data: written.append(data)
+        writer.drain = _drain
+        writer.is_closing = lambda: False
+
+        async def app(scope, receive, send):
+            await receive()
+            await send({"type": "websocket.accept"})
+            raise RuntimeError("accepted-ws-boom")
+
+        reader = asyncio.StreamReader()
+        reader.feed_eof()
+        scope = {"type": "websocket", "path": "/ws", "method": "GET"}
+        await cs._handle_asgi_websocket(
+            reader, writer, app, scope, {"sec-websocket-key": "dGhlIHNhbXBsZSBub25jZQ=="}
+        )
+
+        out = b"".join(written)
+        assert b"101 Switching Protocols" in out
+        assert cs._ws_close_frame_bytes(1011) in out
+        err = capsys.readouterr().err
+        assert "RuntimeError: accepted-ws-boom" in err
+
+    async def test_client_disconnect_while_sending_does_not_log_traceback(self, capsys):
+        async def _drain():
+            pass
+
+        writer = mock.Mock()
+        writer.write = mock.Mock(side_effect=BrokenPipeError("gone"))
+        writer.drain = _drain
+        writer.is_closing = lambda: False
+
+        async def app(scope, receive, send):
+            await receive()
+            await send({"type": "websocket.accept"})
+
+        reader = asyncio.StreamReader()
+        reader.feed_eof()
+        scope = {"type": "websocket", "path": "/ws", "method": "GET"}
+        await cs._handle_asgi_websocket(
+            reader, writer, app, scope, {"sec-websocket-key": "dGhlIHNhbXBsZSBub25jZQ=="}
+        )
+
+        err = capsys.readouterr().err
+        assert "Unhandled exception" not in err
+        assert "Traceback" not in err
+
 
 # ==================== ASGI _handle_asgi_connection ====================
 
@@ -1176,7 +1316,7 @@ class TestHandleAsgiLifespan:
         assert ok is False
         assert shutdown_fn is None
 
-    async def test_startup_exception_is_failure(self):
+    async def test_startup_exception_is_failure(self, capsys):
         async def app(scope, receive, send):
             _ = await receive()
             raise RuntimeError("startup crash")
@@ -1184,6 +1324,9 @@ class TestHandleAsgiLifespan:
         ok, shutdown_fn = await cs._handle_asgi_lifespan(app, {})
         assert ok is False
         assert shutdown_fn is None
+        err = capsys.readouterr().err
+        assert "Unhandled exception in ASGI lifespan handler" in err
+        assert "RuntimeError: startup crash" in err
 
     async def test_startup_timeout_is_failure(self):
         async def app(scope, receive, send):
@@ -1270,6 +1413,31 @@ class TestCallWsgiApp:
         environ = {"REQUEST_METHOD": "GET", "wsgi.input": __import__("io").BytesIO(b"")}
         cs._call_wsgi_app(app, environ)
         assert closed == [True]
+
+    def test_close_exception_is_logged_and_returns_500(self, capsys):
+        class Result:
+            def __iter__(self):
+                return iter([b"data"])
+
+            def close(self):
+                raise RuntimeError("close-boom")
+
+        def app(environ, start_response):
+            start_response("200 OK", [])
+            return Result()
+
+        environ = {
+            "REQUEST_METHOD": "GET",
+            "PATH_INFO": "/close-boom",
+            "wsgi.input": io.BytesIO(b""),
+        }
+        status, _, body = cs._call_wsgi_app(app, environ)
+
+        assert status == 500
+        assert body == b"Internal Server Error"
+        err = capsys.readouterr().err
+        assert "Unhandled exception in WSGI response close" in err
+        assert "RuntimeError: close-boom" in err
 
 
 # ==================== WSGI _build_wsgi_environ ====================
@@ -1885,6 +2053,85 @@ class TestEsgiHelpers:
         )
         assert scope["proto"] == "ws"
         assert scope["scheme"] == "wss"
+
+
+class TestEsgiExceptionLogging:
+    class BodyStream:
+        _done = True
+
+        def discard(self):
+            pass
+
+    def test_http_app_exception_logs_and_sends_500(self, capsys):
+        sock = mock.Mock()
+        written = []
+        sock.sendall = lambda data: written.append(bytes(data))
+
+        def app(scope, protocol):
+            raise RuntimeError("esgi-http-boom")
+
+        cs._handle_esgi_http_sync(
+            sock,
+            app,
+            "GET",
+            "/esgi-boom",
+            "HTTP/1.1",
+            [(b"host", b"x")],
+            {"host": "x"},
+            self.BodyStream(),
+        )
+
+        assert b"500 Internal Server Error" in b"".join(written)
+        err = capsys.readouterr().err
+        assert "Unhandled exception in ESGI HTTP handler" in err
+        assert "GET /esgi-boom" in err
+        assert "RuntimeError: esgi-http-boom" in err
+
+    def test_websocket_app_exception_logs_and_sends_500(self, capsys):
+        sock = mock.Mock()
+        written = []
+        sock.sendall = lambda data: written.append(bytes(data))
+
+        def app(scope, protocol):
+            raise RuntimeError("esgi-ws-boom")
+
+        cs._handle_esgi_websocket_sync(
+            sock,
+            app,
+            {"host": "x", "sec-websocket-key": "test"},
+            [(b"host", b"x")],
+            "HTTP/1.1",
+            "/esgi-ws",
+            "GET",
+        )
+
+        assert b"500 Internal Server Error" in b"".join(written)
+        err = capsys.readouterr().err
+        assert "Unhandled exception in ESGI WebSocket handler" in err
+        assert "GET /esgi-ws" in err
+        assert "RuntimeError: esgi-ws-boom" in err
+
+    def test_http_client_disconnect_does_not_log_traceback(self, capsys):
+        sock = mock.Mock()
+        sock.sendall = mock.Mock(side_effect=BrokenPipeError("gone"))
+
+        def app(scope, protocol):
+            protocol.response_bytes(200, [], b"ok")
+
+        cs._handle_esgi_http_sync(
+            sock,
+            app,
+            "GET",
+            "/gone",
+            "HTTP/1.1",
+            [(b"host", b"x")],
+            {"host": "x"},
+            self.BodyStream(),
+        )
+
+        err = capsys.readouterr().err
+        assert "Unhandled exception" not in err
+        assert "Traceback" not in err
 
 
 # ==================== WSGI Handler (async) ====================

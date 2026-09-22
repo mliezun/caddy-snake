@@ -42,7 +42,12 @@ async def store_item(id: str, item: Item):
 
 @app.delete("/item/{id}")
 async def delete_item(id: str):
-    del db[id]
+    try:
+        del db[id]
+    except KeyError:
+        # The load test deliberately deletes each item twice. Keep that
+        # expected 404 out of the unhandled-exception log coverage.
+        return Response(status_code=404)
     return "Deleted"
 
 

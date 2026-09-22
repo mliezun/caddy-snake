@@ -37,6 +37,8 @@ type dockerWorkerHandle struct {
 	dialNet     string
 	dialAddr    string
 	exited      chan error
+	logCancel   context.CancelFunc
+	logDone     <-chan struct{}
 }
 
 func (b dockerBackend) Start(ctx context.Context, spec WorkerSpec) (WorkerHandle, error) {
@@ -187,6 +189,13 @@ func (b dockerBackend) Start(ctx context.Context, spec WorkerSpec) (WorkerHandle
 		return nil, err
 	}
 
+	logCancel, logDone, err := b.followContainerLogs(containerID)
+	if err != nil {
+		_ = b.removeContainer(ctx, containerID)
+		os.RemoveAll(portDir)
+		return nil, err
+	}
+
 	return &dockerWorkerHandle{
 		containerID: containerID,
 		portFile:    portFileHost,
@@ -194,6 +203,8 @@ func (b dockerBackend) Start(ctx context.Context, spec WorkerSpec) (WorkerHandle
 		dialNet:     "tcp",
 		dialAddr:    net.JoinHostPort(containerIP, strconv.Itoa(port)),
 		exited:      exited,
+		logCancel:   logCancel,
+		logDone:     logDone,
 	}, nil
 }
 
@@ -209,11 +220,43 @@ func (b dockerBackend) Stop(handle WorkerHandle, grace time.Duration) error {
 	ctx, cancel := context.WithTimeout(context.Background(), grace+10*time.Second)
 	defer cancel()
 	_ = b.stopContainer(ctx, h.containerID, grace)
+	if h.logDone != nil {
+		select {
+		case <-h.logDone:
+		case <-time.After(2 * time.Second):
+		}
+	}
+	if h.logCancel != nil {
+		h.logCancel()
+	}
 	_ = b.removeContainer(ctx, h.containerID)
 	if h.portDir != "" {
 		_ = os.RemoveAll(h.portDir)
 	}
 	return nil
+}
+
+// followContainerLogs relays a detached worker's stdout/stderr to the Caddy
+// process streams. Without this, runtime tracebacks are only visible through a
+// separate `docker logs` command and isolation behaves differently from local
+// process workers.
+func (b dockerBackend) followContainerLogs(containerID string) (context.CancelFunc, <-chan struct{}, error) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cmd := exec.CommandContext(ctx, "docker", "logs", "--follow", containerID)
+	cmd.Env = append(os.Environ(), b.dockerEnv()...)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Start(); err != nil {
+		cancel()
+		return nil, nil, fmt.Errorf("follow docker worker logs: %w", err)
+	}
+
+	done := make(chan struct{})
+	go func() {
+		_ = cmd.Wait()
+		close(done)
+	}()
+	return cancel, done, nil
 }
 
 func dockerWorkerContainerName(workerID string) string {
