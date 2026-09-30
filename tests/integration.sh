@@ -15,13 +15,14 @@ set -euo pipefail
 #
 # Valid tool names:
 #   django, django_channels, flask, fastapi, simple_autoreload, simple_async,
-#   simple_esgi, simple_cache, simple_start_timeout, simple_isolation, simple_request_body, socketio, dynamic
+#   simple_esgi, simple_cache, simple_cluster_cache, simple_start_timeout,
+#   simple_isolation, simple_request_body, socketio, dynamic
 #
 # Valid python versions:
 #   3.12, 3.13, 3.13-nogil, 3.14, 3.14-nogil
 # ---------------------------------------------------------------------------
 
-VALID_TOOLS=("django" "django_channels" "flask" "fastapi" "simple_autoreload" "simple_async" "simple_esgi" "simple_cache" "simple_start_timeout" "simple_isolation" "simple_request_body" "socketio" "dynamic")
+VALID_TOOLS=("django" "django_channels" "flask" "fastapi" "simple_autoreload" "simple_async" "simple_esgi" "simple_cache" "simple_cluster_cache" "simple_start_timeout" "simple_isolation" "simple_request_body" "socketio" "dynamic")
 VALID_PYVERSIONS=("3.12" "3.13" "3.13-nogil" "3.14" "3.14-nogil")
 
 usage() {
@@ -139,7 +140,7 @@ else
   pip install -r requirements.txt
 fi
 
-if [[ "$TOOL_NAME" == "simple_cache" ]]; then
+if [[ "$TOOL_NAME" == "simple_cache" || "$TOOL_NAME" == "simple_cluster_cache" ]]; then
   echo ">>> Installing Rust via rustup (Cargo.lock v4) + build deps for maturin..."
   apt-get install -yyqq build-essential pkg-config "python${PY_PKG_VERSION}-dev"
   curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain stable
@@ -180,11 +181,18 @@ else
   if [[ "$TOOL_NAME" == "simple_isolation" ]]; then
     export CADDYSNAKE_ISOLATION_PROBE_SECRET=host-only-secret
   fi
+  if [[ "$TOOL_NAME" == "simple_cluster_cache" ]]; then
+    export CADDYSNAKE_CLUSTER_SECRET=0123456789abcdef0123456789abcdef
+  fi
   ./caddy run --config Caddyfile > caddy.log 2>&1 &
   CADDY_PID=$!
 
   echo ">>> Waiting for caddy to be ready..."
-  timeout "${READY_TIMEOUT}" bash -c 'while ! grep -q "finished cleaning storage units" caddy.log; do sleep 1; done'
+  if [[ "$TOOL_NAME" == "simple_cluster_cache" ]]; then
+    timeout "${READY_TIMEOUT}" bash -c 'while ! grep -q "server running" caddy.log; do sleep 1; done'
+  else
+    timeout "${READY_TIMEOUT}" bash -c 'while ! grep -q "finished cleaning storage units" caddy.log; do sleep 1; done'
+  fi
   echo ">>> Caddy is ready (PID=${CADDY_PID})"
 
   echo ">>> Running tests..."

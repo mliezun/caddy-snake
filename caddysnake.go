@@ -172,6 +172,9 @@ type CaddySnake struct {
 	EnvVars map[string]string `json:"env_vars,omitempty"`
 	// Worker isolation backend. Omit or "none" for local subprocess workers; "docker" runs each worker in a container.
 	Isolation *IsolationConfig `json:"isolation,omitempty"`
+	// Cache topology. Omit or use mode "local" for the in-process cache;
+	// mode "cluster" enables authenticated static-peer scalar storage.
+	Cache *CacheConfig `json:"cache,omitempty"`
 	// Dynamic mode limits (ignored when module/working_dir/venv have no placeholders).
 	// MaxDynamicApps: empty uses env/default (CADDYSNAKE_MAX_DYNAMIC_APPS, usually 128);
 	// a positive value sets the site cap (0 is rejected).
@@ -437,6 +440,10 @@ func (f *CaddySnake) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 					if err := parseIsolationCaddyfile(d, &f.Isolation); err != nil {
 						return err
 					}
+				case "cache":
+					if err := parseCacheCaddyfile(d, &f.Cache); err != nil {
+						return err
+					}
 				case "request_body":
 					if err := parseRequestBodyCaddyfile(d, f); err != nil {
 						return err
@@ -469,9 +476,9 @@ func (f *CaddySnake) Provision(ctx caddy.Context) error {
 	var err error
 	f.logger = ctx.Logger(f)
 
-	cs, err := startCacheServerForIsolation(f.Isolation)
+	cs, err := startCacheServerForIsolationWithConfig(ctx, f.Isolation, f.Cache)
 	if err != nil {
-		return fmt.Errorf("in-process cache: %w", err)
+		return fmt.Errorf("cache: %w", err)
 	}
 	f.cacheSrv = cs
 	cacheAddr := cs.Addr()
@@ -680,6 +687,9 @@ func (m *CaddySnake) Validate() error {
 		return err
 	}
 	if err := m.validateIsolation(); err != nil {
+		return err
+	}
+	if err := m.Cache.validate(); err != nil {
 		return err
 	}
 	if m.Isolation != nil && m.Isolation.usesDocker() && runtime.GOOS == "windows" {
@@ -1196,6 +1206,9 @@ func init() {
 			"[--static-path <path>] [--static-route <route>] " +
 			"[--runtime <name>] [--lifespan on|off] " +
 			"[--isolation none|docker] [--isolation-image <image>] " +
+			"[--cache-mode local|cluster] [--cache-listen <addr>] " +
+			"[--cache-advertise <addr>] [--cache-peer <addr>] " +
+			"[--cache-namespace <name>] [--cache-secret <secret>] " +
 			"[--max-dynamic-apps <count>] " +
 			"[--request-body-max-size <size>] " +
 			"[--debug] [--access-logs] [--autoreload]",
@@ -1205,7 +1218,7 @@ A Python WSGI, ASGI, or ESGI server designed for apps and frameworks.
 
 Python-block options mirror the Caddyfile python directive (workers, venv,
 working_dir, env_file, env_var, start_timeout, runtime, lifespan, autoreload,
-python_path, request_body). CLI-only flags cover listen address, HTTPS domain, and static files.
+python_path, cache, request_body). CLI-only flags cover listen address, HTTPS domain, and static files.
 
 For an indefinite readiness wait use --start-timeout=-1 (equals form) or
 --start-timeout forever. Do not pass a bare "-1" as a separate argv token;
@@ -1242,6 +1255,12 @@ Ensure DNS A/AAAA records are correctly set up if using a public domain for secu
 			cmd.Flags().String("isolation-memory", "", "Docker memory limit for isolated workers (e.g. 512m)")
 			cmd.Flags().String("isolation-cpus", "", "Docker CPU limit for isolated workers (e.g. 1.0)")
 			cmd.Flags().Bool("isolation-read-only", false, "Mount container root filesystem read-only for isolated workers")
+			cmd.Flags().String("cache-mode", "", "Cache topology: local (default) or cluster")
+			cmd.Flags().String("cache-listen", "", "TCP host:port for cluster peer RPC")
+			cmd.Flags().String("cache-advertise", "", "Dialable host:port identifying this cluster peer")
+			cmd.Flags().StringSlice("cache-peer", nil, "Static cluster peer host:port (repeatable)")
+			cmd.Flags().String("cache-namespace", "", "Cluster cache namespace shared by all peers")
+			cmd.Flags().String("cache-secret", "", "Cluster peer shared secret (16-4096 bytes)")
 			cmd.Flags().String("max-dynamic-apps", "", "Max distinct dynamic Python apps (empty = env/default, usually 128)")
 			cmd.Flags().String("request-body-max-size", "", "Maximum HTTP request body size (e.g. 1KiB, 2GB). Empty means unlimited.")
 			cmd.RunE = caddycmd.WrapCommandFuncForCobra(pythonServer)
@@ -1278,6 +1297,11 @@ func pythonServer(fs caddycmd.Flags) (int, error) {
 	isolationMemory := fs.String("isolation-memory")
 	isolationCPUs := fs.String("isolation-cpus")
 	isolationReadOnly := fs.Bool("isolation-read-only")
+	cacheMode := fs.String("cache-mode")
+	cacheListen := fs.String("cache-listen")
+	cacheAdvertise := fs.String("cache-advertise")
+	cacheNamespace := fs.String("cache-namespace")
+	cacheSecret := fs.String("cache-secret")
 	envFiles, err := fs.GetStringSlice("env-file")
 	if err != nil {
 		return caddy.ExitCodeFailedStartup, err
@@ -1287,6 +1311,10 @@ func pythonServer(fs caddycmd.Flags) (int, error) {
 		return caddy.ExitCodeFailedStartup, err
 	}
 	envVars, err := parseCLIEnvVars(envVarFlags)
+	if err != nil {
+		return caddy.ExitCodeFailedStartup, err
+	}
+	cachePeers, err := fs.GetStringSlice("cache-peer")
 	if err != nil {
 		return caddy.ExitCodeFailedStartup, err
 	}
@@ -1349,6 +1377,11 @@ func pythonServer(fs caddycmd.Flags) (int, error) {
 	} else if iso != nil {
 		pythonHandler.Isolation = iso
 	}
+	cacheCfg, err := buildCacheConfigFromCLI(cacheMode, cacheListen, cacheAdvertise, cacheNamespace, cacheSecret, cachePeers)
+	if err != nil {
+		return caddy.ExitCodeFailedStartup, err
+	}
+	pythonHandler.Cache = cacheCfg
 
 	if err := pythonHandler.Validate(); err != nil {
 		return caddy.ExitCodeFailedStartup, err

@@ -75,6 +75,7 @@ python {
     python_path <path>
     autoreload
     isolation none|docker { ... }
+    cache local|cluster { ... }
     request_body {
         max_size <size>
     }
@@ -577,7 +578,7 @@ That test requires **Python 3** on `PATH`.
 
 ## Shared worker cache {#shared-worker-cache}
 
-When Caddy Snake provisions a `python` handler, it starts a small **in-process cache server** inside the **Go plugin**. Worker processes talk to it over a **stream socket** using a **RESP2**-shaped line protocol (Redis-compatible enough for simple clients):
+When Caddy Snake provisions a `python` handler, it starts a small cache server inside the **Go plugin**. The default `local` mode stores data in that Caddy process. Worker processes talk to it over a **stream socket** using a **RESP2**-shaped line protocol (Redis-compatible enough for simple clients):
 
 - **Linux and macOS:** the listener is a **Unix domain socket** in a private temporary directory. The **`CADDYSNAKE_CACHE_ADDR`** environment variable is set to **`unix:///absolute/path/to/cache.sock`** (three slashes after the scheme: `unix://` plus an absolute path).
 - **Windows:** the listener is **TCP on loopback**; **`CADDYSNAKE_CACHE_ADDR`** is **`127.0.0.1:<port>`**. TCP clients must send **`CSAUTH <token>`** first; the token is in **`CADDYSNAKE_CACHE_TOKEN`**.
@@ -595,9 +596,40 @@ Caddy sets these automatically for each worker:
 
 If **`CADDYSNAKE_CACHE_ADDR`** is unset (for example, when running Python code outside Caddy), the cache client is not available.
 
+### Cluster mode
+
+`cache cluster` is an opt-in, pure-Go backend for sharing ephemeral scalar values across a static set of Caddy nodes. Each key is assigned to one authoritative owner with rendezvous hashing. The owner performs `get`, `set`, TTL expiration, and `delete`; callers on other nodes forward those operations over authenticated TCP peer RPC.
+
+```caddyfile
+python {
+    module_asgi "main:app"
+    cache cluster {
+        listen ":7447"
+        advertise "caddy-0.myapp.internal:7447"
+        peers "caddy-0.myapp.internal:7447" "caddy-1.myapp.internal:7447"
+        namespace "myapp"
+        secret "{$CADDYSNAKE_CLUSTER_SECRET}"
+    }
+}
+```
+
+| Field | Meaning |
+| --- | --- |
+| `listen` | TCP `host:port` on which this Caddy node accepts peer RPC. Use a distinct port for each clustered `python` handler. |
+| `advertise` | Dialable `host:port` that identifies this node in the hash ring. It is automatically included in `peers`. Do not use `0.0.0.0`. |
+| `peers` / `peer` | Static dialable peer addresses. `peers` accepts one or more addresses; `peer` is repeatable. Every node must have the same final set. |
+| `namespace` | Cluster identity and hash namespace. Every node must use the same value. |
+| `secret` | Shared peer secret, 16–4096 bytes. Use Caddy's `{$ENV_VAR}` expansion instead of committing the value. |
+
+Cluster mode deliberately supports only **scalar `get`, `set` (including TTL), and `delete`**. `append`, `pop`, set operations, `setnx`, `keys`, and pub/sub return `CacheError`; their distributed consistency semantics are not implied by this first version.
+
+Each key has one owner and is not replicated. If its owner is unavailable, the operation fails—there is no local fallback that could create split-brain values. Restarting an owner loses its keys. Changing the peer set remaps some keys immediately without migration, so treat peer-list changes as cache invalidation. Peer lists are not discovered dynamically.
+
+Peer authentication does **not** encrypt RPC payloads. Bind `listen` only to a trusted private or overlay network, restrict the port with network policy/firewall rules, and never expose it to the public internet. All peers in a namespace are one trust domain.
+
 ### How values are stored
 
-Each key is in one of three shapes:
+In the default local mode, each key is in one of three shapes:
 
 | Shape | How it is created | What `get` returns |
 | --- | --- | --- |
@@ -620,13 +652,13 @@ Each key is in one of three shapes:
 
 There is **no tenant isolation** between workers or dynamic apps on the same handler — any worker can read, delete, or enumerate keys. Use app-specific prefixes. **`CSGROUPSEND`** (atomic set fan-out) is not built in; use **`smembers`** + **`append`** in app code with known race trade-offs, or external Redis for full channel-layer semantics.
 
-Access control is **local OS identity** plus optional secrets: Unix sockets live under a private `0700` temp directory; on Windows the cache listens on **loopback TCP** and requires **`CSAUTH`**. Worker IPC uses a per-group **`CADDYSNAKE_WORKER_TOKEN`**. Do not treat the shared cache as a cross-tenant secret store.
+Access control in local mode is **local OS identity** plus optional secrets: Unix sockets live under a private `0700` temp directory; on Windows the cache listens on **loopback TCP** and requires **`CSAUTH`**. Cluster peer RPC requires the configured namespace, identical peer-set fingerprint, and shared secret, but is not encrypted. Worker IPC uses a per-group **`CADDYSNAKE_WORKER_TOKEN`**. Do not treat the shared cache as a cross-tenant secret store.
 
 :::
 
 ### Wire protocol (CS* commands)
 
-All commands are RESP2 arrays of bulk strings. Replies are bulk (`$…`), integer (`:…`), array (`*…`), simple string (`+OK`), or error (`-ERR …`).
+All commands are RESP2 arrays of bulk strings. Replies are bulk (`$…`), integer (`:…`), array (`*…`), simple string (`+OK`), or error (`-ERR …`). In cluster mode, only `CSGET`, `CSSET`, `CSDEL`, and `CSQUIT` are accepted from workers.
 
 | Command | Arguments | Reply | Notes |
 | --- | --- | --- | --- |
@@ -750,7 +782,7 @@ msg = cache.subscribe("events", timeout=10.0)
 
 :::note
 
-This cache is **ephemeral** and **not** a substitute for Redis or a database: it is scoped to the Caddy process, subject to memory limits, and intended for small shared objects or coordination between workers. Prefer an external store for durability or large payloads.
+This cache is **ephemeral** and **not** a substitute for Redis or a database. Local mode is scoped to one Caddy process; cluster mode shards unreplicated values across the configured Caddy processes. Both are subject to memory limits and intended for small shared objects. Prefer an external store for durability, replication, dynamic discovery, or large payloads.
 
 :::
 
@@ -786,6 +818,8 @@ caddy python-server --server-type asgi --app main:app \
 | `env_var <name> <value>` | `--env-var NAME=VALUE` (repeatable) |
 | `isolation docker { image ... }` | `--isolation docker` + `--isolation-image` (+ optional `--isolation-network`, `--isolation-docker-host`, `--isolation-memory`, `--isolation-cpus`, `--isolation-read-only`) |
 | `isolation none` | `--isolation none` |
+| `cache local` | `--cache-mode local` |
+| `cache cluster { ... }` | `--cache-mode cluster` + `--cache-listen`, `--cache-advertise`, `--cache-peer` (repeatable), `--cache-namespace`, `--cache-secret` |
 | `request_body { max_size <size> }` | `--request-body-max-size` |
 
 CLI-only: `--domain`, `--listen` (default **`127.0.0.1:9080`** when no `--domain`), `--static-path`, `--static-route`, `--debug`, `--access-logs`.

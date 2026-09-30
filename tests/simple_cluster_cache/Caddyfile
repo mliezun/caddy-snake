@@ -1,0 +1,36 @@
+{
+	admin off
+	log {
+		level info
+	}
+}
+
+http://localhost:9081 {
+	python {
+		module_wsgi "main:app"
+		workers 1
+		venv "./venv"
+		cache cluster {
+			listen "127.0.0.1:7447"
+			advertise "127.0.0.1:7447"
+			peer "127.0.0.1:7448"
+			namespace "cluster-integration"
+			secret "{$CADDYSNAKE_CLUSTER_SECRET}"
+		}
+	}
+}
+
+http://localhost:9082 {
+	python {
+		module_wsgi "main:app"
+		workers 1
+		venv "./venv"
+		cache cluster {
+			listen "127.0.0.1:7448"
+			advertise "127.0.0.1:7448"
+			peer "127.0.0.1:7447"
+			namespace "cluster-integration"
+			secret "{$CADDYSNAKE_CLUSTER_SECRET}"
+		}
+	}
+}
