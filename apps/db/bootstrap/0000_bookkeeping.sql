@@ -4,6 +4,6 @@
 CREATE SCHEMA IF NOT EXISTS caddysnake_apps;
 
 CREATE TABLE IF NOT EXISTS caddysnake_apps.schema_migrations (
-	name       text PRIMARY KEY,
+	name       varchar(200) PRIMARY KEY,
 	applied_at timestamptz NOT NULL DEFAULT now()
 );

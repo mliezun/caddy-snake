@@ -10,9 +10,9 @@ import click
 @click.option(
     "--server-type",
     "-t",
-    type=click.Choice(["wsgi", "asgi", "esgi", "auto"], case_sensitive=False),
+    type=click.Choice(["wsgi", "asgi", "auto"], case_sensitive=False),
     required=True,
-    help="Required. The type of server to use: wsgi|asgi|esgi|auto",
+    help="Required. The type of server to use: wsgi|asgi|auto",
 )
 @click.option(
     "--domain",
@@ -62,11 +62,11 @@ import click
     type=click.Choice(["on", "off"], case_sensitive=False),
     default="off",
     show_default=True,
-    help="Enable ASGI lifespan support (ignored in WSGI/ESGI mode)",
+    help="Enable ASGI lifespan support (ignored in WSGI mode)",
 )
 @click.option(
     "--runtime",
-    help="Worker runtime (wsgi: sync|gevent; esgi: gevent only; asgi: native|uvloop)",
+    help="Worker runtime (wsgi: sync|gevent; asgi: native|uvloop)",
 )
 @click.option(
     "--isolation",
@@ -144,7 +144,7 @@ def main(
     memory_limit,
 ):
     """
-    A Python WSGI, ASGI, or ESGI server designed for apps and frameworks.
+    A Python WSGI or ASGI server designed for apps and frameworks.
 
     Python-block options mirror the Caddyfile python directive. CLI-only flags
     cover listen address, HTTPS domain, and static files.

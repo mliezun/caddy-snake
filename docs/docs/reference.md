@@ -6,7 +6,7 @@ sidebar_position: 2
 
 # Configuration
 
-Serve WSGI, ASGI, or ESGI apps with the `python` directive. Prefer the **route form**; use the block form for full options. CLI flags for `caddysnake` / `caddy python-server` mirror the same fields — see [python-server](#python-server-command).
+Serve WSGI or ASGI apps with the `python` directive. Prefer the **route form**; use the block form for full options. CLI flags for `caddysnake` / `caddy python-server` mirror the same fields — see [python-server](#python-server-command).
 
 **Jump to:** [Subdirectives](#subdirectives) | [Dynamic apps](#dynamic-module-loading) | [On-demand TLS](#on-demand-tls-certificate-permission-without-ask) | [Shared cache](#shared-worker-cache) | [CLI](#python-server-command)
 
@@ -62,7 +62,6 @@ The block form provides full configuration:
 python {
     module_wsgi <module_name:variable_name>
     module_asgi <module_name:variable_name>
-    module_esgi <module_name:variable_name>
     module_auto <module_name:variable_name>
     runtime <sync|gevent|native|uvloop>
     lifespan on|off
@@ -99,9 +98,9 @@ python {
 }
 ```
 
-You must specify exactly one of `module_wsgi`, `module_asgi`, or `module_esgi`.
+You must specify exactly one of `module_wsgi` or `module_asgi`.
 
-Request paths are percent-decoded from the HTTP request-target, then presented per protocol: WSGI `PATH_INFO` is a **latin-1** `str` of the decoded octets (PEP 3333, matching Gunicorn); ASGI `scope["path"]` and ESGI `scope["path"]` are **UTF-8** text. See [Architecture: request path encoding](architecture.md#request-path-encoding).
+Request paths are percent-decoded from the HTTP request-target, then presented per protocol: WSGI `PATH_INFO` is a **latin-1** `str` of the decoded octets (PEP 3333, matching Gunicorn); ASGI `scope["path"]` is **UTF-8** text. See [Architecture: request path encoding](architecture.md#request-path-encoding).
 
 ### `module_asgi`
 
@@ -115,18 +114,7 @@ python {
 
 Request bodies are streamed to the app; there is no worker-imposed upload size cap. Limit bodies with the [`request_body`](#request_body) subdirective (or Caddy's site-level [`request_body`](https://caddyserver.com/docs/caddyfile/directives/request_body) handler). See [Architecture: limits](architecture.md#limits-to-know).
 
-Unhandled exceptions in WSGI, ASGI, and ESGI apps are printed to the **Caddy process stderr** (inherited by local workers and relayed for Docker-isolated workers), including the request method and path — not in the HTTP response. The client receives a generic HTTP 500 if a response has not started; an already-started response is safely terminated. FastAPI/Starlette send a 500 and re-raise so the server can log; caddy-snake logs that re-raise. See [Architecture: runtime errors](architecture.md#runtime-errors).
-
-### `module_esgi`
-
-Specifies an [ESGI](esgi) application using the `module:variable` pattern (a synchronous `application(scope, protocol)` or `__esgi__` callable).
-
-```caddyfile
-python {
-    module_esgi "main:application"
-    runtime gevent
-}
-```
+Unhandled exceptions in WSGI and ASGI apps are printed to the **Caddy process stderr** (inherited by local workers and relayed for Docker-isolated workers), including the request method and path — not in the HTTP response. The client receives a generic HTTP 500 if a response has not started; an already-started response is safely terminated. FastAPI/Starlette send a 500 and re-raise so the server can log; caddy-snake logs that re-raise. See [Architecture: runtime errors](architecture.md#runtime-errors).
 
 ### `module_auto`
 
@@ -141,15 +129,16 @@ python {
 }
 ```
 
-Use it when one handler serves apps of both kinds, typically with [dynamic module loading](#dynamic-module-loading). `runtime` cannot be set together with `module_auto` (each interface uses its default); `lifespan` applies if the app turns out to be ASGI. ESGI apps are never auto-detected — use `module_esgi`. On the CLI: `--server-type auto`.
+Use it when one handler serves apps of both kinds, typically with [dynamic module loading](#dynamic-module-loading). `runtime` cannot be set together with `module_auto` (each interface uses its default); `lifespan` applies if the app turns out to be ASGI. On the CLI: `--server-type auto`.
 
 ### `runtime`
 
-Selects how the Python worker runs your app at the gateway boundary. See [ESGI: runtime defaults](esgi#runtime-semantics) for details.
+Selects how the Python worker runs your app at the gateway boundary.
 
 - With **`module_wsgi`**: `sync` (default) or `gevent`.
-- With **`module_esgi`**: **`gevent` only** (default).
 - With **`module_asgi`**: `native` or `uvloop` (default when omitted: `uvloop`).
+
+ASGI `uvloop` falls back to native asyncio (with a warning) if uvloop is not installed. Legacy `libuv` is normalized to `uvloop`.
 
 ```caddyfile
 python {
@@ -444,7 +433,6 @@ The prefix is passed to the app the standard way, so frameworks generate correct
 |-----------|-------------|------------------------------|
 | WSGI | `SCRIPT_NAME` = prefix | `PATH_INFO` = path **without** the prefix |
 | ASGI | `scope["root_path"]` = prefix | `scope["path"]` = full path **including** the prefix (same as `uvicorn --root-path`) |
-| ESGI | `scope["root_path"]` = prefix (caddy-snake extension) | `scope["path"]` = full path including the prefix |
 
 Behavior:
 
@@ -692,7 +680,7 @@ Caddy sets these automatically for each worker:
 | --- | --- |
 | **`CADDYSNAKE_CACHE_ADDR`** | Socket path (`unix://…`) or `host:port` for the cache |
 | **`CADDYSNAKE_CACHE_TOKEN`** | Shared secret for TCP cache auth (`CSAUTH`); omitted on Unix sockets |
-| **`CADDYSNAKE_WORKER_INTERFACE`** | Worker kind (`wsgi`, `asgi`, `esgi`, …); selects compatible client socket APIs (e.g. gevent for ESGI) |
+| **`CADDYSNAKE_WORKER_INTERFACE`** | Worker kind (`wsgi` or `asgi`) |
 | **`CADDYSNAKE_WORKER_ID`** | Stable worker index **`0`…`N-1`** within the worker group (reused after reload; combine with conn/generation in app keys) |
 | **`CADDYSNAKE_CACHE_TIMEOUT`** | Hint for client read/connect timeouts (seconds) |
 | **`CADDYSNAKE_WORKER_TOKEN`** | Shared secret; Go sets header **`Caddy-Snake-Worker-Token`** on proxy requests and Python rejects mismatches |
@@ -881,7 +869,7 @@ msg = cache.subscribe("events", timeout=10.0)
 
 :::
 
-`cache` is a thin façade; you can use the **`Cache`** class directly if you prefer. ESGI workers need **`gevent`** installed (TCP cache client path on Windows); Unix cache paths use the standard library `socket` for `unix://` addresses.
+`cache` is a thin façade; you can use the **`Cache`** class directly if you prefer. The client uses the standard library `socket` for both `unix://` and TCP addresses.
 
 :::note
 
@@ -907,7 +895,7 @@ caddy python-server --server-type asgi --app main:app \
 
 | Caddyfile | CLI flag |
 |-----------|----------|
-| `module_wsgi` / `module_asgi` / `module_esgi` / `module_auto` | `--server-type` + `--app` |
+| `module_wsgi` / `module_asgi` / `module_auto` | `--server-type` + `--app` |
 | `runtime` | `--runtime` |
 | `lifespan` | `--lifespan` |
 | `working_dir` | `--working-dir` |
@@ -933,7 +921,7 @@ CLI-only: `--domain`, `--listen` (default **`127.0.0.1:9080`** when no `--domain
 
 ## Notes
 
-- You must specify exactly one of `module_wsgi`, `module_asgi`, or `module_esgi`
+- You must specify exactly one of `module_wsgi` or `module_asgi`
 - The `lifespan` directive is only used in ASGI mode
 - When `working_dir` is specified, the path must exist and be a directory
 - When specified, the `venv` path must point to a valid Python virtual environment

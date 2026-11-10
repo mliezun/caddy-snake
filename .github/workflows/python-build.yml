@@ -17,26 +17,38 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.12", "3.13", "3.14"]
-        os: [ubuntu-22.04, ubuntu-22.04-arm, macos-15, macos-15-intel, windows-2025, windows-11-arm]
+        python-version: ["3.13", "3.14", "3.15"]
+        platform: [linux-amd64, linux-arm64, linux-riscv64, macos-arm64, macos-amd64, windows-amd64, windows-arm64]
         include:
-          - os: ubuntu-22.04
+          - platform: linux-amd64
+            os: ubuntu-22.04
             docker_platform: linux/amd64
             use_docker: true
-          - os: ubuntu-22.04-arm
+          - platform: linux-arm64
+            os: ubuntu-22.04-arm
             docker_platform: linux/arm64
             use_docker: true
-          - os: macos-15
+          # Cross-compiled on amd64: Caddy via GOARCH, the pyo3 stub via maturin --zig.
+          - platform: linux-riscv64
+            os: ubuntu-22.04
             use_docker: false
-          - os: macos-15-intel
+            goarch: riscv64
+            rust_target: riscv64gc-unknown-linux-gnu
+          - platform: macos-arm64
+            os: macos-15
             use_docker: false
-          # New in 0.7.0 and not yet proven on a release: a Windows build that
+          - platform: macos-amd64
+            os: macos-15-intel
+            use_docker: false
+          # New in 0.8.0 and not yet proven on a release: a Windows build that
           # fails must not stop the other wheels from being published. Remove
           # `experimental` once a release has shipped Windows wheels.
-          - os: windows-2025
+          - platform: windows-amd64
+            os: windows-2025
             use_docker: false
             experimental: true
-          - os: windows-11-arm
+          - platform: windows-arm64
+            os: windows-11-arm
             use_docker: false
             experimental: true
     runs-on: ${{ matrix.os }}
@@ -104,12 +116,19 @@ jobs:
           cache: false
       - name: Build Caddy with caddy-snake module (native)
         if: ${{ !matrix.use_docker }}
+        env:
+          TARGET_GOARCH: ${{ matrix.goarch }}
         run: |
+          # Install xcaddy for the host; only the Caddy build itself is cross-compiled.
           go install github.com/caddyserver/xcaddy/cmd/xcaddy@v0.4.6
-          CGO_ENABLED=0 xcaddy build --with github.com/mliezun/caddy-snake=. --with github.com/mliezun/caddy-snake/apps
+          CGO_ENABLED=0 GOARCH="${TARGET_GOARCH:-$(go env GOARCH)}" "$(go env GOPATH)/bin/xcaddy" build --with github.com/mliezun/caddy-snake=. --with github.com/mliezun/caddy-snake/apps
       - name: Install Rust
         if: ${{ !matrix.use_docker }}
-        run: rustup toolchain install stable
+        env:
+          RUST_TARGET: ${{ matrix.rust_target }}
+        run: |
+          rustup toolchain install stable
+          if [ -n "$RUST_TARGET" ]; then rustup target add --toolchain stable "$RUST_TARGET"; fi
       - name: Setup Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
@@ -117,6 +136,7 @@ jobs:
       - name: Build the CLI
         env:
           PY_VERSION: ${{ matrix.python-version }}
+          RUST_TARGET: ${{ matrix.rust_target }}
         run: |
           if [ "$RUNNER_OS" = "Windows" ]; then
             # A program needs the .exe ending there, and the Python that
@@ -128,12 +148,17 @@ jobs:
             PY="python${PY_VERSION}"
           fi
           cd cmd/cli/
-          "$PY" -m pip install maturin
-          "$PY" -m maturin build --release
+          if [ -n "$RUST_TARGET" ]; then
+            "$PY" -m pip install maturin ziglang
+            "$PY" -m maturin build --release --target "$RUST_TARGET" --zig -i "$PY"
+          else
+            "$PY" -m pip install maturin
+            "$PY" -m maturin build --release
+          fi
       - name: Upload artifacts
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: caddysnake-cli-${{ matrix.python-version }}-${{ matrix.os }}
+          name: caddysnake-cli-${{ matrix.python-version }}-${{ matrix.platform }}
           path: cmd/cli/target/wheels/*.whl
 
   publish:

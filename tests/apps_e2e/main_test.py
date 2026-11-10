@@ -55,8 +55,8 @@ def add():
     return redirect(url_for("index"))
 '''
 
-MIGRATION_1 = "CREATE TABLE orders (id serial PRIMARY KEY, dish text NOT NULL);\n"
-MIGRATION_2 = "ALTER TABLE orders ADD COLUMN note text NOT NULL DEFAULT '';\n"
+MIGRATION_1 = "CREATE TABLE orders (id serial PRIMARY KEY, dish varchar(100) NOT NULL);\n"
+MIGRATION_2 = "ALTER TABLE orders ADD COLUMN note varchar(200) NOT NULL DEFAULT '';\n"
 
 # A FastAPI-style (ASGI) version of the same app, to prove both kinds are served.
 MAIN_V2 = """import os

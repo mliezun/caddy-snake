@@ -87,7 +87,7 @@ func (h *Handler) serveManage(w http.ResponseWriter, r *http.Request, id *Identi
 	switch action {
 	case "keys/create":
 		name := strings.TrimSpace(args.Name)
-		if name == "" || len(name) > 60 {
+		if name == "" || len([]rune(name)) > maxKeyNameLen {
 			fail(errors.New("give the key a short name"))
 			return
 		}

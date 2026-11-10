@@ -505,70 +505,6 @@ class TestReadHttpRequest:
         assert "badheader" not in raw_headers
 
 
-# ==================== _read_http_request_sync (ESGI) ====================
-
-
-class _RecvSocket:
-    def __init__(self, *chunks):
-        self._chunks = [bytearray(chunk) for chunk in chunks]
-        self.recv_calls = 0
-
-    def recv(self, size):
-        self.recv_calls += 1
-        while self._chunks and not self._chunks[0]:
-            self._chunks.pop(0)
-        if not self._chunks:
-            return b""
-        chunk = self._chunks[0]
-        data = bytes(chunk[:size])
-        del chunk[:size]
-        return data
-
-
-class TestReadHttpRequestSync:
-    _headers = b"POST / HTTP/1.1\r\nHost: localhost\r\nTransfer-Encoding: chunked\r\n\r\n"
-
-    def test_chunked_body_consumes_buffered_terminator(self):
-        sock = _RecvSocket(self._headers + b"4\r\ntest\r\n0\r\n\r\n")
-        result = cs._read_http_request_sync(sock)
-
-        assert result is not None
-        body_stream = result[-1]
-        assert body_stream.read() == b"test"
-        assert body_stream.read() == b""
-        assert sock.recv_calls == 1
-
-    def test_chunked_body_consumes_fragmented_terminator(self):
-        sock = _RecvSocket(self._headers + b"4\r\ntest", b"\r\n0\r\n\r\n")
-        result = cs._read_http_request_sync(sock)
-
-        assert result is not None
-        body_stream = result[-1]
-        assert body_stream.read() == b"test"
-        assert body_stream.read() == b""
-
-    def test_chunked_body_rejects_invalid_terminator(self):
-        sock = _RecvSocket(self._headers + b"4\r\ntestXX0\r\n\r\n")
-        result = cs._read_http_request_sync(sock)
-
-        assert result is not None
-        with pytest.raises(ValueError, match="Invalid chunk terminator"):
-            result[-1].read()
-
-    def test_multi_gigabyte_content_length_accepted(self):
-        cl = 2 * 1024 * 1024 * 1024
-        headers = (
-            f"POST /upload HTTP/1.1\r\nHost: localhost\r\nContent-Length: {cl}\r\n\r\n"
-        ).encode()
-        result = cs._read_http_request_sync(_RecvSocket(headers))
-        assert result is not None
-        assert result[-1]._remaining == cl
-
-    def test_negative_content_length_rejected(self):
-        sock = _RecvSocket(b"POST / HTTP/1.1\r\nHost: localhost\r\nContent-Length: -1\r\n\r\n")
-        assert cs._read_http_request_sync(sock) is None
-
-
 # ==================== ASGI _handle_asgi_http ====================
 
 
@@ -1090,7 +1026,7 @@ class TestHandleAsgiWebsocket:
 
         out = b"".join(written)
         assert b"101 Switching Protocols" in out
-        assert cs._ws_close_frame_bytes(1011) in out
+        assert cs.ws_build_frame(cs.WS_OPCODE_CLOSE, struct.pack("!H", 1011)) in out
         err = capsys.readouterr().err
         assert "RuntimeError: accepted-ws-boom" in err
 
@@ -1630,7 +1566,7 @@ class TestBuildWsgiEnviron:
 # ==================== Shared path encoding helpers ====================
 #
 # Request-target encoding is a frequent source of WSGI/ASGI mismatches.
-# Cases below pin Gunicorn (PEP 3333 latin-1 PATH_INFO) vs Uvicorn/ESGI
+# Cases below pin Gunicorn (PEP 3333 latin-1 PATH_INFO) vs Uvicorn/ASGI
 # (UTF-8 path, U+FFFD on invalid sequences). Expected strings are explicit
 # so the tests do not simply re-run production code.
 
@@ -1639,7 +1575,7 @@ class PathEncodingCase(NamedTuple):
     name: str
     path: str  # request-line path, latin-1 decoded (same as _read_http_request)
     wsgi: str
-    http: str  # ASGI / ESGI decoded path
+    http: str  # ASGI decoded path
 
 
 def _raw_utf8_path(text: str) -> str:
@@ -1668,7 +1604,7 @@ PATH_ENCODING_CASES = [
         "/åäö",
     ),
     PathEncodingCase("utf8_percent_mixed_hex", "/%C3%a5", "/\xc3\xa5", "/å"),
-    # ISO-8859-1 single-byte å (%E5) is not UTF-8. WSGI keeps U+00E5; ASGI/ESGI → U+FFFD.
+    # ISO-8859-1 single-byte å (%E5) is not UTF-8. WSGI keeps U+00E5; ASGI → U+FFFD.
     PathEncodingCase("iso8859_1_percent_e5", "/%E5", "/\xe5", "/\ufffd"),
     PathEncodingCase("iso8859_1_percent_ff", "/%FF", "/\xff", "/\ufffd"),
     PathEncodingCase("c1_control_percent_80", "/%80", "/\x80", "/\ufffd"),
@@ -1794,7 +1730,6 @@ class TestPathEncodingHelpers:
     def test_helpers_match_wsgi_and_http_specs(self, case: PathEncodingCase):
         assert cs._wsgi_path_info(case.path) == case.wsgi, case.name
         assert cs._http_path_str(case.path) == case.http, case.name
-        assert cs._esgi_decode_path(case.path) == case.http, case.name
 
     def test_nfc_and_nfd_are_not_normalized(self):
         nfc = next(c for c in PATH_ENCODING_CASES if c.name == "nfc_cafe")
@@ -1814,20 +1749,19 @@ class TestPathEncodingHelpers:
         assert path == "/x"
         assert query == "a=1?b=2"
 
+    @pytest.mark.asyncio
     @pytest.mark.parametrize(
         ("name", "target", "query"),
         QUERY_STRING_CASES,
         ids=[c[0] for c in QUERY_STRING_CASES],
     )
-    def test_query_string_not_percent_decoded(self, name, target, query):
+    async def test_query_string_not_percent_decoded(self, name, target, query):
         path_part, qs = cs._split_path(target)
         assert qs == query, name
         env = cs._build_wsgi_environ("GET", target, "HTTP/1.1", [], {}, io.BytesIO(b""))
         assert env["QUERY_STRING"] == query
-        scope = cs._build_esgi_http_scope(
-            "GET", target, "HTTP/1.1", [(b"host", b"x")], {"host": "x"}
-        )
-        assert scope["query_string"] == query
+        scope = await _capture_asgi_scope(_http_get_bytes(target))
+        assert scope["query_string"] == query.encode("latin-1")
         # Path side still decodes; query must not leak into PATH_INFO.
         if name == "encoded_question_in_path":
             assert env["PATH_INFO"] == "/foo?bar"
@@ -1843,20 +1777,12 @@ HANDLER_PATH_CASES = [c for c in PATH_ENCODING_CASES if c.path]
 
 
 class TestPathEncodingProtocols:
-    """Same matrix through WSGI environ, ASGI scope, and ESGI HTTP/WS scopes."""
+    """Same matrix through WSGI environ and ASGI scope."""
 
     @pytest.mark.parametrize("case", HANDLER_PATH_CASES, ids=lambda c: c.name)
-    def test_wsgi_environ_and_esgi_scopes(self, case: PathEncodingCase):
+    def test_wsgi_environ(self, case: PathEncodingCase):
         env = cs._build_wsgi_environ("GET", case.path, "HTTP/1.1", [], {}, io.BytesIO(b""))
         assert env["PATH_INFO"] == case.wsgi, case.name
-        http_scope = cs._build_esgi_http_scope(
-            "GET", case.path, "HTTP/1.1", [(b"host", b"x")], {"host": "x"}
-        )
-        assert http_scope["path"] == case.http, case.name
-        ws_scope = cs._build_esgi_ws_scope(
-            "GET", case.path, "HTTP/1.1", [(b"host", b"x")], {"host": "x"}
-        )
-        assert ws_scope["path"] == case.http, case.name
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("case", HANDLER_PATH_CASES, ids=lambda c: c.name)
@@ -1929,209 +1855,6 @@ class TestParsingCaches:
         assert cs._http_version_str("HTTP/1.0") == "1.0"
         assert cs._http_version_str("HTTP/2") == "2"
         assert cs._http_version_str("1.0") == "1.1"  # no slash: fallback
-
-
-# ==================== ESGI scope building ====================
-
-
-class TestEsgiHelpers:
-    def test_http_version(self):
-        assert cs._esgi_http_version("HTTP/1.1") == "1.1"
-        assert cs._esgi_http_version("HTTP/1.0") == "1.0"
-        assert cs._esgi_http_version("1.0") == "1.1"  # no slash: fallback in handler
-
-    def test_scheme_from_headers(self):
-        assert cs._esgi_scheme_from_headers({}) == "http"
-        assert cs._esgi_scheme_from_headers({"x-forwarded-proto": "https"}) == "https"
-        assert cs._esgi_scheme_from_headers({"x-forwarded-proto": "HTTP"}) == "http"
-
-    def test_ws_scheme_from_headers(self):
-        assert cs._esgi_ws_scheme_from_headers({}) == "ws"
-        assert cs._esgi_ws_scheme_from_headers({"x-forwarded-proto": "https"}) == "wss"
-
-    def test_headers_mapping_drops_caddy_internal(self):
-        headers_list = [
-            (b"host", b"x"),
-            (b"caddy-snake-remote-addr", b"10.0.0.1"),
-            (b"x-custom", b"a"),
-            (b"x-custom", b"b"),
-        ]
-        raw = {"host": "x", "caddy-snake-remote-addr": "10.0.0.1"}
-        m = cs._esgi_headers_mapping(headers_list, raw)
-        assert "caddy-snake-remote-addr" not in m
-        assert m.get("x-custom") == "a, b"
-
-    def test_headers_mapping_drops_proxy(self):
-        headers_list = [
-            (b"host", b"x"),
-            (b"proxy", b"http://evil"),
-            (b"x-custom", b"ok"),
-        ]
-        m = cs._esgi_headers_mapping(headers_list, {"host": "x", "proxy": "http://evil"})
-        assert "proxy" not in m
-        assert m.get("x-custom") == "ok"
-
-    def test_build_http_scope(self):
-        raw = {"host": "example.com:9443", "x-forwarded-proto": "http"}
-        headers_list = [(b"host", b"example.com:9443")]
-        scope = cs._build_esgi_http_scope(
-            "post",
-            "/p%61th/to?foo=bar",
-            "HTTP/1.1",
-            headers_list,
-            raw,
-        )
-        assert scope["proto"] == "http"
-        assert scope["esgi_version"] == "0.1"
-        assert scope["http_version"] == "1.1"
-        assert scope["method"] == "POST"
-        assert scope["path"] == "/path/to"
-        assert scope["query_string"] == "foo=bar"
-        assert scope["server"] == "example.com:9443"
-        assert scope["scheme"] == "http"
-        assert scope["authority"] == "example.com:9443"
-
-    def test_decode_path_percent_encoded_utf8(self):
-        assert cs._esgi_decode_path("/%C3%A5%C3%A4%C3%B6") == "/åäö"
-        assert cs._esgi_decode_path("/%E6%97%A5") == "/日"
-
-    def test_decode_path_raw_utf8_request_line(self):
-        path = "/åäö".encode().decode("latin-1")
-        assert cs._esgi_decode_path(path) == "/åäö"
-        path_cjk = "/日".encode().decode("latin-1")
-        assert cs._esgi_decode_path(path_cjk) == "/日"
-
-    def test_decode_path_invalid_utf8_replaced(self):
-        assert cs._esgi_decode_path("/%FF") == "/\ufffd"
-
-    def test_build_http_scope_utf8_path(self):
-        scope = cs._build_esgi_http_scope(
-            "GET",
-            "/%C3%A5%C3%A4%C3%B6?q=%C3%A5",
-            "HTTP/1.1",
-            [(b"host", b"x")],
-            {"host": "x"},
-        )
-        assert scope["path"] == "/åäö"
-        assert scope["query_string"] == "q=%C3%A5"
-
-    def test_build_ws_scope_utf8_path(self):
-        path = "/日".encode().decode("latin-1")
-        scope = cs._build_esgi_ws_scope(
-            "GET",
-            path,
-            "HTTP/1.1",
-            [(b"host", b"x")],
-            {"host": "x"},
-        )
-        assert scope["path"] == "/日"
-        assert scope["proto"] == "ws"
-
-    def test_build_http_scope_trusted_client(self):
-        raw = {
-            "host": "x",
-            "caddy-snake-remote-addr": "198.51.100.2",
-            "caddy-snake-remote-port": "12345",
-        }
-        scope = cs._build_esgi_http_scope(
-            "GET",
-            "/",
-            "HTTP/1.1",
-            [(b"host", b"x")],
-            raw,
-        )
-        assert scope["client"] == "198.51.100.2:12345"
-
-    def test_build_ws_scope_scheme(self):
-        raw = {"host": "x", "x-forwarded-proto": "https"}
-        scope = cs._build_esgi_ws_scope(
-            "GET",
-            "/ws",
-            "HTTP/1.1",
-            [(b"host", b"x")],
-            raw,
-        )
-        assert scope["proto"] == "ws"
-        assert scope["scheme"] == "wss"
-
-
-class TestEsgiExceptionLogging:
-    class BodyStream:
-        _done = True
-
-        def discard(self):
-            pass
-
-    def test_http_app_exception_logs_and_sends_500(self, capsys):
-        sock = mock.Mock()
-        written = []
-        sock.sendall = lambda data: written.append(bytes(data))
-
-        def app(scope, protocol):
-            raise RuntimeError("esgi-http-boom")
-
-        cs._handle_esgi_http_sync(
-            sock,
-            app,
-            "GET",
-            "/esgi-boom",
-            "HTTP/1.1",
-            [(b"host", b"x")],
-            {"host": "x"},
-            self.BodyStream(),
-        )
-
-        assert b"500 Internal Server Error" in b"".join(written)
-        err = capsys.readouterr().err
-        assert "Unhandled exception in ESGI HTTP handler" in err
-        assert "GET /esgi-boom" in err
-        assert "RuntimeError: esgi-http-boom" in err
-
-    def test_websocket_app_exception_logs_and_sends_500(self, capsys):
-        sock = mock.Mock()
-        written = []
-        sock.sendall = lambda data: written.append(bytes(data))
-
-        def app(scope, protocol):
-            raise RuntimeError("esgi-ws-boom")
-
-        cs._handle_esgi_websocket_sync(
-            sock,
-            app,
-            {"host": "x", "sec-websocket-key": "test"},
-            [(b"host", b"x")],
-            "HTTP/1.1",
-            "/esgi-ws",
-            "GET",
-        )
-
-        assert b"500 Internal Server Error" in b"".join(written)
-        err = capsys.readouterr().err
-        assert "Unhandled exception in ESGI WebSocket handler" in err
-        assert "GET /esgi-ws" in err
-        assert "RuntimeError: esgi-ws-boom" in err
-
-    def test_http_client_disconnect_does_not_log_traceback(self, capsys):
-        sock = mock.Mock()
-        sock.sendall = mock.Mock(side_effect=BrokenPipeError("gone"))
-
-        def app(scope, protocol):
-            protocol.response_bytes(200, [], b"ok")
-
-        cs._handle_esgi_http_sync(
-            sock,
-            app,
-            "GET",
-            "/gone",
-            "HTTP/1.1",
-            [(b"host", b"x")],
-            {"host": "x"},
-            self.BodyStream(),
-        )
-
-        err = capsys.readouterr().err
-        assert "Unhandled exception" not in err
-        assert "Traceback" not in err
 
 
 # ==================== WSGI Handler (async) ====================
@@ -2414,30 +2137,6 @@ class TestMain:
             assert args[1] == "/tmp/test.sock"
             assert args[2] is False  # lifespan off
 
-    def test_main_esgi_calls_run_esgi_server(self):
-        """main() with --interface esgi calls run_esgi_server with imported app."""
-        with mock.patch.object(cs, "run_esgi_server") as run_esgi:
-            run_esgi.side_effect = lambda *args, **kwargs: None
-            with mock.patch.object(
-                sys,
-                "argv",
-                [
-                    "caddysnake.py",
-                    "--socket",
-                    "/tmp/test.sock",
-                    "--app",
-                    "tests.test_apps.minimal:app",
-                    "--interface",
-                    "esgi",
-                ],
-            ):
-                cs.main()
-                run_esgi.assert_called_once()
-                call = run_esgi.call_args[0]
-                assert callable(call[0])
-                assert call[1] == "/tmp/test.sock"
-                assert call[2] == "gevent"
-
     def test_main_invalid_interface(self):
         with (
             mock.patch.object(
@@ -2653,15 +2352,3 @@ class TestMountPrefix:
     def test_wsgi_header_not_exposed_to_app(self):
         env = self._wsgi("/app/x", "/app")
         assert not [k for k in env if "MOUNT_PREFIX" in k]
-
-    def test_esgi_scopes_carry_root_path_and_full_path(self):
-        headers_list = [(b"host", b"example.com"), (self.HDR.encode(), b"/app")]
-        raw_headers = {"host": "example.com", self.HDR: "/app"}
-        plain = ([(b"host", b"example.com")], {"host": "example.com"})
-        for build in (cs._build_esgi_http_scope, cs._build_esgi_ws_scope):
-            scope = build("GET", "/app/items/1", "HTTP/1.1", headers_list, raw_headers)
-            assert scope["root_path"] == "/app"
-            assert scope["path"] == "/app/items/1"
-            assert self.HDR not in scope["headers"]
-            scope = build("GET", "/x", "HTTP/1.1", *plain)
-            assert scope["root_path"] == ""

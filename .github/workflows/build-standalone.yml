@@ -21,8 +21,28 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.12", "3.13", "3.13-nogil", "3.14", "3.14-nogil"]
-        os: [ubuntu-22.04, ubuntu-22.04-arm, macos-15, macos-15-intel]
+        python-version: ["3.13", "3.13-nogil", "3.14", "3.14-nogil", "3.15", "3.15-nogil"]
+        target: [linux-amd64, linux-arm64, linux-riscv64, darwin-arm64, darwin-amd64]
+        include:
+          - target: linux-amd64
+            os: ubuntu-22.04
+            pybs-arch: x86_64_v2-unknown-linux-gnu
+          - target: linux-arm64
+            os: ubuntu-22.04-arm
+            pybs-arch: aarch64-unknown-linux-gnu
+          # Cross-compiled from amd64 (the embed launcher is pure Go). python-build-standalone
+          # has no PGO builds for riscv64, so the free-threaded variant uses lto only.
+          - target: linux-riscv64
+            os: ubuntu-22.04
+            pybs-arch: riscv64-unknown-linux-gnu
+            goarch: riscv64
+            nogil-build-config: freethreaded+lto
+          - target: darwin-arm64
+            os: macos-15
+            pybs-arch: aarch64-apple-darwin
+          - target: darwin-amd64
+            os: macos-15-intel
+            pybs-arch: x86_64-apple-darwin
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -30,14 +50,9 @@ jobs:
           persist-credentials: false
       - name: Choose architecture
         id: choose-arch
-        run: |
-          case "${{ matrix.os }}" in
-            ubuntu-22.04) PYBS_ARCH=x86_64_v2-unknown-linux-gnu ;;
-            ubuntu-22.04-arm) PYBS_ARCH=aarch64-unknown-linux-gnu ;;
-            macos-15) PYBS_ARCH=aarch64-apple-darwin ;;
-            macos-15-intel) PYBS_ARCH=x86_64-apple-darwin ;;
-          esac
-          echo "PYBS_ARCH=${PYBS_ARCH}" >> "$GITHUB_OUTPUT"
+        env:
+          PYBS_ARCH: ${{ matrix.pybs-arch }}
+        run: echo "PYBS_ARCH=${PYBS_ARCH}" >> "$GITHUB_OUTPUT"
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: "1.26.10"
@@ -47,12 +62,16 @@ jobs:
       - name: Build the server
         working-directory: cmd/embed
         run: CGO_ENABLED=0 xcaddy build --with github.com/mliezun/caddy-snake=../..
+        env:
+          GOARCH: ${{ matrix.goarch }}
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.13"
       - name: Retrieve python build standalone
         if: ${{ !endsWith(matrix.python-version, '-nogil') }}
         working-directory: cmd/embed
+        env:
+          GOARCH: ${{ matrix.goarch }}
         run: | # zizmor: ignore[template-injection]
           python3 pybs.py latest --python-version ${{ matrix.python-version }} --architecture ${{ steps.choose-arch.outputs.PYBS_ARCH }} --build-config pgo+lto --content-type install_only_stripped
           mv cpython-*.tar.gz python-standalone.tar.gz
@@ -61,10 +80,13 @@ jobs:
       - name: Retrieve python build standalone (nogil)
         if: ${{ endsWith(matrix.python-version, '-nogil') }}
         working-directory: cmd/embed
+        env:
+          GOARCH: ${{ matrix.goarch }}
+          NOGIL_BUILD_CONFIG: ${{ matrix.nogil-build-config || 'freethreaded+pgo+lto' }}
         run: | # zizmor: ignore[template-injection]
           PY_VERSION_BASE="${{ matrix.python-version }}"
           PY_VERSION_BASE="${PY_VERSION_BASE%-nogil}"
-          python3 pybs.py latest --python-version "${PY_VERSION_BASE}" --architecture ${{ steps.choose-arch.outputs.PYBS_ARCH }} --build-config freethreaded+pgo+lto --content-type full
+          python3 pybs.py latest --python-version "${PY_VERSION_BASE}" --architecture ${{ steps.choose-arch.outputs.PYBS_ARCH }} --build-config "${NOGIL_BUILD_CONFIG}" --content-type full
           tar -xf cpython-*.tar.zst
           mv python/install .
           rm -rf python

@@ -23,7 +23,7 @@ var mcpSupportedVersions = map[string]bool{"2025-06-18": true, "2025-03-26": tru
 
 // ServerVersion is shown in the dashboard and reported to MCP clients. Keep it
 // equal to the version in cmd/cli/pyproject.toml (see Releases in AGENTS.md).
-var ServerVersion = "0.7.0"
+var ServerVersion = "0.8.0"
 
 type rpcRequest struct {
 	JSONRPC string          `json:"jsonrpc"`

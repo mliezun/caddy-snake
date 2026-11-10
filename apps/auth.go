@@ -195,6 +195,9 @@ func (p *Platform) SessionIdentity(ctx context.Context, token string) *Identity 
 // CreateAccessKey makes a key an agent or the CLI uses in place of a password.
 // The key is shown once and only its hash is stored.
 func (p *Platform) CreateAccessKey(ctx context.Context, username, name string) (string, error) {
+	if len([]rune(name)) > maxKeyNameLen {
+		return "", fmt.Errorf("the key's name can be at most %d characters", maxKeyNameLen)
+	}
 	if _, err := p.store.q.GetUser(ctx, username); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return "", fmt.Errorf("there is no user %q", username)

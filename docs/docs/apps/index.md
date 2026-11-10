@@ -19,7 +19,7 @@ It is one program: Caddy, the caddy-snake plugin and the platform, with a databa
 
 ## Quick start
 
-You need Python 3.12+ and the Postgres programs installed (macOS: `brew install postgresql@18`; Debian/Ubuntu: `sudo apt install postgresql`; Fedora/Rocky: `sudo dnf install postgresql-server`; Windows: the installer from [postgresql.org](https://www.postgresql.org/download/windows/)). The server starts its own private database; it does not touch one you already run.
+You need Python 3.13+ and the Postgres programs installed (macOS: `brew install postgresql@18`; Debian/Ubuntu: `sudo apt install postgresql`; Fedora/Rocky: `sudo dnf install postgresql-server`; Windows: the installer from [postgresql.org](https://www.postgresql.org/download/windows/)). The server starts its own private database; it does not touch one you already run.
 
 ```bash
 pip install caddysnake

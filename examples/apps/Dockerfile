@@ -3,7 +3,7 @@
 #
 #   docker compose up        (from this directory)
 #
-# Needs a caddy-snake image that includes the apps platform (v0.7.0 or newer).
+# Needs a caddy-snake image that includes the apps platform (v0.8.0 or newer).
 ARG BASE_IMAGE=mliezun/caddy-snake:latest-py3.13
 FROM ${BASE_IMAGE}
 

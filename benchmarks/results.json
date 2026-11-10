@@ -18,15 +18,5 @@
     "requests_per_sec": 17422.9705,
     "avg_latency_ms": 5.72,
     "p99_latency_ms": 8.85
-  },
-  "esgi_gevent_caddy": {
-    "requests_per_sec": 29193.1235,
-    "avg_latency_ms": 3.43,
-    "p99_latency_ms": 9.97
-  },
-  "esgi_caddysnake": {
-    "requests_per_sec": 34076.7228,
-    "avg_latency_ms": 2.95,
-    "p99_latency_ms": 8.1
   }
 }

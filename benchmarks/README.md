@@ -1,6 +1,6 @@
 # Benchmarks
 
-Compares Caddy Snake performance against traditional reverse proxy setups for **Flask (WSGI)**, **FastAPI (ASGI)**, and **ESGI (gevent)** on the same JSON `GET /hello` workload.
+Compares Caddy Snake performance against traditional reverse proxy setups for **Flask (WSGI)** and **FastAPI (ASGI)** on the same JSON `GET /hello` workload.
 
 ## What's tested
 
@@ -10,10 +10,6 @@ Compares Caddy Snake performance against traditional reverse proxy setups for **
 | Flask + Caddy Snake | Flask served directly by Caddy via caddy-snake (process worker) |
 | FastAPI + Uvicorn + Caddy | Uvicorn (1 worker) behind Caddy reverse proxy |
 | FastAPI + Caddy Snake | FastAPI served directly by Caddy via caddy-snake (process worker) |
-| ESGI (gevent) + Caddy reverse proxy | `python caddysnake.py --interface esgi` (gevent `StreamServer` on a Unix socket) behind Caddy `reverse_proxy unix//…` |
-| ESGI + Caddy Snake | Same ESGI app via `module_esgi` / `runtime gevent` in the plugin |
-
-The ESGI “reverse proxy” row uses the **same** [`caddysnake.py`](https://github.com/mliezun/caddy-snake/blob/main/caddysnake.py) HTTP/ESGI gateway as worker subprocesses—only the wiring differs (HTTP to Unix socket through Caddy versus the embedded Go path).
 
 ## How to run
 
@@ -72,7 +68,5 @@ cp benchmarks/benchmark_chart.svg docs/static/img/benchmark_chart.svg
 | **Flask + Caddy Snake** | **4,878** | **20.49** | **28.25** |
 | FastAPI + Uvicorn + Caddy | 11,502 | 8.70 | 91.46 |
 | **FastAPI + Caddy Snake** | **17,423** | **5.72** | **8.85** |
-| ESGI (gevent) + Caddy reverse proxy | 29,193 | 3.43 | 9.97 |
-| **ESGI + Caddy Snake** | **34,077** | **2.95** | **8.10** |
 
 Re-run the Docker harness or `./benchmarks/scaleway_bench.sh` to refresh. Other CPUs will differ.

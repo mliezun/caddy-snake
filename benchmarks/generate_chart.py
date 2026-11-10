@@ -13,13 +13,9 @@ results_file = os.path.join(script_dir, "results.json")
 with open(results_file) as f:
     data = json.load(f)
 
-groups = ["Flask (WSGI)", "FastAPI (ASGI)", "ESGI (gevent)"]
-reverse_proxy_keys = [
-    "flask_gunicorn_caddy",
-    "fastapi_uvicorn_caddy",
-    "esgi_gevent_caddy",
-]
-caddysnake_keys = ["flask_caddysnake", "fastapi_caddysnake", "esgi_caddysnake"]
+groups = ["Flask (WSGI)", "FastAPI (ASGI)"]
+reverse_proxy_keys = ["flask_gunicorn_caddy", "fastapi_uvicorn_caddy"]
+caddysnake_keys = ["flask_caddysnake", "fastapi_caddysnake"]
 
 rp_values = [data[k]["requests_per_sec"] for k in reverse_proxy_keys]
 cs_values = [data[k]["requests_per_sec"] for k in caddysnake_keys]
@@ -32,7 +28,7 @@ bars1 = ax.bar(
     x - width / 2,
     rp_values,
     width,
-    label="Reverse proxy stack (Gunicorn/Uvicorn/ESGI worker + Caddy)",
+    label="Reverse proxy stack (Gunicorn/Uvicorn + Caddy)",
     color="#4A90D9",
     edgecolor="white",
 )
@@ -47,7 +43,7 @@ bars2 = ax.bar(
 
 ax.set_ylabel("Requests per second", fontsize=12)
 ax.set_title(
-    "Caddy Snake vs traditional reverse proxy (WSGI, ASGI, ESGI)",
+    "Caddy Snake vs traditional reverse proxy (WSGI, ASGI)",
     fontsize=14,
     fontweight="bold",
 )
@@ -83,8 +79,6 @@ rows = [
     ("Flask + Caddy Snake", "flask_caddysnake"),
     ("FastAPI + Uvicorn + Caddy", "fastapi_uvicorn_caddy"),
     ("FastAPI + Caddy Snake", "fastapi_caddysnake"),
-    ("ESGI (gevent) + Caddy reverse proxy", "esgi_gevent_caddy"),
-    ("ESGI + Caddy Snake", "esgi_caddysnake"),
 ]
 for name, key in rows:
     d = data[key]

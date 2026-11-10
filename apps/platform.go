@@ -297,6 +297,14 @@ func (p *Platform) Logs(slug string, limit int) []LogLine { return p.logs.Tail(s
 
 // --- settings ---------------------------------------------------------------
 
+// Limits that match the column widths in db/migrations.
+const (
+	maxSettingKeyLen  = 100
+	maxAppNameLen     = 100
+	maxDescriptionLen = 500
+	maxKeyNameLen     = 60
+)
+
 var settingKeyRE = regexp.MustCompile(`^[A-Z][A-Z0-9_]*$`)
 
 // builtinSettingKeys are provided by the platform and cannot be overridden.
@@ -306,6 +314,9 @@ var builtinSettingKeys = map[string]bool{
 }
 
 func validateSettingKey(key string) error {
+	if len(key) > maxSettingKeyLen {
+		return fmt.Errorf("setting names can be at most %d characters", maxSettingKeyLen)
+	}
 	if !settingKeyRE.MatchString(key) {
 		return fmt.Errorf("setting name %q must be uppercase letters, digits and underscores, starting with a letter (for example API_TOKEN)", key)
 	}
@@ -426,6 +437,12 @@ func (p *Platform) CreateApp(ctx context.Context, name, description, by string) 
 	slug := Slugify(name)
 	if slug == "" {
 		return nil, nil, errors.New("give the app a name with at least one letter")
+	}
+	if n := len([]rune(strings.TrimSpace(name))); n > maxAppNameLen {
+		return nil, nil, fmt.Errorf("the name is %d characters long; keep it under %d", n, maxAppNameLen)
+	}
+	if n := len([]rune(description)); n > maxDescriptionLen {
+		return nil, nil, fmt.Errorf("the description is %d characters long; keep it under %d", n, maxDescriptionLen)
 	}
 	if len(slug) > maxAppSlugLen {
 		slug = strings.Trim(slug[:maxAppSlugLen], "-")

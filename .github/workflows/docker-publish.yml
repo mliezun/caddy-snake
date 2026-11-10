@@ -16,7 +16,7 @@ jobs:
   build-push:
     strategy:
       matrix:
-        python-version: ["3.12", "3.13", "3.14"]
+        python-version: ["3.13", "3.14", "3.15"]
         os: [ubuntu-24.04]
     runs-on: ${{ matrix.os }}
     permissions:

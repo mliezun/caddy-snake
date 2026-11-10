@@ -118,7 +118,7 @@ func TestPlatformLifecycle(t *testing.T) {
 
 	// A migration is applied once, and data survives later publishes.
 	files := map[string][]byte{
-		"migrations/001_orders.sql": []byte("CREATE TABLE orders (id serial PRIMARY KEY, dish text NOT NULL);\nINSERT INTO orders (dish) VALUES ('soup');"),
+		"migrations/001_orders.sql": []byte("CREATE TABLE orders (id serial PRIMARY KEY, dish varchar(100) NOT NULL);\nINSERT INTO orders (dish) VALUES ('soup');"),
 	}
 	if _, err := p.SaveFiles(ctx, app.Slug, "", files, "Add orders", "ana"); err != nil {
 		t.Fatal(err)

@@ -6,6 +6,7 @@ import random
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 
@@ -43,6 +44,7 @@ ARCHITECTURES = {
     "x86_64-unknown-linux-musl": "Linux 64-bit Intel/AMD CPU, linked with musl libc",
     "aarch64-unknown-linux-gnu": "Linux ARM64 CPUs (AWS Graviton, etc.)",
     "aarch64-unknown-linux-musl": "Linux ARM64 CPUs with musl libc",
+    "riscv64-unknown-linux-gnu": "Linux RISC-V 64-bit CPUs, linked with GNU libc",
     "i686-unknown-linux-gnu": "Linux 32-bit Intel/AMD CPU",
     "i686-unknown-linux-musl": "Linux 32-bit Intel/AMD CPU with musl libc",
     "x86_64_v2-unknown-linux-gnu": "Linux 64-bit Intel/AMD CPU (2008 Nehalem onwards)",
@@ -101,6 +103,9 @@ def urlopen_with_retry(
     max_sleep_seconds=240,
 ):
     """Open a URL with retry logic for rate limit errors (HTTP 403/429)."""
+    # Only HTTPS: blocks file:// and other schemes urllib would otherwise accept.
+    if urllib.parse.urlsplit(url).scheme != "https":
+        raise ValueError(f"Refusing non-HTTPS URL: {url}")
     delay = initial_delay
     total_attempts = max_retries + 1
     for attempt in range(total_attempts):
@@ -212,7 +217,11 @@ def parse_filename(filename: str):
             "pgo",
             "lto",
             "pgo+lto",
+            "freethreaded",
             "freethreaded+debug",
+            "freethreaded+lto",
+            "freethreaded+noopt",
+            "freethreaded+pgo",
             "freethreaded+pgo+lto",
             "noopt",
         ]
@@ -376,7 +385,12 @@ def select_asset(
 
 
 def download_asset(url, filename, dest):
-    dest_path = Path(dest) / filename
+    # Asset names come from the GitHub API; reject anything that is not a bare
+    # file name so a crafted name cannot write outside dest.
+    safe_name = Path(filename).name
+    if safe_name != filename or safe_name in ("", ".", ".."):
+        raise ValueError(f"Refusing unsafe asset file name: {filename!r}")
+    dest_path = Path(dest) / safe_name
     dl_headers = None
     if "github.com" in url:
         dl_headers = {
@@ -449,7 +463,7 @@ def main():
         epilog="""
 Examples:
   pybs latest                                    # Default: Python 3.13, Linux GNU, latest release, stripped
-  pybs latest --python-version 3.12              # Python 3.12 instead
+  pybs latest --python-version 3.15              # Python 3.15 instead
   pybs latest --architecture x86_64-apple-darwin # macOS Intel
   pybs latest --build-config pgo+lto            # Fastest build
   pybs latest --content-type full               # Full build with all artifacts

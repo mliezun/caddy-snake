@@ -715,7 +715,7 @@ func TestValidate(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error when neither wsgi nor asgi specified")
 	}
-	if !strings.Contains(err.Error(), "exactly one of module_wsgi, module_asgi, module_esgi, or module_auto is required") {
+	if !strings.Contains(err.Error(), "exactly one of module_wsgi, module_asgi, or module_auto is required") {
 		t.Errorf("expected module required error, got: %v", err)
 	}
 }
@@ -734,18 +734,10 @@ func TestValidate_AsgiOnly(t *testing.T) {
 	}
 }
 
-func TestValidate_EsgiOnly(t *testing.T) {
-	cs := &CaddySnake{ModuleEsgi: "main:app"}
+func TestValidate_WsgiGeventRuntime(t *testing.T) {
+	cs := &CaddySnake{ModuleWsgi: "main:app", Runtime: "gevent"}
 	if err := cs.Validate(); err != nil {
-		t.Errorf("expected nil error, got: %v", err)
-	}
-}
-
-func TestValidate_EsgiRequiresGevent(t *testing.T) {
-	cs := &CaddySnake{ModuleEsgi: "main:app", Runtime: "sync"}
-	err := cs.Validate()
-	if err == nil {
-		t.Fatal("expected error: esgi must use gevent runtime")
+		t.Errorf("expected wsgi gevent runtime to be valid, got: %v", err)
 	}
 }
 
@@ -827,9 +819,9 @@ func TestProvision_NoModule(t *testing.T) {
 	cs := &CaddySnake{} // no module set
 	err = cs.Provision(ctx)
 	if err == nil {
-		t.Fatal("expected error when neither wsgi nor asgi nor esgi specified")
+		t.Fatal("expected error when neither wsgi nor asgi specified")
 	}
-	if !strings.Contains(err.Error(), "wsgi, asgi, esgi, or auto") {
+	if !strings.Contains(err.Error(), "wsgi, asgi, or auto") {
 		t.Errorf("expected module error in error, got: %v", err)
 	}
 }
@@ -2382,14 +2374,6 @@ func skipIfNoPython(t *testing.T) {
 	}
 }
 
-func skipIfNoGevent(t *testing.T) {
-	t.Helper()
-	skipIfNoPython(t)
-	if err := exec.Command("python3", "-c", "import gevent").Run(); err != nil {
-		t.Skip("gevent not installed, skipping ESGI worker test")
-	}
-}
-
 const minimalWSGIApp = `def app(environ, start_response):
     start_response('200 OK', [('Content-Type', 'text/plain')])
     return [b'Hello from Python']
@@ -2764,13 +2748,6 @@ func TestPythonWorkerGroup_ASGIMultiGigabyteUpload(t *testing.T) {
 	}
 }
 
-const minimalESGIApp = `def application(scope, protocol):
-    if scope["proto"] != "http":
-        protocol.response_bytes(500, [("Content-Type", "text/plain")], b"bad")
-        return
-    protocol.response_bytes(200, [("Content-Type", "text/plain")], b"Hello from ESGI")
-`
-
 const pathEncodingWSGIApp = `def app(environ, start_response):
     path = environ.get("PATH_INFO", "")
     body = (",".join(hex(ord(c)) for c in path)).encode("ascii")
@@ -2786,14 +2763,6 @@ const pathEncodingASGIApp = `async def app(scope, receive, send):
     body = ("path=" + ",".join(hex(ord(c)) for c in path) + "\nraw=" + raw.hex()).encode("ascii")
     await send({"type": "http.response.start", "status": 200, "headers": [[b"content-type", b"text/plain"]]})
     await send({"type": "http.response.body", "body": body})
-`
-
-const pathEncodingESGIApp = `def application(scope, protocol):
-    if scope["proto"] != "http":
-        protocol.response_bytes(500, [("Content-Type", "text/plain")], b"bad")
-        return
-    path = scope["path"]
-    protocol.response_str(200, [("Content-Type", "text/plain")], ",".join(hex(ord(c)) for c in path))
 `
 
 func startWorkerHTTPServer(t *testing.T, iface, app, dir, runtime string) (baseURL string, cleanup func()) {
@@ -2940,33 +2909,6 @@ func TestPythonWorkerGroup_ASGIPathEncoding(t *testing.T) {
 	}
 }
 
-func TestPythonWorkerGroup_ESGIPathEncoding(t *testing.T) {
-	if testing.Short() {
-		t.Skip("skipping integration test in short mode")
-	}
-	skipIfNoGevent(t)
-
-	tempDir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(tempDir, "app.py"), []byte(pathEncodingESGIApp), 0644); err != nil {
-		t.Fatal(err)
-	}
-	baseURL, cleanup := startWorkerHTTPServer(t, "esgi", "app:application", tempDir, "gevent")
-	defer cleanup()
-
-	if got := getBody(t, baseURL+"/åäö"); got != "0x2f,0xe5,0xe4,0xf6" {
-		t.Errorf("ESGI path ords = %q, want unicode åäö", got)
-	}
-	if got := getBody(t, baseURL+"/日"); got != "0x2f,0x65e5" {
-		t.Errorf("ESGI CJK path ords = %q, want U+65E5", got)
-	}
-	if got := rawGetTarget(t, baseURL, "/%E5"); got != "0x2f,0xfffd" {
-		t.Errorf("ESGI ISO-8859-1 %%E5 = %q, want U+FFFD", got)
-	}
-	if got := rawGetTarget(t, baseURL, "/caf%C3%A9"); got == rawGetTarget(t, baseURL, "/cafe%CC%81") {
-		t.Errorf("ESGI NFC and NFD café paths must remain distinct")
-	}
-}
-
 func TestPythonWorkerGroup_PathEncodingMatrix(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")
@@ -3055,58 +2997,6 @@ func TestPythonWorkerGroup_PathEncodingMatrix(t *testing.T) {
 			t.Fatalf("IIS %%uXXXX: status %d, want 400 or 200 with literal PATH_INFO; body %s", resp.StatusCode, body)
 		}
 	})
-}
-
-func TestPythonWorkerGroup_LoadsAndServesESGI(t *testing.T) {
-	if testing.Short() {
-		t.Skip("skipping integration test in short mode")
-	}
-	skipIfNoGevent(t)
-
-	tempDir := t.TempDir()
-	appPath := filepath.Join(tempDir, "app.py")
-	if err := os.WriteFile(appPath, []byte(minimalESGIApp), 0644); err != nil {
-		t.Fatalf("failed to write app.py: %v", err)
-	}
-
-	wg, err := NewPythonWorkerGroup("esgi", "app:application", tempDir, "", "", "gevent", 1, "python3", "", "", nil, nil, 0, nil, nil)
-	if err != nil {
-		t.Fatalf("NewPythonWorkerGroup failed: %v", err)
-	}
-	defer wg.Cleanup()
-
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("failed to listen: %v", err)
-	}
-	defer listener.Close()
-
-	server := &http.Server{
-		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			_ = wg.HandleRequest(w, r)
-		}),
-		ReadHeaderTimeout: 5 * time.Second,
-	}
-	go server.Serve(listener)
-	defer server.Close()
-
-	baseURL := "http://" + listener.Addr().String()
-	resp, err := http.Get(baseURL + "/")
-	if err != nil {
-		t.Fatalf("GET request failed: %v", err)
-	}
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		t.Fatalf("failed to read response: %v", err)
-	}
-	if resp.StatusCode != 200 {
-		t.Errorf("expected status 200, got %d; body: %s", resp.StatusCode, body)
-	}
-	if !bytes.Contains(body, []byte("Hello from ESGI")) {
-		t.Errorf("expected body to contain 'Hello from ESGI', got: %s", body)
-	}
 }
 
 func TestSetPythonWorkerOutboundHeaders_XForwardedChainAndTrusted(t *testing.T) {

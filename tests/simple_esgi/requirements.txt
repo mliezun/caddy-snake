@@ -1,7 +1,0 @@
-certifi==2026.10.18
-charset-normalizer==3.4.4
-gevent==24.11.1
-idna==3.18
-requests==2.34.2
-urllib3==2.8.0
-websocket-client==1.8.0

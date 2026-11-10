@@ -5,7 +5,7 @@ import {themes as prismThemes} from 'prism-react-renderer';
 /** @type {import('@docusaurus/types').Config} */
 const config = {
   title: 'Caddy Snake',
-  tagline: 'Run Python WSGI, ASGI, and ESGI apps inside Caddy',
+  tagline: 'Run Python WSGI and ASGI apps inside Caddy',
   favicon: 'img/favicon.ico',
 
   url: 'https://caddy-snake.readthedocs.io',
@@ -83,9 +83,15 @@ const config = {
         items: [
           {
             type: 'docSidebar',
-            sidebarId: 'tutorialSidebar',
+            sidebarId: 'appsSidebar',
             position: 'left',
-            label: 'Docs',
+            label: 'Apps',
+          },
+          {
+            type: 'docSidebar',
+            sidebarId: 'pluginSidebar',
+            position: 'left',
+            label: 'Caddy plugin',
           },
           {to: '/blog', label: 'Blog', position: 'left'},
           {

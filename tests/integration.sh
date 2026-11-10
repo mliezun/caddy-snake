@@ -9,22 +9,22 @@ set -euo pipefail
 #
 # Examples:
 #   ./integration_test.sh fastapi 3.13
-#   ./integration_test.sh django 3.12
+#   ./integration_test.sh django 3.15
 #   ./integration_test.sh simple 3.13-nogil
 #   ./integration_test.sh simple 3.14-nogil
 #
 # Valid tool names:
 #   django, django_channels, flask, fastapi, simple_autoreload, simple_async,
-#   simple_esgi, simple_cache, simple_cluster_cache, simple_start_timeout,
+#   simple_cache, simple_cluster_cache, simple_start_timeout,
 #   simple_isolation, simple_request_body, simple_mount_prefix, socketio, dynamic,
 #   apps_e2e
 #
 # Valid python versions:
-#   3.12, 3.13, 3.13-nogil, 3.14, 3.14-nogil
+#   3.13, 3.13-nogil, 3.14, 3.14-nogil, 3.15, 3.15-nogil
 # ---------------------------------------------------------------------------
 
-VALID_TOOLS=("django" "django_channels" "flask" "fastapi" "simple_autoreload" "simple_async" "simple_esgi" "simple_cache" "simple_cluster_cache" "simple_start_timeout" "simple_isolation" "simple_request_body" "simple_mount_prefix" "socketio" "dynamic" "apps_e2e")
-VALID_PYVERSIONS=("3.12" "3.13" "3.13-nogil" "3.14" "3.14-nogil")
+VALID_TOOLS=("django" "django_channels" "flask" "fastapi" "simple_autoreload" "simple_async" "simple_cache" "simple_cluster_cache" "simple_start_timeout" "simple_isolation" "simple_request_body" "simple_mount_prefix" "socketio" "dynamic" "apps_e2e")
+VALID_PYVERSIONS=("3.13" "3.13-nogil" "3.14" "3.14-nogil" "3.15" "3.15-nogil")
 
 usage() {
   echo "Usage: $0 <tool-name> <python-version>"

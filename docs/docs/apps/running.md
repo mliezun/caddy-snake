@@ -11,7 +11,7 @@ sidebar_position: 5
 | System | How |
 |--------|-----|
 | Linux, macOS | `pip install caddysnake` |
-| Windows | `pip install caddysnake` (from version 0.7.0), or `caddy-windows-*.zip` from a [release](https://github.com/mliezun/caddy-snake/releases), run as `caddy.exe python-apps` |
+| Windows | `pip install caddysnake` (from version 0.8.0), or `caddy-windows-*.zip` from a [release](https://github.com/mliezun/caddy-snake/releases), run as `caddy.exe python-apps` |
 | Docker | [Run with Docker](#run-with-docker) |
 
 The Postgres programs must be installed (macOS: `brew install postgresql@18`; Debian/Ubuntu: `sudo apt install postgresql`; Fedora/Rocky: `sudo dnf install postgresql-server`; Windows: the installer from [postgresql.org](https://www.postgresql.org/download/windows/)), unless you pass `--database-url`.

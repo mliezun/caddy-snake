@@ -78,7 +78,7 @@ Whenever you add or change a `python { ... }` subdirective (or a field on `Caddy
 
 | Caddyfile | CLI flag |
 |-----------|----------|
-| `module_wsgi` / `module_asgi` / `module_esgi` / `module_auto` | `--server-type` + `--app` |
+| `module_wsgi` / `module_asgi` / `module_auto` | `--server-type` + `--app` |
 | `runtime` | `--runtime` |
 | `lifespan` | `--lifespan` |
 | `working_dir` | `--working-dir` |
@@ -140,6 +140,8 @@ The `apps/` package keeps **no SQL in Go**. Schema and queries are plain files u
 | `apps/db/queries/` | Queries on the platform database → generated into `apps/db/dbgen/` |
 | `apps/db/appdb/` | Schema and queries that run inside each app's own database → `apps/db/appdb/appdbgen/` |
 
+**Column types** (maintainer, 2026-11-10): give every text column the narrowest type that fits what it holds, for example `char(64)` for a SHA-256 in hex, `varchar(40)` for a username, `varchar(200)` for a file name. Do not reach for `text` by default; use it only for values that can really be large (a traceback, a pasted certificate), and say so in a comment. Enforce the same limit in Go before the value reaches the database, so people get a plain message and not a database error. This applies to the platform's own tables and to any SQL we write for examples and starter apps.
+
 After changing a migration or a query, regenerate and commit the result (never edit the generated packages by hand):
 
 ```bash
@@ -155,7 +157,7 @@ The tests in `apps/` start a real Postgres from the locally installed programs a
 ## Environment
 
 - **Go 1.26** (see `go.mod`) and **xcaddy**: `go install github.com/caddyserver/xcaddy/cmd/xcaddy@v0.4.6`
-- **Python 3.12+** (3.13 recommended). Dev tools: `pip install -r requirements-dev.txt` in a venv.
+- **Python 3.13+** (3.13 recommended). Dev tools: `pip install -r requirements-dev.txt` in a venv.
 - Build Caddy with the plugin: `xcaddy build --with github.com/mliezun/caddy-snake=.`
 - Each integration test app has its own `tests/<app>/requirements.txt`.
 
@@ -167,8 +169,8 @@ Docker (CI parity, linux/amd64 container):
 ./tests/integration.sh <tool-name> <python-version>
 ```
 
-Tools: `django`, `django_channels`, `flask`, `fastapi`, `simple_autoreload`, `simple_async`, `simple_esgi`, `simple_cache`, `simple_cluster_cache`, `simple_start_timeout`, `simple_isolation`, `simple_request_body`, `simple_mount_prefix`, `socketio`, `dynamic`, `apps_e2e`
-Python versions: `3.12`, `3.13`, `3.13-nogil`, `3.14`, `3.14-nogil`
+Tools: `django`, `django_channels`, `flask`, `fastapi`, `simple_autoreload`, `simple_async`, `simple_cache`, `simple_cluster_cache`, `simple_start_timeout`, `simple_isolation`, `simple_request_body`, `simple_mount_prefix`, `socketio`, `dynamic`, `apps_e2e`
+Python versions: `3.13`, `3.13-nogil`, `3.14`, `3.14-nogil`, `3.15`, `3.15-nogil`
 
 Local (faster feedback), shown for Flask; FastAPI is the same and also needs `psutil`:
 
@@ -231,7 +233,7 @@ EOF
 )"
 ```
 
-The Windows wheels in `python-build.yml` are marked `experimental` (new in 0.7.0): if one fails, the other wheels are still published, so look at those jobs by hand and remove the flag once a release has shipped them.
+The Windows wheels in `python-build.yml` are marked `experimental` (new in 0.8.0): if one fails, the other wheels are still published, so look at those jobs by hand and remove the flag once a release has shipped them.
 
 5. **Wait for the release workflows** — `Caddy Binary`, `Caddy Standalone`, `Python Build Package` and `Docker Publish` must succeed and assets must appear (`gh release view v0.5.5`). Confirm the version on [PyPI](https://pypi.org/project/caddysnake/).
 

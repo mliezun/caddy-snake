@@ -17,7 +17,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.12", "3.13", "3.13-nogil", "3.14", "3.14-nogil"]
+        python-version: ["3.13", "3.13-nogil", "3.14", "3.14-nogil", "3.15", "3.15-nogil"]
         os: [ubuntu-22.04, ubuntu-22.04-arm]
     runs-on: ${{ matrix.os }}
     steps:

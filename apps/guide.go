@@ -25,6 +25,7 @@ DATA
 - Never store data in local files or in memory: apps are stopped when idle and restarted on each publish.
 - Change the shape of the data only through numbered SQL files in migrations/, for example migrations/001_create_items.sql, then 002_add_due_date.sql. Each file runs once, in order, when a version is published. Never edit a migration that has already been published; add a new file. Write them so they are safe to run against existing data.
 - Do not create tables from main.py.
+- Give each text column the narrowest type that fits: varchar(100) for a name, char(2) for a country code. Use text only for long content such as notes or articles, and check the length in the app before saving.
 
 SETTINGS AND SECRETS
 - API tokens, passwords and other configuration are settings, stored with set_setting and read in the app from environment variables. Never write secrets into files.
