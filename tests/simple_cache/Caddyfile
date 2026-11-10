@@ -18,13 +18,6 @@ localhost:9080 {
 		venv "./venv"
 	}
 
-	python /esgi/* {
-		module_esgi "main:application"
-		runtime gevent
-		workers 1
-		venv "./venv"
-	}
-
 	route / {
 		respond 404
 	}

@@ -13,7 +13,7 @@ const sidebars = {
       type: 'category',
       label: 'Configure',
       collapsed: false,
-      items: ['reference', 'esgi', 'isolation'],
+      items: ['reference', 'isolation'],
     },
     {
       type: 'category',

@@ -66,7 +66,7 @@ Whenever you add or change a `python { ... }` subdirective (or a field on `Caddy
 
 | Caddyfile | CLI flag |
 |-----------|----------|
-| `module_wsgi` / `module_asgi` / `module_esgi` | `--server-type` + `--app` |
+| `module_wsgi` / `module_asgi` | `--server-type` + `--app` |
 | `runtime` | `--runtime` |
 | `lifespan` | `--lifespan` |
 | `working_dir` | `--working-dir` |
@@ -143,7 +143,7 @@ For full CI-like integration tests without local Python/venv setup:
 ./tests/integration.sh fastapi 3.13
 ```
 
-Valid tools: `django`, `django_channels`, `flask`, `fastapi`, `simple_autoreload`, `simple_async`, `simple_esgi`, `simple_cache`, `simple_cluster_cache`, `simple_start_timeout`, `simple_isolation`, `simple_request_body`, `socketio`, `dynamic`
+Valid tools: `django`, `django_channels`, `flask`, `fastapi`, `simple_autoreload`, `simple_async`, `simple_cache`, `simple_cluster_cache`, `simple_start_timeout`, `simple_isolation`, `simple_request_body`, `socketio`, `dynamic`
 Valid Python versions: `3.12`, `3.13`, `3.13-nogil`, `3.14`, `3.14-nogil`
 
 Requires **Docker** (linux/amd64 container).
@@ -376,7 +376,7 @@ After merging the QA PR, configure on GitHub:
 - [ ] **Secret scanning** and **push protection** (Settings → Code security)
 - [ ] **Copilot Autofix** for code scanning alerts (Settings → Code security)
 - [ ] **Renovate** app installed for dependency update PRs
-- [ ] (Optional) `SNYK_TOKEN` secret for weekly Snyk Code scans
+- [ ] (Optional) `SNYK_TOKEN` secret for Snyk Code scans on PRs, pushes to `main`, and the weekly schedule (plus an optional `SNYK_ORG` variable for the Snyk organization)
 - [ ] (Optional) Semgrep AppSec account for AI-assisted triage
 
 ---

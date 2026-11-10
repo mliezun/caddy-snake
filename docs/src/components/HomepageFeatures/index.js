@@ -7,7 +7,7 @@ const FeatureList = [
     title: 'Python inside Caddy',
     description: (
       <>
-        Serve WSGI, ASGI, and ESGI apps without a separate app server. Caddy
+        Serve WSGI and ASGI apps without a separate app server. Caddy
         terminates TLS and talks to Python workers over a local socket.
       </>
     ),
