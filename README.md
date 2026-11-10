@@ -106,7 +106,7 @@ go install github.com/caddyserver/xcaddy/cmd/xcaddy@v0.4.6
 
 ### Option 3: Use a Docker image
 
-Docker images are available with Python 3.12, 3.13, and 3.14:
+Docker images are available with Python 3.12, 3.13, and 3.14 for `linux/amd64`, `linux/arm64`, and `linux/riscv64`:
 
 ```Dockerfile
 FROM mliezun/caddy-snake:latest-py3.13
@@ -608,6 +608,7 @@ Caddy Snake serves **~60% more requests/sec than Gunicorn** for Flask, **~51% mo
 |----------------|---------|--------------------------------|
 | Linux (x86_64) | process | Primary platform, full support |
 | Linux (arm64)  | process | Full support                   |
+| Linux (riscv64) | process | PyPI wheel, Docker images, Caddy and standalone release binaries (cross-compiled; tested under QEMU) |
 | macOS          | process | Full support                   |
 | Windows        | process | Loopback TCP instead of Unix sockets |
 

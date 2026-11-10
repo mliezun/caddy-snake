@@ -24,6 +24,10 @@ jobs:
             artifact: caddy-linux-amd64
           - os: ubuntu-22.04-arm
             artifact: caddy-linux-arm64
+          # Pure-Go cross-compile; no riscv64 runner needed.
+          - os: ubuntu-22.04
+            artifact: caddy-linux-riscv64
+            goarch: riscv64
           - os: macos-15
             artifact: caddy-darwin-arm64
           - os: macos-15-intel
@@ -41,6 +45,8 @@ jobs:
         run: go install github.com/caddyserver/xcaddy/cmd/xcaddy@v0.4.6
       - name: Build the server
         run: CGO_ENABLED=0 xcaddy build --with github.com/mliezun/caddy-snake=.
+        env:
+          GOARCH: ${{ matrix.goarch }}
       - name: Rename binary
         run: mv caddy ${{ matrix.artifact }} # zizmor: ignore[template-injection]
       - name: Upload caddy binary
