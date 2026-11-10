@@ -109,7 +109,7 @@ apt-get install -yyqq software-properties-common curl ca-certificates git
 
 # Install Go
 echo ">>> Installing Go..."
-curl -fsSL "https://go.dev/dl/go1.26.0.linux-amd64.tar.gz" -o /tmp/go.tar.gz
+curl -fsSL "https://go.dev/dl/go1.26.10.linux-amd64.tar.gz" -o /tmp/go.tar.gz
 tar -C /usr/local -xzf /tmp/go.tar.gz
 export PATH="/usr/local/go/bin:$HOME/go/bin:$PATH"
 go version
