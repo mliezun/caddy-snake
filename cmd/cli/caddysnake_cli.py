@@ -308,6 +308,8 @@ def cli() -> None:
         env["PATH"] = os.pathsep.join([*_tool_dirs(), env.get("PATH", "")])
         if _WINDOWS:
             _run_and_exit(apps_argv(sys.argv[2:]), env)
+        # The wrapper's whole job is to pass its arguments to the bundled binary.
+        # nosemgrep: python.lang.security.audit.dangerous-os-exec-tainted-env-args.dangerous-os-exec-tainted-env-args
         os.execve(binary_path, apps_argv(sys.argv[2:]), env)
         return
     main()

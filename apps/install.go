@@ -689,7 +689,7 @@ func elevate(extra ...string) error {
 	fmt.Fprintln(os.Stderr, "Administrator rights are needed for a system service. You may be asked for your password.")
 	args := append([]string{self}, os.Args[1:]...)
 	args = append(args, extra...)
-	cmd := exec.Command(sudo, args...)
+	cmd := exec.Command(sudo, args...) // #nosec G702 -- this same command with the same arguments, run again through sudo
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
 	return cmd.Run()
 }

@@ -1,0 +1,9 @@
+# Snyk policy. https://docs.snyk.io/manage-risk/policies/the-.snyk-file
+version: v1.25.0
+exclude:
+  global:
+    # Runs the platform's own schema files, which are compiled into the binary
+    # (apps/db/bootstrap, apps/db/migrations). Snyk Code reads "a file's content
+    # reaches the database" as SQL injection; here that is the purpose, and no
+    # input from outside reaches it.
+    - apps/db/migrate.go

@@ -160,8 +160,8 @@ func bearerToken(r *http.Request) string {
 	if auth := r.Header.Get("Authorization"); len(auth) > 7 && strings.EqualFold(auth[:7], "Bearer ") {
 		return strings.TrimSpace(auth[7:])
 	}
-	if _, password, ok := r.BasicAuth(); ok {
-		return password
+	if _, accessKey, ok := r.BasicAuth(); ok {
+		return accessKey
 	}
 	return ""
 }
@@ -243,6 +243,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request, next caddyht
 	var id *Identity
 	if h.platform.cfg.RequireLogin {
 		if id = h.identify(r); id == nil {
+			// #nosec G710 -- a path on this server: loginURL always starts with the login page
 			http.Redirect(w, r, loginURL(r), http.StatusSeeOther)
 			return nil
 		}
@@ -286,7 +287,9 @@ func (h *Handler) servePlatform(w http.ResponseWriter, r *http.Request) {
 				p.Logout(r.Context(), c.Value)
 				h.forgetIdentities()
 			}
-			http.SetCookie(w, &http.Cookie{Name: sessionCookie, Value: "", Path: "/", MaxAge: -1, HttpOnly: true, SameSite: http.SameSiteLaxMode})
+			// #nosec G124 -- Secure is set whenever the server is reached over HTTPS (see secureCookies)
+			// nosemgrep: go.lang.security.audit.net.cookie-missing-secure.cookie-missing-secure
+			http.SetCookie(w, &http.Cookie{Name: sessionCookie, Value: "", Path: "/", MaxAge: -1, HttpOnly: true, Secure: h.secureCookies(r), SameSite: http.SameSiteLaxMode})
 		}
 		http.Redirect(w, r, "/", http.StatusSeeOther)
 		return
@@ -307,6 +310,7 @@ func (h *Handler) servePlatform(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "This server requires an access key. Create one with `caddysnake apps key create <username>` and send it as a Bearer token."})
 			return
 		}
+		// #nosec G710 -- a path on this server: loginURL always starts with the login page
 		http.Redirect(w, r, loginURL(r), http.StatusSeeOther)
 		return
 	}
@@ -371,18 +375,30 @@ func (h *Handler) serveTool(w http.ResponseWriter, r *http.Request, who, name st
 	writeJSON(w, http.StatusOK, out)
 }
 
+// safeNext returns where to go after signing in: a path on this server, never
+// another site. "//host" and "/\host" are read by browsers as other sites.
 func safeNext(next string) string {
-	// Only local paths: never redirect to another site after login.
-	if strings.HasPrefix(next, "/") && !strings.HasPrefix(next, "//") && !strings.Contains(next, "\\") {
-		return next
+	if len(next) > 1 && next[0] == '/' && next[1] != '/' && next[1] != '\\' && !strings.ContainsAny(next, "\\\r\n") {
+		if u, err := url.Parse(next); err == nil && u.Scheme == "" && u.Host == "" {
+			return next
+		}
 	}
 	return "/"
+}
+
+// secureCookies reports whether the session cookie can be marked Secure. Over
+// plain HTTP (this computer, a private network) a Secure cookie would never be
+// sent back, and nobody could sign in.
+func (h *Handler) secureCookies(r *http.Request) bool {
+	return r.TLS != nil || strings.HasPrefix(h.platform.cfg.PublicURL, "https://")
 }
 
 func (h *Handler) serveLogin(w http.ResponseWriter, r *http.Request) {
 	p := h.platform
 	next := safeNext(r.URL.Query().Get("next"))
 	if !p.cfg.RequireLogin {
+		// #nosec G710 -- a path on this server: next went through safeNext
+		// nosemgrep: go.lang.security.injection.open-redirect.open-redirect
 		http.Redirect(w, r, next, http.StatusSeeOther)
 		return
 	}
@@ -406,14 +422,18 @@ func (h *Handler) serveLogin(w http.ResponseWriter, r *http.Request) {
 		renderLogin(w, http.StatusUnauthorized, next, msg)
 		return
 	}
+	// #nosec G124 -- Secure is set whenever the server is reached over HTTPS (see secureCookies)
+	// nosemgrep: go.lang.security.audit.net.cookie-missing-secure.cookie-missing-secure
 	http.SetCookie(w, &http.Cookie{
 		Name:     sessionCookie,
 		Value:    token,
 		Path:     "/",
 		Expires:  expires,
 		HttpOnly: true,
-		Secure:   r.TLS != nil || strings.HasPrefix(p.cfg.PublicURL, "https://"),
+		Secure:   h.secureCookies(r),
 		SameSite: http.SameSiteLaxMode,
 	})
+	// #nosec G710 -- a path on this server: next went through safeNext
+	// nosemgrep: go.lang.security.injection.open-redirect.open-redirect
 	http.Redirect(w, r, next, http.StatusSeeOther)
 }

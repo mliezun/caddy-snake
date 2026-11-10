@@ -17,7 +17,7 @@ func signIn(t *testing.T, p *Platform, username, password string) *http.Cookie {
 	if err != nil {
 		t.Fatalf("Login(%s): %v", username, err)
 	}
-	return &http.Cookie{Name: sessionCookie, Value: token}
+	return &http.Cookie{Name: sessionCookie, Value: token, HttpOnly: true, Secure: true}
 }
 
 func TestPeopleKeysAndPages(t *testing.T) {

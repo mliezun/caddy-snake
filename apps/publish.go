@@ -78,6 +78,13 @@ func (p *Platform) publishLocked(ctx context.Context, a *App, version, by string
 	return res
 }
 
+// logSafe keeps text that came from outside (a pushed branch name, an app's
+// own error) on one line of the server's log.
+func logSafe(s string) string {
+	s = strings.ReplaceAll(s, "\n", " ")
+	return strings.ReplaceAll(s, "\r", " ")
+}
+
 func firstLine(s string) string {
 	if i := strings.IndexByte(s, '\n'); i >= 0 {
 		return s[:i]

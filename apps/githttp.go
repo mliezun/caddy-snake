@@ -3,7 +3,7 @@ package apps
 import (
 	"context"
 	"net/http"
-	"net/http/cgi"
+	"net/http/cgi" // #nosec G504 -- the Httpoxy fix (Go 1.6.3) is in every Go this builds with
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -100,11 +100,11 @@ func (p *Platform) afterPush(app string, before, after map[string]string, who st
 		}
 		res, err := p.Publish(ctx, slug, head, who)
 		if err != nil {
-			p.logger.Warn("publishing after a git push", zap.String("app", slug), zap.Error(err))
+			p.logger.Warn("publishing after a git push", zap.String("app", logSafe(slug)), zap.String("error", logSafe(err.Error())))
 			continue
 		}
 		if !res.OK {
-			p.logger.Info("a pushed version was not published", zap.String("app", slug), zap.String("error", firstLine(res.Error)))
+			p.logger.Info("a pushed version was not published", zap.String("app", logSafe(slug)), zap.String("error", logSafe(firstLine(res.Error))))
 		}
 	}
 }

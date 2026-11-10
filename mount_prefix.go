@@ -29,8 +29,8 @@ func normalizeMountPrefix(s string) (string, error) {
 	if s == "" || s == "/" {
 		return "", nil
 	}
-	if !strings.HasPrefix(s, "/") {
-		return "", fmt.Errorf("mount_prefix %q must start with /", s)
+	if !strings.HasPrefix(s, "/") || strings.HasPrefix(s, "//") || strings.HasPrefix(s, `/\`) {
+		return "", fmt.Errorf("mount_prefix %q must start with one /", s)
 	}
 	s = strings.TrimSuffix(s, "/")
 	for _, seg := range strings.Split(s[1:], "/") {

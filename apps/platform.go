@@ -148,7 +148,7 @@ func Open(ctx context.Context, cfg Config, logger *zap.Logger) (*Platform, error
 	}
 	p.stopObserve = caddysnake.ObserveWorkerOutput(p.observe)
 	p.wg.Add(1)
-	go p.background()
+	go p.background() // #nosec G118 -- housekeeping for as long as the platform is open, not for one request
 	return p, nil
 }
 
@@ -171,6 +171,11 @@ func (p *Platform) Config() Config { return p.cfg }
 func (p *Platform) appsRoot() string          { return filepath.Join(p.cfg.DataDir, "apps") }
 func (p *Platform) appDir(slug string) string { return filepath.Join(p.appsRoot(), slug) }
 func (p *Platform) repoDir(app string) string {
+	// Names are validated long before this; never build a path outside the
+	// data folder whatever arrives here.
+	if strings.Contains(app, "..") || strings.ContainsAny(app, `/\`) || !filepath.IsLocal(app) {
+		app = "invalid"
+	}
 	return filepath.Join(p.cfg.DataDir, "repos", app+".git")
 }
 func (p *Platform) repo(app string) *repo { return &repo{dir: p.repoDir(app)} }
