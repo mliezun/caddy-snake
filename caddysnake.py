@@ -144,7 +144,6 @@ def import_app(module_app_str):
     if len(parts) != 2:
         raise ValueError(f"Expected 'module:variable' format, got '{module_app_str}'")
     module_name, var_name = parts
-    # deepcode ignore CodeInjection: loading the operator-configured app module is the purpose of the worker.
     module = importlib.import_module(module_name)
     return getattr(module, var_name)
 

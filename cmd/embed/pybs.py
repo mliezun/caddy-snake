@@ -111,7 +111,6 @@ def urlopen_with_retry(
     for attempt in range(total_attempts):
         try:
             req = urllib.request.Request(url, headers=dict(headers or {}))
-            # deepcode ignore Ssrf: CLI tool; the operator supplies the URL and it is HTTPS-only.
             response = urllib.request.urlopen(req)
             if response.status != 200:
                 raise urllib.error.HTTPError(
