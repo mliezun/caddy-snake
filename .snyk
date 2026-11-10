@@ -1,5 +1,62 @@
 # Snyk policy. https://docs.snyk.io/manage-risk/policies/the-.snyk-file
 version: v1.25.0
+
+# Accepted findings. Each one has a reason and an expiry date, after which
+# Snyk reports it again and it has to be looked at afresh.
+#
+# go-git (accepted by the maintainer, 2026-11-10). It stores each app's
+# versions; only apps/repo.go uses it. We are on the newest release there is
+# (v6.0.0-beta.1) and Snyk reports these against every release, so there is
+# nothing to upgrade to. What makes them acceptable here:
+#   - go-git never checks files out to disk for us. The working copy is in
+#     memory, and files reach disk through our own code, which validates every
+#     path (cleanPath, Export in apps/repo.go).
+#   - The repositories it reads are written by this server or pushed through
+#     the real `git` program by people who are already allowed to run code on
+#     the server (they build the apps).
+#   - `govulncheck` finds no call from our code into the affected functions.
+# When these expire: check for a go-git release that fixes them and upgrade;
+# renew only if the points above still hold.
+ignore:
+  SNYK-GOLANG-GITHUBCOMGOGITGOGIT-18857904:
+    - '*':
+        reason: >-
+          go-git symlink attack on checkout. We never check out to disk with
+          go-git; see the note at the top of this file.
+        created: 2026-11-10T00:00:00.000Z
+        expires: 2027-02-10T00:00:00.000Z
+  SNYK-GOLANG-GITHUBCOMGOGITGOGITPLUMBING-18593986:
+    - '*':
+        reason: >-
+          go-git directory traversal. Repositories are written by this server
+          or by trusted people through git itself; see the note at the top of
+          this file.
+        created: 2026-11-10T00:00:00.000Z
+        expires: 2027-02-10T00:00:00.000Z
+  SNYK-GOLANG-GITHUBCOMGOGITGOGITSTORAGEFILESYSTEMDOTGIT-18593985:
+    - '*':
+        reason: >-
+          go-git directory traversal in repository storage. Repositories are
+          written by this server or by trusted people through git itself; see
+          the note at the top of this file.
+        created: 2026-11-10T00:00:00.000Z
+        expires: 2027-02-10T00:00:00.000Z
+  SNYK-GOLANG-GITHUBCOMGOGITGOGITV4PLUMBINGFORMATINDEX-15855247:
+    - '*':
+        reason: >-
+          go-git index parsing. Reported for the old v4 package; we use v6 and
+          keep no index on disk (apps/repo.go removes it before every open).
+        created: 2026-11-10T00:00:00.000Z
+        expires: 2027-02-10T00:00:00.000Z
+  SNYK-GOLANG-GITHUBCOMGOGITGOGITV4PLUMBINGFORMATIDXFILE-17111068:
+    - '*':
+        reason: >-
+          go-git pack index parsing can use a lot of memory on a crafted file.
+          Reported for the old v4 package; pack files here come from this
+          server or from trusted people through git itself.
+        created: 2026-11-10T00:00:00.000Z
+        expires: 2027-02-10T00:00:00.000Z
+
 exclude:
   global:
     # Runs the platform's own schema files, which are compiled into the binary
