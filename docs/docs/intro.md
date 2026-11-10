@@ -6,7 +6,7 @@ description: Run a Python web app with Caddy Snake in under five minutes
 
 # Quickstart
 
-Caddy Snake runs Python web apps **inside Caddy** — no separate Gunicorn or Uvicorn process. It works with Flask, Django, FastAPI, and any other WSGI/ASGI (or [ESGI](esgi.md)) app.
+Caddy Snake runs Python web apps **inside Caddy** — no separate Gunicorn or Uvicorn process. It works with Flask, Django, FastAPI, and any other WSGI/ASGI app.
 
 ## Install and run
 

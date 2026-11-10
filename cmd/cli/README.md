@@ -2,7 +2,7 @@
 
 [![PyPI](https://img.shields.io/pypi/v/caddysnake)](https://pypi.org/project/caddysnake/)
 
-The `caddysnake` package is available on [PyPI](https://pypi.org/project/caddysnake/) and provides a CLI to serve Python WSGI/ASGI/ESGI applications powered by Caddy.
+The `caddysnake` package is available on [PyPI](https://pypi.org/project/caddysnake/) and provides a CLI to serve Python WSGI/ASGI applications powered by Caddy.
 
 ## Install
 
@@ -20,9 +20,6 @@ caddysnake --server-type wsgi --app main:app
 
 # Start an ASGI server
 caddysnake --server-type asgi --app main:app
-
-# Start an ESGI server
-caddysnake --server-type esgi --app main:application
 ```
 
 ## CLI Options
@@ -31,7 +28,7 @@ Python-handler flags mirror the Caddyfile `python` block. Extra flags cover list
 
 | Flag | Short | Description | Default |
 |------|-------|-------------|---------|
-| `--server-type` | `-t` | **Required.** Type of Python app: `wsgi`, `asgi`, or `esgi` | — |
+| `--server-type` | `-t` | **Required.** Type of Python app: `wsgi` or `asgi` | — |
 | `--app` | `-a` | **Required.** Python module and app variable (e.g. `main:app`) | — |
 | `--domain` | `-d` | Domain name for HTTPS with automatic certificates | — |
 | `--listen` | `-l` | Custom listen address | `:9080` |
@@ -44,7 +41,7 @@ Python-handler flags mirror the Caddyfile `python` block. Extra flags cover list
 | `--env-file` | | Dotenv file for worker env (repeatable) | — |
 | `--env-var` | | Inline worker env var `NAME=VALUE` (repeatable) | — |
 | `--start-timeout` | | Worker readiness wait (`120s` default; use `=-1` or `forever` for indefinite) | `120s` |
-| `--runtime` | | WSGI: `sync\|gevent`; ESGI: `gevent`; ASGI: `native\|uvloop` | per interface |
+| `--runtime` | | WSGI: `sync\|gevent`; ASGI: `native\|uvloop` | per interface |
 | `--lifespan` | | ASGI lifespan events (`on\|off`) | `off` |
 | `--cache-mode` | | Cache topology: `local\|cluster` | `local` |
 | `--cache-listen` | | Cluster peer TCP listener (`host:port`) | — |

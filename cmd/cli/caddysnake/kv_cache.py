@@ -20,7 +20,6 @@ from typing import Any
 
 ENV_ADDR = "CADDYSNAKE_CACHE_ADDR"
 ENV_CACHE_TOKEN = "CADDYSNAKE_CACHE_TOKEN"
-ENV_IFACE = "CADDYSNAKE_WORKER_INTERFACE"
 ENV_TIMEOUT = "CADDYSNAKE_CACHE_TIMEOUT"
 ENV_WORKER_ID = "CADDYSNAKE_WORKER_ID"
 
@@ -45,16 +44,7 @@ def worker_id() -> int | None:
 
 
 def _socket_module():
-    iface = (os.environ.get(ENV_IFACE) or "").lower()
-    if iface == "esgi":
-        try:
-            from gevent import socket as gsocket
-
-            return gsocket
-        except ImportError as e:
-            raise CacheConfigurationError(
-                "ESGI workers need gevent installed to use caddysnake.cache (gevent.socket)"
-            ) from e
+    """Return the socket module used for cache connections (patchable in tests)."""
     import socket as stdsocket
 
     return stdsocket
@@ -220,11 +210,6 @@ class Cache:
         buf = bytearray()
         if addr.startswith("unix://"):
             path = addr[7:]
-            # Must use ``mod`` (gevent.socket for ESGI workers), never the stdlib
-            # socket: a blocking stdlib call here does not yield to the gevent hub,
-            # which freezes every other greenlet in the worker for the duration of
-            # the cache round-trip. gevent.socket supports AF_UNIX — the ESGI
-            # listener itself uses it (see run_esgi_server in caddysnake.py).
             sock = mod.socket(mod.AF_UNIX, mod.SOCK_STREAM)
             sock.settimeout(t)
             try:

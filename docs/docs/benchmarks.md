@@ -1,6 +1,6 @@
 ---
 title: Benchmarks
-description: Caddy Snake vs reverse-proxy setups for Flask, FastAPI, and ESGI
+description: Caddy Snake vs reverse-proxy setups for Flask and FastAPI
 sidebar_position: 6
 ---
 
@@ -18,10 +18,8 @@ Caddy Snake avoids a separately configured Gunicorn/Uvicorn hop. Numbers below m
 | **Flask + Caddy Snake** | **4,878** | **20.49** | **28.25** |
 | FastAPI + Uvicorn + Caddy | 11,502 | 8.70 | 91.46 |
 | **FastAPI + Caddy Snake** | **17,423** | **5.72** | **8.85** |
-| ESGI (gevent) + Caddy reverse proxy | 29,193 | 3.43 | 9.97 |
-| **ESGI + Caddy Snake** | **34,077** | **2.95** | **8.10** |
 
-On this hardware: Flask ~60% more RPS than Gunicorn-behind-Caddy; FastAPI ~51% more RPS than Uvicorn-behind-Caddy with a much tighter P99; ESGI is closest (same gevent gateway) but still ~17% faster embedded.
+On this hardware: Flask ~60% more RPS than Gunicorn-behind-Caddy; FastAPI ~51% more RPS than Uvicorn-behind-Caddy with a much tighter P99.
 
 ## Methodology
 

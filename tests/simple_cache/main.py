@@ -1,4 +1,4 @@
-"""Exercise caddysnake.cache across WSGI (2 workers), ASGI, and ESGI routes."""
+"""Exercise caddysnake.cache across WSGI (2 workers) and ASGI routes."""
 
 from __future__ import annotations
 
@@ -189,48 +189,3 @@ async def asgi_app(scope, receive, send):
         return
 
     await send_resp(404, b"not found")
-
-
-def application(scope, protocol):
-    if scope["proto"] != "http":
-        protocol.response_bytes(500, [("Content-Type", "text/plain")], b"bad proto")
-        return
-    path = scope["path"]
-    method = scope["method"].upper()
-    raw_qs = scope.get("query_string", "") or ""
-    if isinstance(raw_qs, bytes):
-        raw_qs = raw_qs.decode()
-    qs = parse_qs(raw_qs)
-
-    def resp(status: int, body: bytes, ctype: str = "text/plain"):
-        protocol.response_bytes(status, [("Content-Type", ctype)], body)
-
-    if path == "/esgi/set" and method == "POST":
-        key = (qs.get("k", ["ek"])[0]).encode()
-        cache.set(key, protocol.read_body())
-        resp(200, b"ok")
-        return
-    if path == "/esgi/get" and method == "GET":
-        key = (qs.get("k", ["ek"])[0]).encode()
-        v = cache.get(key)
-        if v is None:
-            resp(200, b"miss")
-        elif isinstance(v, list):
-            resp(
-                200,
-                json.dumps([e.decode("latin1") for e in v]).encode(),
-                "application/json",
-            )
-        else:
-            resp(200, v, "application/octet-stream")
-        return
-    if path == "/esgi/append" and method == "POST":
-        key = (qs.get("k", ["eq"])[0]).encode()
-        cache.append(key, protocol.read_body())
-        resp(200, b"ok")
-        return
-    if path == "/esgi/worker-id" and method == "GET":
-        wid = worker_id()
-        resp(200, str(wid if wid is not None else -1).encode())
-        return
-    resp(404, b"not found")

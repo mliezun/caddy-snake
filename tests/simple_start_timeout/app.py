@@ -1,4 +1,4 @@
-"""Minimal WSGI/ASGI/ESGI app with optional import-time startup delay."""
+"""Minimal WSGI/ASGI app with optional import-time startup delay."""
 
 from __future__ import annotations
 
@@ -26,15 +26,3 @@ async def asgi_app(scope, receive, send):
         }
     )
     await send({"type": "http.response.body", "body": b"ok-asgi"})
-
-
-def application(scope, protocol):
-    """ESGI application entrypoint."""
-    if scope.get("proto") != "http":
-        protocol.response_bytes(500, [("Content-Type", "text/plain")], b"bad scope")
-        return
-    protocol.response_bytes(
-        200,
-        [("Content-Type", "text/plain; charset=utf-8")],
-        b"ok-esgi",
-    )
