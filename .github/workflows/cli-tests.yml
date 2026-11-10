@@ -92,3 +92,62 @@ jobs:
             exit 1
           fi
           echo "ASGI test passed"
+
+  # Mirrors the linux-riscv64 cell of python-build.yml (which only runs on tags), then
+  # installs the wheel in the official riscv64 Python image under QEMU and serves a request.
+  riscv64-wheel:
+    name: riscv64 wheel (cross-build + QEMU smoke test)
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: "1.26.6"
+          cache: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+      - name: Install Rust
+        run: |
+          rustup toolchain install stable
+          rustup target add --toolchain stable riscv64gc-unknown-linux-gnu
+      - name: Build the CLI binary (riscv64)
+        working-directory: cmd/cli
+        env:
+          GOARCH: riscv64
+        run: |
+          go install github.com/caddyserver/xcaddy/cmd/xcaddy@v0.4.6
+          CGO_ENABLED=0 xcaddy build --with github.com/mliezun/caddy-snake=../..
+          mv caddy caddysnake-cli
+      - name: Build the wheel (riscv64)
+        working-directory: cmd/cli
+        run: |
+          python3.13 -m pip install maturin ziglang
+          python3.13 -m maturin build --release --target riscv64gc-unknown-linux-gnu --zig -i python3.13
+          ls target/wheels/
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
+      - name: Smoke test under emulation
+        run: |
+          APPDIR=$(mktemp -d)
+          cat > "$APPDIR/app.py" << 'EOF'
+          import platform
+          async def app(scope, receive, send):
+              await send({"type": "http.response.start", "status": 200, "headers": [[b"content-type", b"text/plain"]]})
+              await send({"type": "http.response.body", "body": platform.machine().encode()})
+          EOF
+          docker run --rm --platform linux/riscv64 \
+            -v "$PWD/cmd/cli/target/wheels:/wheels:ro" -v "$APPDIR:/app:ro" -w /app \
+            python:3.13-slim sh -c '
+              set -e
+              pip install -q /wheels/*.whl
+              caddysnake -t asgi -a app:app -l 127.0.0.1:19082 -w 1 > /tmp/caddy.log 2>&1 &
+              for i in $(seq 1 120); do
+                r=$(python -c "import urllib.request;print(urllib.request.urlopen(\"http://127.0.0.1:19082/\").read().decode())" 2>/dev/null) && break
+                sleep 1
+              done
+              echo "response: $r"
+              [ "$r" = "riscv64" ] || { cat /tmp/caddy.log; exit 1; }
+            '

@@ -18,17 +18,27 @@ jobs:
       fail-fast: false
       matrix:
         python-version: ["3.12", "3.13", "3.14"]
-        os: [ubuntu-22.04, ubuntu-22.04-arm, macos-15, macos-15-intel]
+        platform: [linux-amd64, linux-arm64, linux-riscv64, macos-arm64, macos-amd64]
         include:
-          - os: ubuntu-22.04
+          - platform: linux-amd64
+            os: ubuntu-22.04
             docker_platform: linux/amd64
             use_docker: true
-          - os: ubuntu-22.04-arm
+          - platform: linux-arm64
+            os: ubuntu-22.04-arm
             docker_platform: linux/arm64
             use_docker: true
-          - os: macos-15
+          # Cross-compiled on amd64: Caddy via GOARCH, the pyo3 stub via maturin --zig.
+          - platform: linux-riscv64
+            os: ubuntu-22.04
             use_docker: false
-          - os: macos-15-intel
+            goarch: riscv64
+            rust_target: riscv64gc-unknown-linux-gnu
+          - platform: macos-arm64
+            os: macos-15
+            use_docker: false
+          - platform: macos-amd64
+            os: macos-15-intel
             use_docker: false
     runs-on: ${{ matrix.os }}
     steps:
@@ -90,12 +100,18 @@ jobs:
           cache: false
       - name: Build Caddy with caddy-snake module (native)
         if: ${{ !matrix.use_docker }}
+        env:
+          GOARCH: ${{ matrix.goarch }}
         run: |
           go install github.com/caddyserver/xcaddy/cmd/xcaddy@v0.4.6
           CGO_ENABLED=0 xcaddy build --with github.com/mliezun/caddy-snake=.
       - name: Install Rust
         if: ${{ !matrix.use_docker }}
-        run: rustup toolchain install stable
+        env:
+          RUST_TARGET: ${{ matrix.rust_target }}
+        run: |
+          rustup toolchain install stable
+          if [ -n "$RUST_TARGET" ]; then rustup target add --toolchain stable "$RUST_TARGET"; fi
       - name: Setup Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
@@ -103,15 +119,21 @@ jobs:
       - name: Build the CLI
         env:
           PY_VERSION: ${{ matrix.python-version }}
+          RUST_TARGET: ${{ matrix.rust_target }}
         run: |
           mv caddy cmd/cli/caddysnake-cli
           cd cmd/cli/
-          python"${PY_VERSION}" -m pip install maturin
-          python"${PY_VERSION}" -m maturin build --release
+          if [ -n "$RUST_TARGET" ]; then
+            python"${PY_VERSION}" -m pip install maturin ziglang
+            python"${PY_VERSION}" -m maturin build --release --target "$RUST_TARGET" --zig -i python"${PY_VERSION}"
+          else
+            python"${PY_VERSION}" -m pip install maturin
+            python"${PY_VERSION}" -m maturin build --release
+          fi
       - name: Upload artifacts
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: caddysnake-cli-${{ matrix.python-version }}-${{ matrix.os }}
+          name: caddysnake-cli-${{ matrix.python-version }}-${{ matrix.platform }}
           path: cmd/cli/target/wheels/*.whl
 
   publish:

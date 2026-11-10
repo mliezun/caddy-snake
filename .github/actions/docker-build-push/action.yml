@@ -10,7 +10,7 @@ inputs:
   platforms:
     description: Target platforms for buildx (comma-separated)
     required: false
-    default: "linux/amd64,linux/arm64"
+    default: "linux/amd64,linux/arm64,linux/riscv64"
   # Registry credentials must be inputs (not secrets.* in composite steps — secrets context is invalid there).
   ghcr_token:
     description: secrets.GITHUB_TOKEN for GHCR when push-image is true
@@ -30,6 +30,11 @@ runs:
     - name: Install cosign
       if: inputs.push-image == 'true'
       uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+
+    # QEMU runs the non-native runtime stages (arm64/riscv64); Caddy itself is
+    # cross-compiled natively in the builder stage.
+    - name: Set up QEMU
+      uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
 
     - name: Set up Docker Buildx
       uses: docker/setup-buildx-action@f95db51fddba0c2d1ec667646a06c2ce06100226
