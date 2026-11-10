@@ -23,7 +23,7 @@ To make it easier to get started you can also grab one of the precompiled binari
 
 ## Features
 
-- **WSGI, ASGI & ESGI** — serve WSGI and ASGI frameworks, plus [ESGI](https://github.com/mliezun/esgi) apps (blocking `application(scope, protocol)` per connection)
+- **WSGI & ASGI** — serve WSGI and ASGI frameworks
 - **Multi-worker** — process-based workers for concurrent request handling
 - **Shared worker cache** — key/value store in the Caddy (Go) process so Python **process** workers can share state via a small RESP client; optionally shard scalar keys across a static Caddy cluster with authenticated peer RPC
 - **Auto-reload** — watches `.py` files and hot-reloads your app on changes during development
@@ -51,14 +51,14 @@ The easiest way to get started on Linux is to download a pre-compiled Caddy bina
 # Start a WSGI server
 ./caddy python-server --server-type wsgi --app main:app
 
-# Start an ESGI server
-./caddy python-server --server-type esgi --app main:application
+# Start an ASGI server
+./caddy python-server --server-type asgi --app main:app
 ```
 
 This starts a server on port `9080` serving your app. See `./caddy python-server --help` for all options:
 
 ```
---server-type wsgi|asgi|esgi   Required. Type of Python app
+--server-type wsgi|asgi   Required. Type of Python app
 --app <module:var>        Required. Python module and app variable (e.g. main:app)
 --domain <example.com>    Enable HTTPS with automatic certificates
 --listen <addr>           Custom listen address (default: 127.0.0.1:9080)
@@ -74,7 +74,7 @@ This starts a server on port `9080` serving your app. See `./caddy python-server
 --debug                   Enable debug logging
 --access-logs             Enable access logs
 --lifespan on|off         Enable ASGI lifespan events (default: off)
---runtime <name>          WSGI: sync|gevent; ESGI: gevent only; ASGI: native|uvloop (see docs)
+--runtime <name>          WSGI: sync|gevent; ASGI: native|uvloop (see docs)
 --autoreload              Watch .py files and reload on changes
 --cache-mode local|cluster       Cache topology (default: local)
 --cache-listen <host:port>       Cluster peer RPC listener
@@ -143,36 +143,6 @@ See [Apps as Standalone Binaries](https://caddy-snake.readthedocs.io/en/latest/d
 ---
 
 ## Usage examples
-
-### ESGI (experimental)
-
-Caddy Snake can serve **[ESGI](https://github.com/mliezun/esgi)** applications — synchronous gateway apps with one invocation per HTTP or WebSocket connection and blocking I/O on a `protocol` object (see the [protocol draft](https://github.com/mliezun/esgi/blob/main/PROTOCOL.md)). **`module_esgi` uses gevent only** (no asyncio in the ESGI worker). For **`module_wsgi` / `module_asgi`**, see the **`runtime`** row in the table below (`native` / **`uvloop`** apply only to ASGI).
-
-`main.py` (sketch)
-
-```python
-def application(scope, protocol):
-    if scope["proto"] == "http":
-        body = protocol.read_body()
-        protocol.response_bytes(200, [("Content-Type", "text/plain")], b"ok")
-    elif scope["proto"] == "ws":
-        ws = protocol.accept()
-        ...
-        protocol.close()
-```
-
-`Caddyfile`
-
-```caddyfile
-http://localhost:9080 {
-    python /* {
-        module_esgi "main:application"
-        runtime gevent
-    }
-}
-```
-
-See the [ESGI integration](https://caddy-snake.readthedocs.io/en/latest/docs/esgi) doc for the roadmap, `runtime` semantics, and how this relates to WSGI/ASGI.
 
 ### Flask (WSGI)
 
@@ -255,8 +225,7 @@ The `python` directive supports the following subdirectives:
 python {
     module_wsgi "module:variable"       # WSGI app (e.g. "main:app")
     module_asgi "module:variable"       # ASGI app (e.g. "main:app")
-    module_esgi "module:variable"       # ESGI app (gevent worker; requires gevent installed)
-    runtime sync|gevent|native|uvloop   # See table; ESGI allows gevent only
+    runtime sync|gevent|native|uvloop   # See runtime table
     venv "/path/to/venv"                # Virtual environment path
     working_dir "/path/to/app"          # Working directory for module resolution
     env_file "/path/to/.env"            # Dotenv file loaded into worker env (repeatable)
@@ -283,7 +252,7 @@ python {
 }
 ```
 
-You must specify exactly one of `module_wsgi`, `module_asgi`, or `module_esgi`.
+You must specify exactly one of `module_wsgi` or `module_asgi`.
 
 ### `module_wsgi`
 
@@ -293,10 +262,6 @@ The Python module and WSGI application variable to import, in `"module:variable"
 
 The Python module and ASGI application variable to import, in `"module:variable"` format.
 
-### `module_esgi`
-
-The Python module and ESGI application callable to import (`def application(scope, protocol): ...` or `__esgi__`), in `"module:variable"` format. See [ESGI](https://caddy-snake.readthedocs.io/en/latest/docs/esgi).
-
 ### `runtime`
 
 Selects how the Python worker schedules work at the gateway boundary:
@@ -304,12 +269,9 @@ Selects how the Python worker schedules work at the gateway boundary:
 | Interface | Allowed values | Default (when omitted) |
 | --- | --- | --- |
 | `module_wsgi` | `sync`, `gevent` | `sync` |
-| `module_esgi` | **`gevent`** only | `gevent` |
 | `module_asgi` | `native`, `uvloop` | `uvloop` |
 
-`native` uses the standard `asyncio` loop. **`uvloop`** selects the [uvloop](https://github.com/MagicStack/uvloop) event loop when the package is installed (with a warning and fallback to native asyncio if it is not). For **WSGI**, **`gevent`** is still the thread-pool compatibility mode unless/until a dedicated gevent stack is added. **ESGI** always runs the **gevent** `StreamServer` stack on plain sockets (install **`gevent`** in your app environment).
-
-**ESGI:** application code is synchronous (`def` + blocking `protocol` methods). The **ESGI Python subprocess does not use asyncio** for the Go-facing socket; it uses **gevent** only.
+`native` uses the standard `asyncio` loop. **`uvloop`** selects the [uvloop](https://github.com/MagicStack/uvloop) event loop when the package is installed (with a warning and fallback to native asyncio if it is not). For **WSGI**, **`gevent`** is still the thread-pool compatibility mode unless/until a dedicated gevent stack is added.
 
 ### `venv`
 
@@ -421,7 +383,7 @@ Process-based workers run in **separate Python interpreters**, so they do not sh
 - **Linux and macOS:** the plugin listens on a **Unix domain socket** under a private temporary directory and sets **`CADDYSNAKE_CACHE_ADDR`** to a **`unix:///absolute/path/to/cache.sock`** URL. Traffic stays on the filesystem socket, not the generic TCP/IP stack.
 - **Windows:** workers use **loopback TCP**; **`CADDYSNAKE_CACHE_ADDR`** is like **`127.0.0.1:<ephemeral-port>`**. Clients must authenticate with **`CADDYSNAKE_CACHE_TOKEN`** via the **`CSAUTH`** command before other cache commands.
 
-Caddy also sets **`CADDYSNAKE_WORKER_INTERFACE`** (`wsgi`, `asgi`, `esgi`, …), **`CADDYSNAKE_WORKER_ID`** (stable index `0`…`N-1` per worker group), **`CADDYSNAKE_CACHE_TIMEOUT`** (read/connect hint in seconds), and **`CADDYSNAKE_WORKER_TOKEN`** (shared secret checked on inbound proxy requests) for the Python client.
+Caddy also sets **`CADDYSNAKE_WORKER_INTERFACE`** (`wsgi` or `asgi`), **`CADDYSNAKE_WORKER_ID`** (stable index `0`…`N-1` per worker group), **`CADDYSNAKE_CACHE_TIMEOUT`** (read/connect hint in seconds), and **`CADDYSNAKE_WORKER_TOKEN`** (shared secret checked on inbound proxy requests) for the Python client.
 
 The default local cache supports **scalars**, **FIFO lists**, **sets** (`sadd`/`srem`/`smembers`), atomic **`setnx`**, prefix **`keys`**, and one-shot **`publish`/`subscribe`** for cross-worker coordination.
 
@@ -552,7 +514,7 @@ Note that this restarts the entire Caddy process on changes.
 
 ## Debugging runtime errors
 
-Unhandled exceptions in WSGI, ASGI, and ESGI apps are printed to **Caddy's stderr**, tagged with the worker id and request path:
+Unhandled exceptions in WSGI and ASGI apps are printed to **Caddy's stderr**, tagged with the worker id and request path:
 
 ```text
 Unhandled exception in ASGI HTTP handler (worker 0, GET /boom):
@@ -583,7 +545,7 @@ Make sure to match the Python version with your target environment.
 
 ## Benchmarks
 
-Caddy Snake compares favorably to **separate reverse-proxy stacks** for **Flask (WSGI)**, **FastAPI (ASGI)**, and **ESGI (gevent)** on the JSON `/hello` workload below. Figures are the averages committed in [`benchmarks/results.json`](benchmarks/results.json) from a **4 vCPU / 16 GB cloud VM (linux/amd64)** run of the Docker harness; use local Docker or [`benchmarks/scaleway_bench.sh`](benchmarks/scaleway_bench.sh) to reproduce on other hardware.
+Caddy Snake compares favorably to **separate reverse-proxy stacks** for **Flask (WSGI)** and **FastAPI (ASGI)** on the JSON `/hello` workload below. Figures are the averages committed in [`benchmarks/results.json`](benchmarks/results.json) from a **4 vCPU / 16 GB cloud VM (linux/amd64)** run of the Docker harness; use local Docker or [`benchmarks/scaleway_bench.sh`](benchmarks/scaleway_bench.sh) to reproduce on other hardware.
 
 ![Benchmark Chart](benchmarks/benchmark_chart.svg)
 
@@ -593,10 +555,8 @@ Caddy Snake compares favorably to **separate reverse-proxy stacks** for **Flask 
 | **Flask + Caddy Snake** | **4,878** | **20.49** | **28.25** |
 | FastAPI + Uvicorn + Caddy | 11,502 | 8.70 | 91.46 |
 | **FastAPI + Caddy Snake** | **17,423** | **5.72** | **8.85** |
-| ESGI (gevent) + Caddy reverse proxy | 29,193 | 3.43 | 9.97 |
-| **ESGI + Caddy Snake** | **34,077** | **2.95** | **8.10** |
 
-Caddy Snake serves **~60% more requests/sec than Gunicorn** for Flask, **~51% more than Uvicorn** for FastAPI (with **10× lower P99 latency**), and **~17% more** than proxying to the same ESGI gateway over a Unix socket.
+Caddy Snake serves **~60% more requests/sec than Gunicorn** for Flask and **~51% more than Uvicorn** for FastAPI (with **10× lower P99 latency**).
 
 > Benchmarked with [hey](https://github.com/rakyll/hey) on a **4 vCPU / 16 GB cloud VM (linux/amd64)**: 100 concurrent connections, 10 s per run, 10 runs averaged, Python 3.13, Go 1.26 (Docker harness in [`benchmarks/`](benchmarks/)). Absolute throughput varies by machine; relative ordering has been stable across environments.
 

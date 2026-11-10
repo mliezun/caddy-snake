@@ -149,7 +149,6 @@ jobs:
   snyk-code:
     name: snyk-code
     runs-on: ubuntu-24.04
-    if: github.event_name == 'schedule'
     environment: snyk
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -158,10 +157,13 @@ jobs:
       - name: Snyk Code test
         env:
           SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }} # zizmor: ignore[secrets-in-unapproved-environment]
+          # Optional: Snyk organization slug or ID (environment/repo variable).
+          SNYK_ORG: ${{ vars.SNYK_ORG }}
         run: |
+          # Fork PRs get no secrets; skip instead of failing.
           if [ -z "${SNYK_TOKEN:-}" ]; then
             echo "SNYK_TOKEN not set; skipping Snyk Code scan."
             exit 0
           fi
-          npm install -g snyk
-          snyk code test --severity-threshold=medium
+          npm install -g snyk@1.1308.4
+          snyk code test --severity-threshold=medium ${SNYK_ORG:+--org="$SNYK_ORG"}

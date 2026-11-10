@@ -50,7 +50,7 @@ export default function Home() {
   return (
     <Layout
       title="Run Python apps with Caddy"
-      description="Caddy Snake runs WSGI, ASGI, and ESGI Python apps inside Caddy with automatic HTTPS — no separate app server required.">
+      description="Caddy Snake runs WSGI and ASGI Python apps inside Caddy with automatic HTTPS — no separate app server required.">
       <HomepageHeader />
       <main>
         <HomepageFeatures />

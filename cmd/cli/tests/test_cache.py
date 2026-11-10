@@ -73,20 +73,16 @@ class _FakeMod:
 def _patch_cache(monkeypatch):
     monkeypatch.setenv("CADDYSNAKE_CACHE_ADDR", "127.0.0.1:19999")
     monkeypatch.setenv("CADDYSNAKE_CACHE_TOKEN", "test-token")
-    monkeypatch.delenv("CADDYSNAKE_WORKER_INTERFACE", raising=False)
     monkeypatch.setattr("caddysnake.kv_cache._socket_module", lambda: _FakeMod)
 
 
 def _patch_cache_unix(monkeypatch, path="/tmp/caddysnake-cache-test.sock"):
     monkeypatch.setenv("CADDYSNAKE_CACHE_ADDR", f"unix://{path}")
-    monkeypatch.setenv("CADDYSNAKE_WORKER_INTERFACE", "esgi")
     monkeypatch.setattr("caddysnake.kv_cache._socket_module", lambda: _FakeMod)
 
 
 def test_unix_socket_uses_the_selected_socket_module(monkeypatch):
-    # ESGI workers get gevent.socket from _socket_module(). The unix:// path must
-    # honour it: opening a blocking stdlib socket instead never yields to the gevent
-    # hub, freezing every other greenlet in the worker for the whole round-trip.
+    # The unix:// path must open its socket through _socket_module() like TCP does.
     # unix:// is the default transport on Unix, so this is the hot path.
     _patch_cache_unix(monkeypatch)
     _FakeMod._response = b"$-1\r\n"

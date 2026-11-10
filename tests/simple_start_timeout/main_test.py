@@ -1,4 +1,4 @@
-"""Integration tests for python start_timeout across WSGI/ASGI/ESGI/dynamic.
+"""Integration tests for python start_timeout across WSGI/ASGI/dynamic.
 
 Cases per mode:
   - timeout: worker delay exceeds start_timeout → readiness failure
@@ -25,12 +25,11 @@ CADDY_BIN = ROOT / "caddy"
 WARN_AFTER = "1s"
 WARN_AFTER_SEC = 1.0
 
-MODES = ("wsgi", "asgi", "esgi", "dynamic")
+MODES = ("wsgi", "asgi", "dynamic")
 
 EXPECTED_BODY = {
     "wsgi": b"ok-wsgi",
     "asgi": b"ok-asgi",
-    "esgi": b"ok-esgi",
     "dynamic": b"ok-asgi",
 }
 
@@ -40,8 +39,6 @@ def module_directive(mode: str) -> str:
         return 'module_wsgi "app:wsgi_app"'
     if mode == "asgi":
         return 'module_asgi "app:asgi_app"'
-    if mode == "esgi":
-        return 'module_esgi "app:application"\n\t\truntime gevent'
     if mode == "dynamic":
         return 'module_asgi "app:asgi_app"'
     raise ValueError(mode)
