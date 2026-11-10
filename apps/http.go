@@ -395,13 +395,12 @@ func (h *Handler) secureCookies(r *http.Request) bool {
 
 func (h *Handler) serveLogin(w http.ResponseWriter, r *http.Request) {
 	p := h.platform
-	next := safeNext(r.URL.Query().Get("next"))
 	if !p.cfg.RequireLogin {
-		// #nosec G710 -- a path on this server: next went through safeNext
-		// nosemgrep: go.lang.security.injection.open-redirect.open-redirect
-		http.Redirect(w, r, next, http.StatusSeeOther)
+		// Nothing to sign in to: go to the list of apps.
+		http.Redirect(w, r, "/", http.StatusSeeOther)
 		return
 	}
+	next := safeNext(r.URL.Query().Get("next"))
 	if r.Method != http.MethodPost {
 		renderLogin(w, http.StatusOK, next, "")
 		return
