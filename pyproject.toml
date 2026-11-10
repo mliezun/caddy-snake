@@ -1,13 +1,13 @@
 [project]
 name = "caddy-snake"
 version = "0.0.0"
-requires-python = ">=3.12"
+requires-python = ">=3.13"
 description = "Caddy module and Python WSGI/ASGI server (development metadata only)"
 readme = "README.md"
 
 [tool.ruff]
 line-length = 100
-target-version = "py312"
+target-version = "py313"
 exclude = [
     "tests/*/venv",
     "docs/build",
@@ -25,7 +25,7 @@ ignore = ["E501"]
 known-first-party = ["caddysnake", "tests"]
 
 [tool.ty.environment]
-python-version = "3.12"
+python-version = "3.13"
 
 [tool.ty.src]
 include = [

@@ -43,6 +43,11 @@ latest:
   permalink: /3-14
   description: Python 3.14 related posts
 
+"3.15":
+  label: "3.15"
+  permalink: /3-15
+  description: Python 3.15 related posts
+
 previews:
   label: Previews
   permalink: /previews

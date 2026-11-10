@@ -17,7 +17,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.12", "3.13", "3.14"]
+        python-version: ["3.13", "3.14", "3.15"]
         platform: [linux-amd64, linux-arm64, linux-riscv64, macos-arm64, macos-amd64]
         include:
           - platform: linux-amd64

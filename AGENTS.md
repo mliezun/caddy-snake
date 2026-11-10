@@ -103,7 +103,7 @@ xcaddy build --with github.com/mliezun/caddy-snake=.
 
 ### Python
 
-- **Python 3.12+** (3.13 recommended)
+- **Python 3.13+** (3.13 recommended)
 - Each integration test app has its own `tests/<app>/requirements.txt`
 
 **Flask integration** (`tests/flask`):
@@ -144,7 +144,7 @@ For full CI-like integration tests without local Python/venv setup:
 ```
 
 Valid tools: `django`, `django_channels`, `flask`, `fastapi`, `simple_autoreload`, `simple_async`, `simple_esgi`, `simple_cache`, `simple_cluster_cache`, `simple_start_timeout`, `simple_isolation`, `simple_request_body`, `socketio`, `dynamic`
-Valid Python versions: `3.12`, `3.13`, `3.13-nogil`, `3.14`, `3.14-nogil`
+Valid Python versions: `3.13`, `3.13-nogil`, `3.14`, `3.14-nogil`, `3.15`, `3.15-nogil`
 
 Requires **Docker** (linux/amd64 container).
 
