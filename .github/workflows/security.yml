@@ -154,6 +154,10 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      # Pinned, checksum-verified CLI download (no ad-hoc npm install).
+      - uses: snyk/actions/setup@11b673cfb4b0dc0d860a1323caa199d54950dcce # master 2026-11
+        with:
+          snyk-version: v1.1308.4
       - name: Snyk Code test
         env:
           SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }} # zizmor: ignore[secrets-in-unapproved-environment]
@@ -165,5 +169,4 @@ jobs:
             echo "SNYK_TOKEN not set; skipping Snyk Code scan."
             exit 0
           fi
-          npm install -g snyk@1.1308.4
           snyk code test --severity-threshold=medium ${SNYK_ORG:+--org="$SNYK_ORG"}
