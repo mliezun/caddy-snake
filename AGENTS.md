@@ -74,6 +74,7 @@ How the docs are laid out (maintainer, 2026-11-10: lead with apps, keep the plug
 
 - **Two sections**, each with its own sidebar in [`docs/sidebars.js`](docs/sidebars.js): **Apps** (`docs/docs/apps/`: overview, connecting an assistant, how apps work, sharing, running) and **Caddy plugin** (every other page). The plugin pages keep the addresses they always had (`/docs/intro`, `/docs/reference`, ...); do not move them.
 - **The README is an overview, not a reference**: what it is, the demo, a quick start for each of the two, and links into the docs. Directive and flag details live in the docs only. It keeps the benchmark table.
+- **Formatting**: one idea per block with space around it. Commands go in fenced code blocks with a language (`bash`, `text`, `toml`), never in a long sentence; anything that differs per operating system goes in `<Tabs groupId="os">`; a list of names and values is a two-column table. The look (spacing, tables, inline code) is set once in `docs/src/css/custom.css`.
 - **The demo GIF** (`docs/static/img/apps-demo.gif`) is recorded from a real server by [`scripts/record_demo.py`](scripts/record_demo.py). Record it again when the dashboard changes visibly.
 - **The logo** is `docs/static/img/logo.svg`, the same mark as the dashboard's (`logoSVG` and the favicon in `apps/pages.go`). After changing it, run [`scripts/render_logo.sh`](scripts/render_logo.sh) to regenerate the PNGs and the favicon.
 

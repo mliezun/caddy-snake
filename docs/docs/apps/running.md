@@ -4,6 +4,9 @@ description: Install it as a service, the settings file, Docker, Windows and eve
 sidebar_position: 5
 ---
 
+import Tabs from '@theme/Tabs';
+import TabItem from '@theme/TabItem';
+
 # Run it for real
 
 ## Install
@@ -14,7 +17,36 @@ sidebar_position: 5
 | Windows | `pip install caddysnake` (from version 0.8.0), or `caddy-windows-*.zip` from a [release](https://github.com/mliezun/caddy-snake/releases), run as `caddy.exe python-apps` |
 | Docker | [Run with Docker](#run-with-docker) |
 
-The Postgres programs must be installed (macOS: `brew install postgresql@18`; Debian/Ubuntu: `sudo apt install postgresql`; Fedora/Rocky: `sudo dnf install postgresql-server`; Windows: the installer from [postgresql.org](https://www.postgresql.org/download/windows/)), unless you pass `--database-url`.
+The Postgres programs must be installed, unless you pass `--database-url`:
+
+<Tabs groupId="os">
+<TabItem value="macos" label="macOS">
+
+```bash
+brew install postgresql@18
+```
+
+</TabItem>
+<TabItem value="debian" label="Debian, Ubuntu">
+
+```bash
+sudo apt install postgresql
+```
+
+</TabItem>
+<TabItem value="fedora" label="Fedora, Rocky">
+
+```bash
+sudo dnf install postgresql-server
+```
+
+</TabItem>
+<TabItem value="windows" label="Windows">
+
+Run the installer from [postgresql.org](https://www.postgresql.org/download/windows/).
+
+</TabItem>
+</Tabs>
 
 ## Run it as a service
 
@@ -24,17 +56,55 @@ The server can install itself so it starts on its own: with systemd on Linux, la
 caddysnake apps install --domain apps.example.com --require-login
 ```
 
-This is a **system service** that starts with the machine. It needs administrator rights: on Linux and macOS it asks for your password (it uses `sudo`); on Windows, run it from a terminal opened with "Run as administrator".
+This is a **system service** that starts with the machine. It needs administrator rights.
 
-| | Linux | macOS | Windows |
-|---|-------|-------|---------|
-| Service | `caddysnake-apps` (systemd) | `caddysnake.apps` (launchd) | `caddysnake-apps` |
-| Runs as | its own account, `caddysnake`, confined to its own folders | you | the built-in account LocalService, which has few rights |
-| Settings | `/etc/caddysnake/apps.toml` | `/usr/local/etc/caddysnake/apps.toml` | `%ProgramData%\caddysnake\apps.toml` |
-| Data | `/var/lib/caddysnake/apps` | `/usr/local/var/caddysnake/apps` | `%ProgramData%\caddysnake\apps` |
-| Programs | copied to `/usr/local/lib/caddysnake` | copied to `/usr/local/lib/caddysnake` | copied to `%ProgramFiles%\caddysnake` |
-| Status | `systemctl status caddysnake-apps` | `launchctl print system/caddysnake.apps` | `sc.exe query caddysnake-apps` |
-| Output | `journalctl -u caddysnake-apps -f` | `/usr/local/var/log/caddysnake-apps.log` | `%ProgramData%\caddysnake\logs\caddysnake-apps.log` |
+<Tabs groupId="os">
+<TabItem value="linux" label="Linux">
+
+Asks for your password (it uses `sudo`).
+
+| | |
+|---|---|
+| Service | `caddysnake-apps` (systemd) |
+| Runs as | its own account, `caddysnake`, confined to its own folders |
+| Settings | `/etc/caddysnake/apps.toml` |
+| Data | `/var/lib/caddysnake/apps` |
+| Programs | copied to `/usr/local/lib/caddysnake` |
+| Status | `systemctl status caddysnake-apps` |
+| Output | `journalctl -u caddysnake-apps -f` |
+
+</TabItem>
+<TabItem value="macos" label="macOS">
+
+Asks for your password (it uses `sudo`).
+
+| | |
+|---|---|
+| Service | `caddysnake.apps` (launchd) |
+| Runs as | you |
+| Settings | `/usr/local/etc/caddysnake/apps.toml` |
+| Data | `/usr/local/var/caddysnake/apps` |
+| Programs | copied to `/usr/local/lib/caddysnake` |
+| Status | `launchctl print system/caddysnake.apps` |
+| Output | `/usr/local/var/log/caddysnake-apps.log` |
+
+</TabItem>
+<TabItem value="windows" label="Windows">
+
+Run it from a terminal opened with "Run as administrator".
+
+| | |
+|---|---|
+| Service | `caddysnake-apps` |
+| Runs as | the built-in account LocalService, which has few rights |
+| Settings | `%ProgramData%\caddysnake\apps.toml` |
+| Data | `%ProgramData%\caddysnake\apps` |
+| Programs | copied to `%ProgramFiles%\caddysnake` |
+| Status | `sc.exe query caddysnake-apps` |
+| Output | `%ProgramData%\caddysnake\logs\caddysnake-apps.log` |
+
+</TabItem>
+</Tabs>
 
 Without administrator rights, on Linux and macOS, install it for **your own account**. It then starts when you log in:
 
@@ -106,7 +176,7 @@ With `--database-url`, the user in the URL must be allowed to create roles and d
 
 ### The data folder
 
-```
+```text
 ~/.caddysnake/apps/
 ├── apps/<app>/current -> releases/<version>-<time>/   the running version (files + .venv)
 ├── apps/<app>/settings.env                            what the app runs with

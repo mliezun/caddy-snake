@@ -4,6 +4,9 @@ description: Build and share small internal web apps with your own AI assistant
 sidebar_position: 1
 ---
 
+import Tabs from '@theme/Tabs';
+import TabItem from '@theme/TabItem';
+
 # Apps
 
 `caddysnake apps` turns one machine into a place where people build and share small internal web apps **through their own AI assistant**. The assistant connects over [MCP](https://modelcontextprotocol.io), writes the code, and publishes it; the person gets an address to open and share.
@@ -19,25 +22,60 @@ It is one program: Caddy, the caddy-snake plugin and the platform, with a databa
 
 ## Quick start
 
-You need Python 3.13+ and the Postgres programs installed (macOS: `brew install postgresql@18`; Debian/Ubuntu: `sudo apt install postgresql`; Fedora/Rocky: `sudo dnf install postgresql-server`; Windows: the installer from [postgresql.org](https://www.postgresql.org/download/windows/)). The server starts its own private database; it does not touch one you already run.
+### 1. Install Postgres
+
+You need Python 3.13 or newer and the Postgres programs. The server starts its own private database; it does not touch one you already run.
+
+<Tabs groupId="os">
+<TabItem value="macos" label="macOS">
+
+```bash
+brew install postgresql@18
+```
+
+</TabItem>
+<TabItem value="debian" label="Debian, Ubuntu">
+
+```bash
+sudo apt install postgresql
+```
+
+</TabItem>
+<TabItem value="fedora" label="Fedora, Rocky">
+
+```bash
+sudo dnf install postgresql-server
+```
+
+</TabItem>
+<TabItem value="windows" label="Windows">
+
+Run the installer from [postgresql.org](https://www.postgresql.org/download/windows/).
+
+</TabItem>
+</Tabs>
+
+### 2. Start the server
 
 ```bash
 pip install caddysnake
 caddysnake apps
 ```
 
-```
+```text
 caddy-snake apps is running.
   Open:               http://localhost:9080/
   Assistant (MCP):    http://localhost:9080/_apps/mcp
   Data folder:        ~/.caddysnake/apps
 ```
 
-Add `http://localhost:9080/_apps/mcp` to your assistant as an MCP server (a "connector"), then ask it for something:
+### 3. Connect your assistant
 
-> Make an app where the team can sign up for Friday lunch.
+Add the assistant address to your assistant as an MCP server (a "connector"):
 
-The assistant creates the app, and tells you its address — for example `http://localhost:9080/friday-lunch/`. The page at `http://localhost:9080/` lists every app.
+```text
+http://localhost:9080/_apps/mcp
+```
 
 With [Claude Code](https://claude.com/claude-code), for instance:
 
@@ -45,7 +83,15 @@ With [Claude Code](https://claude.com/claude-code), for instance:
 claude mcp add --transport http apps http://localhost:9080/_apps/mcp
 ```
 
-Prefer Docker? See [Run with Docker](running.md#run-with-docker).
+### 4. Ask for an app
+
+> Make an app where the team can sign up for Friday lunch.
+
+The assistant creates the app and tells you its address, for example `http://localhost:9080/friday-lunch/`. The page at `http://localhost:9080/` lists every app.
+
+:::tip Prefer Docker?
+See [Run with Docker](running.md#run-with-docker).
+:::
 
 ## Where to go next
 
