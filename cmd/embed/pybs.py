@@ -6,6 +6,7 @@ import random
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 
@@ -102,11 +103,15 @@ def urlopen_with_retry(
     max_sleep_seconds=240,
 ):
     """Open a URL with retry logic for rate limit errors (HTTP 403/429)."""
+    # Only HTTPS: blocks file:// and other schemes urllib would otherwise accept.
+    if urllib.parse.urlsplit(url).scheme != "https":
+        raise ValueError(f"Refusing non-HTTPS URL: {url}")
     delay = initial_delay
     total_attempts = max_retries + 1
     for attempt in range(total_attempts):
         try:
             req = urllib.request.Request(url, headers=dict(headers or {}))
+            # deepcode ignore Ssrf: CLI tool; the operator supplies the URL and it is HTTPS-only.
             response = urllib.request.urlopen(req)
             if response.status != 200:
                 raise urllib.error.HTTPError(
@@ -381,7 +386,12 @@ def select_asset(
 
 
 def download_asset(url, filename, dest):
-    dest_path = Path(dest) / filename
+    # Asset names come from the GitHub API; reject anything that is not a bare
+    # file name so a crafted name cannot write outside dest.
+    safe_name = Path(filename).name
+    if safe_name != filename or safe_name in ("", ".", ".."):
+        raise ValueError(f"Refusing unsafe asset file name: {filename!r}")
+    dest_path = Path(dest) / safe_name
     dl_headers = None
     if "github.com" in url:
         dl_headers = {

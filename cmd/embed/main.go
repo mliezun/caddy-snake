@@ -83,6 +83,7 @@ func extractTarGz(data []byte, targetDir string) error {
 			if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 				return err
 			}
+			// deepcode ignore PT: path and link target are confined to targetDir above; the archive is embedded at build time.
 			if err := os.Symlink(header.Linkname, path); err != nil {
 				return err
 			}
