@@ -101,10 +101,11 @@ jobs:
       - name: Build Caddy with caddy-snake module (native)
         if: ${{ !matrix.use_docker }}
         env:
-          GOARCH: ${{ matrix.goarch }}
+          TARGET_GOARCH: ${{ matrix.goarch }}
         run: |
+          # Install xcaddy for the host; only the Caddy build itself is cross-compiled.
           go install github.com/caddyserver/xcaddy/cmd/xcaddy@v0.4.6
-          CGO_ENABLED=0 xcaddy build --with github.com/mliezun/caddy-snake=.
+          CGO_ENABLED=0 GOARCH="${TARGET_GOARCH:-$(go env GOARCH)}" "$(go env GOPATH)/bin/xcaddy" build --with github.com/mliezun/caddy-snake=.
       - name: Install Rust
         if: ${{ !matrix.use_docker }}
         env:

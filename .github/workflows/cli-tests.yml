@@ -115,11 +115,10 @@ jobs:
           rustup target add --toolchain stable riscv64gc-unknown-linux-gnu
       - name: Build the CLI binary (riscv64)
         working-directory: cmd/cli
-        env:
-          GOARCH: riscv64
         run: |
+          # Install xcaddy for the host; only the Caddy build itself targets riscv64.
           go install github.com/caddyserver/xcaddy/cmd/xcaddy@v0.4.6
-          CGO_ENABLED=0 xcaddy build --with github.com/mliezun/caddy-snake=../..
+          CGO_ENABLED=0 GOARCH=riscv64 "$(go env GOPATH)/bin/xcaddy" build --with github.com/mliezun/caddy-snake=../..
           mv caddy caddysnake-cli
       - name: Build the wheel (riscv64)
         working-directory: cmd/cli
