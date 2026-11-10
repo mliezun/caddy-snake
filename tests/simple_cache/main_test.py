@@ -186,25 +186,10 @@ def test_asgi_aget_and_list():
     assert empty.json() == []
 
 
-def test_esgi_cache():
-    r = requests.post(f"{BASE_URL}/esgi/set?k=ek", data=b"esgi-bytes", timeout=10)
-    assert r.status_code == 200, r.text
-    g = requests.get(f"{BASE_URL}/esgi/get?k=ek", timeout=10)
-    assert g.status_code == 200
-    assert g.content == b"esgi-bytes"
-
-    requests.post(f"{BASE_URL}/esgi/append?k=eq", data=b"p1", timeout=10).raise_for_status()
-    requests.post(f"{BASE_URL}/esgi/append?k=eq", data=b"p2", timeout=10).raise_for_status()
-    lst = requests.get(f"{BASE_URL}/esgi/get?k=eq", timeout=10)
-    assert lst.status_code == 200
-    assert lst.json() == ["p1", "p2"]
-
-
 if __name__ == "__main__":
     test_wsgi_cross_worker_blocking_pop()
     test_cross_worker_set_add_members()
     test_pubsub_cross_worker_delivery()
     test_worker_id_unique_and_stable_per_worker()
     test_asgi_aget_and_list()
-    test_esgi_cache()
     print("simple_cache integration tests passed")

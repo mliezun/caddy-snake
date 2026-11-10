@@ -1,3 +1,2 @@
 requests>=2.34.2
-gevent>=24.0
 uvloop>=0.21.171
