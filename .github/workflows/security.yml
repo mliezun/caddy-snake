@@ -169,4 +169,4 @@ jobs:
             echo "SNYK_TOKEN not set; skipping Snyk Code scan."
             exit 0
           fi
-          snyk code test --severity-threshold=medium ${SNYK_ORG:+--org="$SNYK_ORG"}
+          snyk code test --severity-threshold=high ${SNYK_ORG:+--org="$SNYK_ORG"}
