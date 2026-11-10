@@ -10,12 +10,24 @@ on:
 
 permissions: {}
 
+# A new push to a pull request cancels the runs of the push before it.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
+  changes:
+    permissions:
+      pull-requests: read
+    uses: ./.github/workflows/changes.yml
+
   build:
+    needs: changes
+    if: needs.changes.outputs.integration == 'true'
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-22.04, ubuntu-22.04-arm]
+        os: ${{ fromJSON(needs.changes.outputs.oses) }}
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -24,7 +36,7 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: "1.26.10"
-          cache: false
+          cache: true
       - name: Install Xcaddy
         run: go install github.com/caddyserver/xcaddy/cmd/xcaddy@v0.4.6
       - name: Build the server
@@ -36,7 +48,8 @@ jobs:
           path: caddy
 
   tests:
-    needs: build
+    needs: [changes, build]
+    if: needs.changes.outputs.integration == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -54,8 +67,9 @@ jobs:
           - "simple_mount_prefix"
           - "socketio"
           - "dynamic"
-        python-version: ["3.13", "3.13t", "3.14", "3.14t", "3.15", "3.15t"]
-        os: [ubuntu-22.04, ubuntu-22.04-arm]
+        # Two Pythons on one kind of machine for pull requests, all of them on main.
+        python-version: ${{ fromJSON(needs.changes.outputs.pythons) }}
+        os: ${{ fromJSON(needs.changes.outputs.oses) }}
         exclude:
           # Not exercised on CPython free-threaded (nogil) builds
           - tool-name: simple_cache

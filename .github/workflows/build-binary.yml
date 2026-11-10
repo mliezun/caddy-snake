@@ -11,11 +11,24 @@ on:
     types:
       - published
 
-permissions:
-  contents: write
+permissions: {}
+
+# A new push to a pull request cancels the runs of the push before it.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  changes:
+    permissions:
+      pull-requests: read
+    uses: ./.github/workflows/changes.yml
+
   build:
+    permissions:
+      contents: write
+    needs: changes
+    if: needs.changes.outputs.go == 'true'
     strategy:
       fail-fast: false
       matrix:

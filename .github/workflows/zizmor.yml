@@ -8,8 +8,20 @@ on:
 
 permissions: {}
 
+# A new push to a pull request cancels the runs of the push before it.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
+  changes:
+    permissions:
+      pull-requests: read
+    uses: ./.github/workflows/changes.yml
+
   zizmor:
+    needs: changes
+    if: needs.changes.outputs.workflows == 'true'
     name: Run zizmor
     runs-on: ubuntu-latest
     permissions:

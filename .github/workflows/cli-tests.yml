@@ -10,8 +10,20 @@ on:
 
 permissions: {}
 
+# A new push to a pull request cancels the runs of the push before it.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
+  changes:
+    permissions:
+      pull-requests: read
+    uses: ./.github/workflows/changes.yml
+
   tests:
+    needs: changes
+    if: needs.changes.outputs.cli == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -24,7 +36,7 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: "1.26.10"
-          cache: false
+          cache: true
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.13"
@@ -96,6 +108,8 @@ jobs:
   # Mirrors the linux-riscv64 cell of python-build.yml (which only runs on tags), then
   # installs the wheel in the official riscv64 Python image under QEMU and serves a request.
   riscv64-wheel:
+    needs: changes
+    if: needs.changes.outputs.cli == 'true'
     name: riscv64 wheel (cross-build + QEMU smoke test)
     runs-on: ubuntu-22.04
     steps:
@@ -105,7 +119,7 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: "1.26.10"
-          cache: false
+          cache: true
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.13"

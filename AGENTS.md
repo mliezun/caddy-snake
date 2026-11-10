@@ -51,6 +51,16 @@ CI enforces Go coverage ≥ 65% and Python coverage ≥ 50%, and also runs secur
 
 ---
 
+## CI
+
+Rules for every workflow under `.github/workflows/` (maintainer, 2026-11-10: a new push must cancel the runs of the one before it, only the checks that make sense for the change should run, and CI must be fast):
+
+- **Cancel superseded runs.** Every workflow that runs on pull requests has the same `concurrency` block; copy it into new ones.
+- **Skip what a change cannot affect.** [`changes.yml`](.github/workflows/changes.yml) works out which areas a pull request touches; other workflows call it as their `changes` job and gate their jobs on its outputs. Pushes to `main`, releases and schedules run everything. Add new areas there, not as `paths:` filters in single workflows.
+- **Required checks must still report.** Branch protection requires some checks by their matrix name (`tests (ubuntu-24.04)`, `python-tests (3.13)`, `Analyze (go)`). A skipped matrix job reports under its bare name and would block the pull request for ever, so those jobs always start and skip their *steps* (see `go-tests.yml`). Other jobs are skipped whole with a job-level `if`.
+- **Small matrix on pull requests, full matrix on `main`.** The Linux integration tests take their Python versions and runners from `changes.yml`: two Pythons on one runner for pull requests, all of them on `main`.
+- **Go cache**: on (`cache: true`) in test-only workflows, off in workflows that build release files.
+
 ## Documentation
 
 When you add or change a **user-facing feature** (Caddyfile directives, worker env vars, Python/Go APIs, cache protocol, CLI behavior, integration-test apps), update the docs in the same PR:

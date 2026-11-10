@@ -14,8 +14,20 @@ env:
   REGISTRY_DOCKER_HUB: docker.io
   IMAGE_NAME: ${{ github.repository }}
 
+# A new push to a pull request cancels the runs of the push before it.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
+  changes:
+    permissions:
+      pull-requests: read
+    uses: ./.github/workflows/changes.yml
+
   build:
+    needs: changes
+    if: needs.changes.outputs.docker == 'true'
     strategy:
       matrix:
         python-version: ["3.13", "3.14", "3.15"]
@@ -35,6 +47,8 @@ jobs:
           platforms: linux/amd64
 
   riscv64:
+    needs: changes
+    if: needs.changes.outputs.docker == 'true'
     name: Build and smoke-test riscv64 image (QEMU)
     runs-on: ubuntu-24.04
     permissions:
@@ -59,6 +73,8 @@ jobs:
           done
 
   python-symlink:
+    needs: changes
+    if: needs.changes.outputs.docker == 'true'
     name: Verify python/python3 symlink
     runs-on: ubuntu-24.04
     permissions:
@@ -83,7 +99,8 @@ jobs:
   trivy:
     name: Trivy scan
     runs-on: ubuntu-24.04
-    needs: build
+    needs: [changes, build]
+    if: needs.changes.outputs.docker == 'true'
     permissions:
       contents: read
       security-events: write

@@ -1,0 +1,140 @@
+name: Changes
+
+# Works out which parts of the project a pull request touches, so every other
+# workflow can skip what the change cannot affect. It is called by them
+# (`uses: ./.github/workflows/changes.yml`), never run on its own.
+#
+# On anything that is not a pull request (a push to main, a release, a
+# schedule) every area counts as changed and the full test matrix runs.
+# A change to anything under .github/ also counts as changing everything.
+#
+# To add an area: add it to KEYS, give it a rule below, and declare the output
+# twice (workflow_call.outputs and jobs.detect.outputs).
+
+on:
+  workflow_call:
+    outputs:
+      go:
+        description: Go code, go.mod, or the worker (caddysnake.py is built into the binary)
+        value: ${{ jobs.detect.outputs.go }}
+      python:
+        description: Python code or its dependency files
+        value: ${{ jobs.detect.outputs.python }}
+      code:
+        description: Go or Python
+        value: ${{ jobs.detect.outputs.code }}
+      apps:
+        description: The apps platform and what it is built on
+        value: ${{ jobs.detect.outputs.apps }}
+      integration:
+        description: The server or the integration test apps
+        value: ${{ jobs.detect.outputs.integration }}
+      docker:
+        description: The server or the Docker images
+        value: ${{ jobs.detect.outputs.docker }}
+      cli:
+        description: The server or the PyPI package
+        value: ${{ jobs.detect.outputs.cli }}
+      embed:
+        description: The server or the standalone and embed builds
+        value: ${{ jobs.detect.outputs.embed }}
+      docs:
+        description: The documentation site
+        value: ${{ jobs.detect.outputs.docs }}
+      rust:
+        description: The Rust stub of the PyPI package
+        value: ${{ jobs.detect.outputs.rust }}
+      js:
+        description: The documentation site's JavaScript dependencies
+        value: ${{ jobs.detect.outputs.js }}
+      workflows:
+        description: Anything under .github/
+        value: ${{ jobs.detect.outputs.workflows }}
+      full:
+        description: Run the full test matrix (everything except pull requests)
+        value: ${{ jobs.detect.outputs.full }}
+      pythons:
+        description: Python versions for the integration tests, as a JSON list
+        value: ${{ jobs.detect.outputs.pythons }}
+      oses:
+        description: Runners for the integration tests, as a JSON list
+        value: ${{ jobs.detect.outputs.oses }}
+
+permissions: {}
+
+jobs:
+  detect:
+    name: Detect changes
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      pull-requests: read
+    outputs:
+      go: ${{ steps.detect.outputs.go }}
+      python: ${{ steps.detect.outputs.python }}
+      code: ${{ steps.detect.outputs.code }}
+      apps: ${{ steps.detect.outputs.apps }}
+      integration: ${{ steps.detect.outputs.integration }}
+      docker: ${{ steps.detect.outputs.docker }}
+      cli: ${{ steps.detect.outputs.cli }}
+      embed: ${{ steps.detect.outputs.embed }}
+      docs: ${{ steps.detect.outputs.docs }}
+      rust: ${{ steps.detect.outputs.rust }}
+      js: ${{ steps.detect.outputs.js }}
+      workflows: ${{ steps.detect.outputs.workflows }}
+      full: ${{ steps.detect.outputs.full }}
+      pythons: ${{ steps.detect.outputs.pythons }}
+      oses: ${{ steps.detect.outputs.oses }}
+    steps:
+      - name: Detect what changed
+        id: detect
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT: ${{ github.event_name }}
+          PR: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          KEYS="go python code apps integration docker cli embed docs rust js workflows"
+          out() { echo "$1=$2" >> "$GITHUB_OUTPUT"; echo "$1=$2"; }
+          everything() { for k in $KEYS; do out "$k" true; done; }
+
+          if [ "$EVENT" != "pull_request" ]; then
+            everything
+            out full true
+            out pythons '["3.13", "3.13t", "3.14", "3.14t", "3.15", "3.15t"]'
+            out oses '["ubuntu-22.04", "ubuntu-22.04-arm"]'
+            exit 0
+          fi
+
+          # Pull requests test the oldest supported Python and the newest
+          # free-threaded one, on one kind of machine. Main tests all of them.
+          out full false
+          out pythons '["3.13", "3.15t"]'
+          out oses '["ubuntu-22.04"]'
+
+          files="$(gh api "repos/$REPO/pulls/$PR/files" --paginate --jq '.[].filename')"
+          echo "Changed files:"
+          echo "$files"
+          has() { if grep -Eq "$1" <<< "$files"; then echo true; else echo false; fi; }
+          either() { if [ "$1" = true ] || [ "$2" = true ]; then echo true; else echo false; fi; }
+
+          if [ "$(has '^\.github/')" = true ]; then
+            everything
+            exit 0
+          fi
+
+          go="$(has '\.go$|^go\.(mod|sum)$|^caddysnake\.py$|^\.golangci')"
+          python="$(has '\.py$|(^|/)requirements[^/]*\.txt$|(^|/)pyproject\.toml$|^uv\.lock$|^ruff\.toml$|^pytest\.ini$')"
+          out go "$go"
+          out python "$python"
+          out code "$(either "$go" "$python")"
+          out apps "$(either "$go" "$(has '^apps/|^tests/apps_e2e/|^examples/apps/')")"
+          out integration "$(either "$go" "$(has '^tests/')")"
+          out docker "$(either "$go" "$(has '(^|/)[A-Za-z.]*Dockerfile|^\.dockerignore$|^examples/apps/')")"
+          out cli "$(either "$go" "$(has '^cmd/cli/')")"
+          out embed "$(either "$go" "$(has '^cmd/embed')")"
+          out docs "$(has '^docs/')"
+          out rust "$(has '^cmd/cli/(Cargo\.|src/)')"
+          out js "$(has '^docs/(package|yarn)')"
+          out workflows false

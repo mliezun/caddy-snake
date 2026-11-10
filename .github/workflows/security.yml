@@ -12,8 +12,20 @@ on:
 
 permissions: {}
 
+# A new push to a pull request cancels the runs of the push before it.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
+  changes:
+    permissions:
+      pull-requests: read
+    uses: ./.github/workflows/changes.yml
+
   govulncheck:
+    needs: changes
+    if: needs.changes.outputs.go == 'true'
     name: govulncheck
     runs-on: ubuntu-24.04
     steps:
@@ -23,13 +35,15 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: "1.26.10"
-          cache: false
+          cache: true
       - name: govulncheck
         run: |
           go install golang.org/x/vuln/cmd/govulncheck@latest
           govulncheck ./...
 
   pip-audit:
+    needs: changes
+    if: needs.changes.outputs.python == 'true'
     name: pip-audit
     runs-on: ubuntu-24.04
     steps:
@@ -45,6 +59,8 @@ jobs:
           ./scripts/audit-python-deps.sh
 
   npm-audit:
+    needs: changes
+    if: needs.changes.outputs.js == 'true'
     name: npm audit
     runs-on: ubuntu-24.04
     steps:
@@ -60,6 +76,8 @@ jobs:
         run: ./scripts/audit-npm-docs.sh
 
   gosec:
+    needs: changes
+    if: needs.changes.outputs.go == 'true'
     name: gosec
     runs-on: ubuntu-24.04
     steps:
@@ -69,7 +87,7 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: "1.26.10"
-          cache: false
+          cache: true
       - name: Run gosec
         run: |
           go install github.com/securego/gosec/v2/cmd/gosec@latest
@@ -77,6 +95,8 @@ jobs:
             -exclude-dir cmd/embed -exclude-dir cmd/embed-app ./...
 
   bandit:
+    needs: changes
+    if: needs.changes.outputs.python == 'true'
     name: bandit
     runs-on: ubuntu-24.04
     steps:
@@ -92,6 +112,8 @@ jobs:
           bandit -r caddysnake.py cmd/cli/caddysnake cmd/cli/caddysnake_cli.py -ll
 
   semgrep:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     name: semgrep
     runs-on: ubuntu-24.04
     permissions:
