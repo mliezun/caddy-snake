@@ -63,7 +63,7 @@ async def item_stream(id: str) -> StreamingResponse:
     return StreamingResponse(chunked_blob(db[id].blob), media_type="text/event-stream")
 
 
-async def slow_stream() -> AsyncGenerator[bytes, None]:
+async def slow_stream() -> AsyncGenerator[bytes]:
     for i in range(100):
         yield f"chunk-{i}\n".encode()
         await asyncio.sleep(0.05)

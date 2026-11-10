@@ -11,7 +11,7 @@ Build a single executable that includes Caddy, the plugin, a Python interpreter,
 ## Requirements
 
 - **App zip**: A `.zip` file of your application (Lambda-style, see below)
-- **Python version**: 3.12, 3.13, 3.13-nogil, 3.14, or 3.14-nogil
+- **Python version**: 3.13, 3.13-nogil, 3.14, 3.14-nogil, 3.15, or 3.15-nogil
 - **Build environment**: Go 1.26+, xcaddy, Python 3.x (for the build script)
 
 For apps with binary dependencies (NumPy, Pillow, etc.), build the zip on the **target platform** (e.g. Linux if you will run on Linux). We assume you use the correct platform when installing dependencies.
@@ -112,7 +112,7 @@ This produces a binary named after your zip (e.g. `app`) that you can run direct
 ./build.sh ./app.zip 3.13
 
 # ASGI app with custom entry point
-./build.sh ./app.zip 3.12 --app api:application --server-type asgi
+./build.sh ./app.zip 3.15 --app api:application --server-type asgi
 
 # Custom output name
 ./build.sh ./deployment.zip 3.13 --output my-service

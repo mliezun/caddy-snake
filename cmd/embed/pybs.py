@@ -463,7 +463,7 @@ def main():
         epilog="""
 Examples:
   pybs latest                                    # Default: Python 3.13, Linux GNU, latest release, stripped
-  pybs latest --python-version 3.12              # Python 3.12 instead
+  pybs latest --python-version 3.15              # Python 3.15 instead
   pybs latest --architecture x86_64-apple-darwin # macOS Intel
   pybs latest --build-config pgo+lto            # Fastest build
   pybs latest --content-type full               # Full build with all artifacts

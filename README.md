@@ -36,7 +36,7 @@ To make it easier to get started you can also grab one of the precompiled binari
 - **Static file serving** — built-in static file support via the CLI
 - **Pre-built binaries** — download and run with Python embedded, no compilation required
 - **Standalone app binaries** — package your app + Caddy + Python into a single executable (like FrankenPHP)
-- **Docker images** — ready-to-use images for Python 3.12 through 3.14
+- **Docker images** — ready-to-use images for Python 3.13 through 3.15
 - **Cross-platform** — Linux, macOS, and Windows
 
 ---
@@ -94,7 +94,7 @@ CGO_ENABLED=0 xcaddy build --with github.com/mliezun/caddy-snake
 
 #### Requirements
 
-- Python >= 3.12 (runtime — used by worker subprocesses)
+- Python >= 3.13 (runtime — used by worker subprocesses)
 - Go >= 1.26 and [xcaddy](https://github.com/caddyserver/xcaddy)
 
 Install on Ubuntu 24.04:
@@ -106,7 +106,7 @@ go install github.com/caddyserver/xcaddy/cmd/xcaddy@v0.4.6
 
 ### Option 3: Use a Docker image
 
-Docker images are available with Python 3.12, 3.13, and 3.14 for `linux/amd64`, `linux/arm64`, and `linux/riscv64`:
+Docker images are available with Python 3.13, 3.14, and 3.15 for `linux/amd64`, `linux/arm64`, and `linux/riscv64`:
 
 ```Dockerfile
 FROM mliezun/caddy-snake:latest-py3.13
@@ -572,7 +572,7 @@ Caddy Snake serves **~60% more requests/sec than Gunicorn** for Flask and **~51%
 | macOS          | process | Full support                   |
 | Windows        | process | Loopback TCP instead of Unix sockets |
 
-**Python versions:** 3.12, 3.13, 3.13-nogil (free-threaded), 3.14, 3.14-nogil (free-threaded)
+**Python versions:** 3.13, 3.13-nogil (free-threaded), 3.14, 3.14-nogil (free-threaded), 3.15, 3.15-nogil (free-threaded)
 
 ---
 

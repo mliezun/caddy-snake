@@ -6,7 +6,7 @@
 #
 # Examples:
 #   ./build.sh /path/to/app.zip 3.13
-#   ./build.sh ./deployment.zip 3.12 --app main:app --server-type wsgi --output myapp
+#   ./build.sh ./deployment.zip 3.15 --app main:app --server-type wsgi --output myapp
 #
 # Options:
 #   --app MODULE:VAR      App entry point (default: main:app)
@@ -25,7 +25,7 @@ usage() {
     echo "Usage: $0 APP_ZIP PYTHON_VERSION [OPTIONS]"
     echo ""
     echo "  APP_ZIP        Path to your app .zip (Lambda-style, see docs)"
-    echo "  PYTHON_VERSION Python version: 3.12, 3.13, 3.13-nogil, 3.14, 3.14-nogil"
+    echo "  PYTHON_VERSION Python version: 3.13, 3.13-nogil, 3.14, 3.14-nogil, 3.15, 3.15-nogil"
     echo ""
     echo "Options:"
     echo "  --app MODULE:VAR      App entry point (default: main:app)"
@@ -89,7 +89,7 @@ if [[ -z "$APP_ZIP_PATH" ]] || [[ -z "$PY_VERSION" ]]; then
     usage
 fi
 
-VALID_PY_VERSIONS=("3.12" "3.13" "3.13-nogil" "3.14" "3.14-nogil")
+VALID_PY_VERSIONS=("3.13" "3.13-nogil" "3.14" "3.14-nogil" "3.15" "3.15-nogil")
 match=0
 for v in "${VALID_PY_VERSIONS[@]}"; do
     [[ "$v" == "$PY_VERSION" ]] && match=1 && break
