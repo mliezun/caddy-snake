@@ -4,29 +4,31 @@ import styles from './styles.module.css';
 
 const FeatureList = [
   {
-    title: 'Python inside Caddy',
+    title: 'Ask for it',
     description: (
       <>
-        Serve WSGI and ASGI apps without a separate app server. Caddy
-        terminates TLS and talks to Python workers over a local socket.
+        Your assistant writes the app and publishes it. Each app gets its own
+        address and its own database. No AI is included: bring Claude,
+        ChatGPT, Cursor or any other that uses MCP tools.
       </>
     ),
   },
   {
-    title: 'Automatic HTTPS',
+    title: 'Safe to change',
     description: (
       <>
-        Same Caddy certificates you already know — including on-demand TLS for
-        wildcard preview hosts gated by a directory on disk.
+        Every save is a version. A version that does not start is refused and
+        the running one stays up. Try bigger changes in a draft, with a copy
+        of the data.
       </>
     ),
   },
   {
-    title: 'One process, many apps',
+    title: 'Yours to run',
     description: (
       <>
-        Dynamic placeholders load per-tenant or per-branch apps on first
-        request. Optional Docker isolation when you need harder boundaries.
+        One program on your own machine: Linux, macOS or Windows. Open on your
+        computer, sign-in for the team, automatic HTTPS with a domain.
       </>
     ),
   },

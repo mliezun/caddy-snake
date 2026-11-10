@@ -1,4 +1,6 @@
-# Caddy Snake 🐍
+<p align="center"><a href="https://caddy-snake.readthedocs.io/en/latest/"><img src="docs/static/img/logo.svg" alt="Caddy Snake" width="96" height="96"></a></p>
+
+# Caddy Snake
 
 [![Integration Tests Linux](https://github.com/mliezun/caddy-snake/actions/workflows/integration-tests-linux.yml/badge.svg)](https://github.com/mliezun/caddy-snake/actions/workflows/integration-tests-linux.yml)
 [![Integration Tests macOS](https://github.com/mliezun/caddy-snake/actions/workflows/integration-tests-macos.yml/badge.svg)](https://github.com/mliezun/caddy-snake/actions/workflows/integration-tests-macos.yml)
@@ -7,543 +9,142 @@
 [![Documentation](https://img.shields.io/badge/docs-latest-blue)](https://caddy-snake.readthedocs.io/en/latest/)
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/mliezun/caddy-snake)
 
-> [Caddy](https://github.com/caddyserver/caddy) is a powerful, enterprise-ready, open source web server with automatic HTTPS written in Go.
+**Build and share small internal web apps with your own AI assistant.** One program on one machine: you ask your assistant for an app, it writes and publishes it, and you get an address to share with your team.
 
-[![Caddy Snake logo](docs/static/img/caddysnake-512x512.png)](https://caddy-snake.readthedocs.io/en/latest/docs/intro)
+![An assistant is asked for an app; the app appears in the dashboard and opens](docs/static/img/apps-demo.gif)
 
-Caddy Snake is a Caddy plugin that lets you **run Python web apps directly inside Caddy** — no reverse proxy needed.
+Caddy Snake is two things in one program:
 
-The Caddy plugin spawns Python worker subprocesses and forwards requests over a Unix domain socket (loopback TCP on Windows) — no separate Gunicorn or Uvicorn process, and no reverse-proxy configuration. This means less overhead, simpler deployments, and automatic HTTPS out of the box.
-
-To make it easier to get started you can also grab one of the precompiled binaries that come with Caddy and Python, or one of the Docker images.
-
-**Works with Flask, Django, FastAPI, and any other WSGI/ASGI framework.**
-
----
-
-## Features
-
-- **WSGI & ASGI** — serve WSGI and ASGI frameworks
-- **Multi-worker** — process-based workers for concurrent request handling
-- **Shared worker cache** — key/value store in the Caddy (Go) process so Python **process** workers can share state via a small RESP client; optionally shard scalar keys across a static Caddy cluster with authenticated peer RPC
-- **Auto-reload** — watches `.py` files and hot-reloads your app on changes during development
-- **Dynamic module loading** — use Caddy placeholders to load different apps per subdomain or route
-- **On-demand TLS permission (`tls.permission.python_dir`)** — gate HTTPS issuance with filesystem checks so wildcard-style hosts work without running a separate ACME [`ask`](https://caddyserver.com/docs/caddyfile/options#on-demand-tls) service (pairs with dynamic `working_dir`)
-- **Virtual environment support** — point to a `venv` and dependencies are available automatically
-- **WebSocket support** — full WebSocket handling for ASGI apps
-- **Streaming uploads** — request bodies are proxied in chunks with no worker-imposed size cap (limit with `request_body` inside the `python` block if needed)
-- **ASGI lifespan events** — optional startup/shutdown lifecycle hooks
-- **Static file serving** — built-in static file support via the CLI
-- **Pre-built binaries** — download and run with Python embedded, no compilation required
-- **Standalone app binaries** — package your app + Caddy + Python into a single executable (like FrankenPHP)
-- **Docker images** — ready-to-use images for Python 3.13 through 3.15
-- **Cross-platform** — Linux, macOS, and Windows
+| | |
+|---|---|
+| **[Apps](#apps)** | A place for small internal apps, built through an AI assistant. Start here. |
+| **[The Caddy plugin](#the-caddy-plugin)** | Runs Python web apps inside [Caddy](https://github.com/caddyserver/caddy), with no separate app server. Apps is built on it. |
 
 ---
 
-## Quick start
+## Apps
 
-### Option 1: Download a pre-built binary
+### Quick start
 
-The easiest way to get started on Linux is to download a pre-compiled Caddy binary from the [latest release](https://github.com/mliezun/caddy-snake/releases). It comes with Python embedded — no system Python required.
-
-```bash
-# Start a WSGI server
-./caddy python-server --server-type wsgi --app main:app
-
-# Start an ASGI server
-./caddy python-server --server-type asgi --app main:app
-```
-
-This starts a server on port `9080` serving your app. See `./caddy python-server --help` for all options:
-
-```
---server-type wsgi|asgi   Required. Type of Python app
---app <module:var>        Required. Python module and app variable (e.g. main:app)
---domain <example.com>    Enable HTTPS with automatic certificates
---listen <addr>           Custom listen address (default: 127.0.0.1:9080)
---workers <count>         Number of worker processes (default: CPU count)
---python-path <path>      Path to Python executable (default: system/venv python; embedded in standalone builds)
---working-dir <path>      Working directory for the Python app
---venv <path>             Path to virtual environment
---env-file <path>         Dotenv file for worker env (repeatable)
---env-var NAME=VALUE      Inline worker env var (repeatable; overrides env-file)
---start-timeout=<dur|-1>  Worker readiness wait (default: 120s; use =-1 or forever)
---static-path <path>      Serve a static files directory
---static-route <route>    Route prefix for static files (default: /static)
---debug                   Enable debug logging
---access-logs             Enable access logs
---lifespan on|off         Enable ASGI lifespan events (default: off)
---runtime <name>          WSGI: sync|gevent; ASGI: native|uvloop (see docs)
---autoreload              Watch .py files and reload on changes
---cache-mode local|cluster       Cache topology (default: local)
---cache-listen <host:port>       Cluster peer RPC listener
---cache-advertise <host:port>    Dialable address for this cluster peer
---cache-peer <host:port>         Static cluster peer (repeatable)
---cache-namespace <name>         Namespace shared by every cluster peer
---cache-secret <secret>          Shared peer secret (16-4096 bytes)
---max-dynamic-apps <n>    Max distinct dynamic Python apps (default: 128)
---request-body-max-size <size>  Max HTTP request body (e.g. 1KiB, 2GB; empty = unlimited)
-```
-
-### Option 2: Build from source
+You need Python 3.13+ and the Postgres programs (macOS: `brew install postgresql@18`; Debian/Ubuntu: `sudo apt install postgresql`; Windows: the installer from [postgresql.org](https://www.postgresql.org/download/windows/)).
 
 ```bash
-CGO_ENABLED=0 xcaddy build --with github.com/mliezun/caddy-snake
+pip install caddysnake
+caddysnake apps
 ```
 
-#### Requirements
+```
+caddy-snake apps is running.
+  Open:               http://localhost:9080/
+  Assistant (MCP):    http://localhost:9080/_apps/mcp
+```
 
-- Python >= 3.13 (runtime — used by worker subprocesses)
-- Go >= 1.26 and [xcaddy](https://github.com/caddyserver/xcaddy)
-
-Install on Ubuntu 24.04:
+Give the assistant address to any assistant that can use [MCP](https://modelcontextprotocol.io) tools (Claude, ChatGPT, Cursor, Claude Code and others). With Claude Code:
 
 ```bash
-sudo apt-get install python3 golang
-go install github.com/caddyserver/xcaddy/cmd/xcaddy@v0.4.6
+claude mcp add --transport http apps http://localhost:9080/_apps/mcp
 ```
 
-### Option 3: Use a Docker image
+Then ask for something:
 
-Docker images are available with Python 3.13, 3.14, and 3.15 for `linux/amd64`, `linux/arm64`, and `linux/riscv64`:
+> Make an app where the team can sign up for Friday lunch.
 
-```Dockerfile
-FROM mliezun/caddy-snake:latest-py3.13
+### What you get
 
-WORKDIR /app
-COPY . /app
+- **An address per app**: `/<app-name>/`, each with its own Postgres database. The server creates and runs a private Postgres for you.
+- **Versions**: every save is a version. A version that does not start is refused and the running one stays up. Go back to any earlier one.
+- **Drafts**: a private copy of an app, with a copy of its data, for trying changes safely.
+- **A dashboard**: apps, versions, settings, activity, people and access keys.
+- **Sign-in when you need it**: open on your own computer, usernames and passwords for anything wider, automatic HTTPS with a domain.
+- **Bring your own assistant**: no AI is included.
 
-CMD ["caddy", "run", "--config", "/app/Caddyfile"]
-```
+### Share it with your team
 
-Images are published to both registries:
+| Situation | How to start it |
+|-----------|-----------------|
+| Just this computer | `caddysnake apps` |
+| A trusted private network | `caddysnake apps --listen 0.0.0.0:9080 --open-to-network` |
+| Anywhere else | `caddysnake apps --listen 0.0.0.0:9080 --require-login` |
+| With automatic HTTPS | `caddysnake apps --domain apps.example.com --require-login` |
 
-- [Docker Hub](https://hub.docker.com/r/mliezun/caddy-snake)
-- [GitHub Container Registry](https://github.com/mliezun/caddy-snake/pkgs/container/caddy-snake)
-
-### Option 4: Package your app as a standalone binary
-
-Package your Python app, Caddy, and Python into a single executable:
+Run it as a service that starts with the machine (systemd, launchd or a Windows service):
 
 ```bash
-# Create app zip (Lambda-style: app + deps at root)
-cd myapp && pip install -r requirements.txt -t package && cd package && zip -r ../app.zip . && cd ..
-zip -g app.zip main.py
-
-# Build standalone binary
-cd caddy-snake/cmd/embed-app
-./build.sh /path/to/myapp/app.zip 3.13 --output myapp
-
-./myapp  # Serves on 127.0.0.1:9080
+caddysnake apps install --domain apps.example.com --require-login
 ```
 
-See [Apps as Standalone Binaries](https://caddy-snake.readthedocs.io/en/latest/docs/embed-app/) for the full guide.
+### Documentation
+
+| | |
+|---|---|
+| [Apps](https://caddy-snake.readthedocs.io/en/latest/docs/apps) | Overview and quick start |
+| [Connect an assistant](https://caddy-snake.readthedocs.io/en/latest/docs/apps/assistant) | The address, the tools, access keys, git |
+| [How apps work](https://caddy-snake.readthedocs.io/en/latest/docs/apps/how-apps-work) | What an app is made of, publishing, drafts |
+| [Share it with your team](https://caddy-snake.readthedocs.io/en/latest/docs/apps/sharing) | Sign-in and what is protected |
+| [Run it for real](https://caddy-snake.readthedocs.io/en/latest/docs/apps/running) | Service install, settings file, Docker, Windows, every option |
 
 ---
 
-## Usage examples
+## The Caddy plugin
 
-### Flask (WSGI)
+Caddy Snake started as, and still is, a Caddy plugin that **runs Python web apps directly inside Caddy**. Caddy starts Python worker processes and talks to them over a local socket: no Gunicorn or Uvicorn, no reverse-proxy configuration, and automatic HTTPS. It works with Flask, Django, FastAPI and any other WSGI or ASGI app.
 
-`main.py`
+### Quick start
+
+```bash
+pip install caddysnake fastapi
+```
 
 ```python
-from flask import Flask
-
-app = Flask(__name__)
-
-
-@app.route("/hello-world")
-def hello():
-    return "Hello world!"
-```
-
-`Caddyfile`
-
-```Caddyfile
-http://localhost:9080 {
-    python /* {
-        module_wsgi "main:app"
-    }
-}
-```
-
-```bash
-pip install Flask
-./caddy run --config Caddyfile
-```
-
-```bash
-curl http://localhost:9080/hello-world
-# Hello world!
-```
-
-### FastAPI (ASGI)
-
-`main.py`
-
-```python
+# main.py
 from fastapi import FastAPI
 
 app = FastAPI()
 
 
-@app.get("/hello-world")
+@app.get("/hello")
 def hello():
-    return "Hello world!"
+    return {"message": "Hello world!"}
 ```
 
-`Caddyfile`
+```bash
+caddysnake --server-type asgi --app main:app
+curl http://127.0.0.1:9080/hello
+```
+
+Or in a Caddyfile, with a Caddy that includes the plugin:
 
 ```Caddyfile
 http://localhost:9080 {
     python /* {
         module_asgi "main:app"
-        lifespan on
     }
 }
 ```
 
-```bash
-pip install fastapi
-./caddy run --config Caddyfile
-```
-
-```bash
-curl http://localhost:9080/hello-world
-# Hello world!
-```
-
----
-
-## Caddyfile reference
-
-The `python` directive supports the following subdirectives:
-
-```Caddyfile
-python {
-    module_wsgi "module:variable"       # WSGI app (e.g. "main:app")
-    module_asgi "module:variable"       # ASGI app (e.g. "main:app")
-    runtime sync|gevent|native|uvloop   # See runtime table
-    venv "/path/to/venv"                # Virtual environment path
-    working_dir "/path/to/app"          # Working directory for module resolution
-    env_file "/path/to/.env"            # Dotenv file loaded into worker env (repeatable)
-    env_var VARNAME value               # Inline env var; overrides env_file (repeatable)
-    workers 4                           # Number of worker processes (default: CPU count)
-    max_dynamic_apps 32                 # Cap request-resolved app instances (default: 128)
-    start_timeout 120s                  # Wait for worker readiness (default: 120s; -1 = indefinite)
-    lifespan on|off                     # ASGI lifespan events (default: off)
-    python_path "/usr/bin/python3"       # Explicit Python interpreter
-    autoreload                          # Watch .py files and reload on changes
-    isolation docker {                  # Run workers in Docker (Linux; requires Docker engine)
-        image "python:3.13-slim"
-    }
-    cache cluster {                     # Optional: shard scalar keys across Caddy nodes
-        listen ":7447"
-        advertise "caddy-0.internal:7447"
-        peers "caddy-0.internal:7447" "caddy-1.internal:7447"
-        namespace "my-app"
-        secret "{$CADDYSNAKE_CLUSTER_SECRET}"
-    }
-    request_body {                      # Max inbound body size (HTTP 413 if exceeded)
-        max_size 2GB
-    }
-}
-```
-
-You must specify exactly one of `module_wsgi` or `module_asgi`.
-
-### `module_wsgi`
-
-The Python module and WSGI application variable to import, in `"module:variable"` format.
-
-### `module_asgi`
-
-The Python module and ASGI application variable to import, in `"module:variable"` format.
-
-### `runtime`
-
-Selects how the Python worker schedules work at the gateway boundary:
-
-| Interface | Allowed values | Default (when omitted) |
-| --- | --- | --- |
-| `module_wsgi` | `sync`, `gevent` | `sync` |
-| `module_asgi` | `native`, `uvloop` | `uvloop` |
-
-`native` uses the standard `asyncio` loop. **`uvloop`** selects the [uvloop](https://github.com/MagicStack/uvloop) event loop when the package is installed (with a warning and fallback to native asyncio if it is not). For **WSGI**, **`gevent`** is still the thread-pool compatibility mode unless/until a dedicated gevent stack is added.
-
-### `venv`
-
-Path to a Python virtual environment. Each Python **worker process** adds that venv’s `site-packages` to its own `sys.path`, so installed packages are available to your app.
-
-> **Note:** Workers are separate processes: a venv configured for one `python` handler (or one dynamic tenant) does not leak packages into other workers’ interpreters.
-
-### `working_dir`
-
-Sets the working directory for Python module resolution and relative paths. This is important when deploying with systemd (which defaults to `/`) or in monorepo/container setups where your app lives in a subdirectory.
-
-```Caddyfile
-python {
-    module_wsgi "main:app"
-    venv "/var/www/myapp/venv"
-    working_dir "/var/www/myapp"
-}
-```
-
-### `env_file`
-
-Path to a dotenv-style file whose variables are loaded into each Python worker process for this `python` block. You may specify `env_file` more than once; later files override earlier ones for duplicate keys.
-
-Relative paths are resolved against `working_dir` when set, otherwise against the Caddy process working directory. Relative paths must stay under that directory after symlink resolution. Keys follow the same validation as `env_var` (reserved / `LD_*` / `DYLD_*` names rejected).
-
-```Caddyfile
-python {
-    module_wsgi "main:app"
-    working_dir "/var/www/myapp"
-    env_file "/var/www/myapp/.env"
-}
-```
-
-### `env_var`
-
-Set a single environment variable inline. Repeat to set multiple variables. **`env_var` values apply after `env_file`**, so they override variables from files when the name matches.
-
-```Caddyfile
-python {
-    module_asgi "main:app"
-    working_dir "/var/www/myapp"
-    env_file "/var/www/myapp/.env"
-    env_var DEBUG "1"
-    env_var DATABASE_URL "postgres://localhost/myapp_dev"
-}
-```
-
-**Precedence:** Caddy process environment → `env_file` → `env_var` → internal worker vars (`PYTHONUNBUFFERED`, `CADDYSNAKE_*`). Reserved names (`PYTHONUNBUFFERED`, `CADDYSNAKE_*`) and loader hijack names (`LD_*`, `DYLD_*`) cannot be set from the Caddyfile or `env_file`.
-
-### `workers`
-
-Number of worker processes to spawn. Defaults to the number of CPUs (`GOMAXPROCS`). Maximum: **256**.
-
-When the `python` handler is provisioned, Caddy Snake starts a shared cache in the Go plugin and passes connection details to each worker. The default is process-local; [`cache cluster`](#cluster-cache) is opt-in.
-
-### `max_dynamic_apps`
-
-Maximum distinct cached app instances created from request-time placeholders (default **128**). Must be a positive integer when set. Override with `CADDYSNAKE_MAX_DYNAMIC_APPS` or this directive / `--max-dynamic-apps`. Idle apps are also evicted by LRU (`CADDYSNAKE_DYNAMIC_APP_IDLE_TTL`, default **30m**); when every slot is busy, new keys return HTTP 503.
-
-### `start_timeout`
-
-Optional. How long to wait for each worker socket/port to become ready when Caddy loads the config. Defaults to **`120s`**. Use a duration such as `180s` or `2m`, or `-1` / `forever` to wait indefinitely. On the CLI, prefer `--start-timeout=-1` or `--start-timeout forever`. If the timeout is greater than 120s (or indefinite) and the app is still starting after 120 seconds, Caddy logs a warning and continues waiting. Workers that crash during startup fail immediately.
-
-### `lifespan`
-
-Enables ASGI [lifespan events](https://asgi.readthedocs.io/en/latest/specs/lifespan.html) (`startup` and `shutdown`). Only applies to ASGI apps. Defaults to `off`. With lifespan enabled, startup exceptions, missing completion messages, and readiness timeouts fail worker startup.
-
-### `autoreload`
-
-Watches the working directory for `.py` file changes and automatically reloads the Python app. Useful during development.
-
-Changes are debounced (500ms) to handle rapid edits. The working directory is resolved through symlinks before
-watching, so a `releases/active -> releases/main` style root is watched correctly; the tree is resolved once, at
-start, so re-pointing the symlink at a new directory still needs a Caddy reload.
-
-> **This is a development feature.** The reload swaps the app under a write lock while requests hold a read lock
-> for their whole lifetime, so an open WebSocket or streaming response blocks the swap — and Go's `RWMutex` then
-> queues new requests behind it. In production, reload Caddy instead (`caddy reload --force`), which keeps the
-> listeners up and does not block.
-
-```Caddyfile
-python {
-    module_wsgi "main:app"
-    autoreload
-}
-```
-
-### `request_body`
-
-Maximum inbound HTTP request body size. Optional; omit for unlimited. Over-limit requests receive HTTP 413. Same size units as Caddy (`1KB` = 1000, `1KiB` = 1024). Use this inside the `python` block so you do not need a wrapping `route { request_body { ... } python { ... } }`.
-
-```Caddyfile
-python {
-    module_asgi "main:app"
-    request_body {
-        max_size 2GB
-    }
-}
-```
-
-Shorthand: `request_body 1KiB`. CLI: `--request-body-max-size 2GB`.
-
----
-
-## Shared worker cache
-
-Process-based workers run in **separate Python interpreters**, so they do not share `sys.modules` or in-memory globals. For lightweight cross-worker state (queues, small shared counters, etc.), Caddy Snake can expose a **key/value cache** that lives in the **Caddy plugin process** and is reached over a stream socket using a small **RESP2**-like protocol.
-
-- **Linux and macOS:** the plugin listens on a **Unix domain socket** under a private temporary directory and sets **`CADDYSNAKE_CACHE_ADDR`** to a **`unix:///absolute/path/to/cache.sock`** URL. Traffic stays on the filesystem socket, not the generic TCP/IP stack.
-- **Windows:** workers use **loopback TCP**; **`CADDYSNAKE_CACHE_ADDR`** is like **`127.0.0.1:<ephemeral-port>`**. Clients must authenticate with **`CADDYSNAKE_CACHE_TOKEN`** via the **`CSAUTH`** command before other cache commands.
-
-Caddy also sets **`CADDYSNAKE_WORKER_INTERFACE`** (`wsgi` or `asgi`), **`CADDYSNAKE_WORKER_ID`** (stable index `0`…`N-1` per worker group), **`CADDYSNAKE_CACHE_TIMEOUT`** (read/connect hint in seconds), and **`CADDYSNAKE_WORKER_TOKEN`** (shared secret checked on inbound proxy requests) for the Python client.
-
-The default local cache supports **scalars**, **FIFO lists**, **sets** (`sadd`/`srem`/`smembers`), atomic **`setnx`**, prefix **`keys`**, and one-shot **`publish`/`subscribe`** for cross-worker coordination.
-
-From app code (with the **`caddysnake`** PyPI package / CLI wheel installed in your venv), use the façade described in the [configuration reference](https://caddy-snake.readthedocs.io/en/latest/docs/reference/#shared-worker-cache):
-
-```python
-from caddysnake import cache, worker_id
-
-cache.set("myapp:visits", b"1")
-cache.append("myapp:log", b"line\n")
-cache.sadd("myapp:group", f"worker:{worker_id()}".encode())
-if cache.setnx("myapp:lock", b"1", ttl=30):
-    ...
-msg = cache.subscribe("myapp:events", timeout=10.0)  # one-shot blocking receive
-```
-
-Thread workers and single-worker setups do not need this path. See the [configuration reference](https://caddy-snake.readthedocs.io/en/latest/docs/reference/#shared-worker-cache) for the full API (sets, `setnx`, prefix `keys`, `publish`/`subscribe`, limits, and security notes).
-
-### Cluster cache
-
-Cluster mode shards scalar keys across a fixed set of Caddy nodes using rendezvous hashing. It supports only `get`, `set` (with optional TTL), and `delete`; other cache methods return an error. Every node must use the same peer list, namespace, and secret:
-
-```Caddyfile
-python {
-    module_asgi "main:app"
-    cache cluster {
-        listen ":7447"
-        advertise "caddy-0.myapp.internal:7447"
-        peers "caddy-0.myapp.internal:7447" "caddy-1.myapp.internal:7447"
-        namespace "myapp"
-        secret "{$CADDYSNAKE_CLUSTER_SECRET}"
-    }
-}
-```
-
-Each key has one authoritative owner. There is no replication or fallback write: if that owner is unavailable, the operation fails, preventing split-brain values. Changing the peer set remaps some keys without migrating them, and restarting an owner loses its ephemeral keys. Peer RPC is authenticated but not encrypted; bind it only to a private trusted network and never expose the port publicly.
-
----
-
-## Dynamic module loading
-
-You can use [Caddy placeholders](https://caddyserver.com/docs/caddyfile/concepts#placeholders) in `module_wsgi`, `module_asgi`, `working_dir`, `venv`, `env_file`, and `env_var` **values** to dynamically load different Python apps based on the request.
-
-This is useful for multi-tenant setups where each subdomain or route serves a different application. Only use placeholders you control (e.g. hostname labels); do not bind `working_dir` / `venv` / `env_file` to untrusted headers.
-
-```Caddyfile
-*.example.com:9080 {
-    python /* {
-        module_asgi "{http.request.host.labels.2}:app"
-        working_dir "{http.request.host.labels.2}/"
-    }
-}
-```
-
-In this example, a request to `app1.example.com` loads the app from the `app1/` directory, `app2.example.com` loads from `app2/`, and so on. Apps are lazily created on first request and cached for subsequent requests (default cap: 128 apps, 30m idle TTL; override with `max_dynamic_apps` / `--max-dynamic-apps`, or `CADDYSNAKE_MAX_DYNAMIC_APPS` / `CADDYSNAKE_DYNAMIC_APP_IDLE_TTL`).
-
----
-
-## On-demand TLS without `ask`
-
-[Caddy on-demand TLS](https://caddyserver.com/docs/caddyfile/options#on-demand-tls) issues certificates for hostnames as clients connect. That flow normally requires an **`ask`** HTTP endpoint — unless you plug in a **`tls.permission.*`** module.
-
-Caddy Snake ships **`tls.permission.python_dir`**, which allows issuance only when the hostname matches **`{slug}.{domain_suffix}`** (exactly one label before the suffix) and **`{root}/{slug}`** exists as a directory — the same layout you use for dynamic Python apps.
-
-Minimal pattern (wildcard HTTPS site + dynamic `working_dir`; adjust **`domain_suffix`** and placeholder index to match your host shape):
-
-```Caddyfile
-{
-    email you@yourcompany.com
-
-    on_demand_tls {
-        permission python_dir {
-            root /srv/apps
-            domain_suffix project.example
-        }
-    }
-}
-
-https://*.project.example {
-    tls {
-        on_demand
-    }
-
-    python /* {
-        module_asgi "{http.request.host.labels.2}:app"
-        working_dir "/srv/apps/{http.request.host.labels.2}/"
-    }
-}
-```
-
-Use a working mailbox on a **registrable domain** for `email` (Let's Encrypt rejects contacts at `example.com` and similar). For nip.io-style hosts and WSGI-only setups, see the **[configuration reference](https://caddy-snake.readthedocs.io/en/latest/docs/reference/)** and **[examples](https://caddy-snake.readthedocs.io/en/latest/docs/examples/)**.
-
-For **[nip.io](https://nip.io/)** names like **`app7.203.0.113.43.nip.io`**, the slug sits at **`{http.request.host.labels.6}`** (seven labels total).
-
----
-
-## Hot reloading
-
-There are two approaches for hot reloading during development:
-
-### Built-in autoreload (recommended for development)
-
-Add the `autoreload` directive to your Caddyfile. This watches for `.py` file changes and starts fresh Python
-workers without restarting Caddy (it is not an in-process reimport):
-
-```Caddyfile
-python {
-    module_wsgi "main:app"
-    autoreload
-}
-```
-
-### Using watchmedo (alternative)
-
-You can also use [watchmedo](https://github.com/gorakhargosh/watchdog?tab=readme-ov-file#shell-utilities) to restart Caddy on file changes:
-
-```bash
-# Install on Debian/Ubuntu
-sudo apt-get install python3-watchdog
-
-watchmedo auto-restart -d . -p "*.py" --recursive \
-    -- caddy run --config Caddyfile
-```
-
-Note that this restarts the entire Caddy process on changes.
-
----
-
-## Debugging runtime errors
-
-Unhandled exceptions in WSGI and ASGI apps are printed to **Caddy's stderr**, tagged with the worker id and request path:
-
-```text
-Unhandled exception in ASGI HTTP handler (worker 0, GET /boom):
-Traceback (most recent call last):
-  ...
-RuntimeError: ...
-```
-
-Local workers inherit the Caddy process streams; Docker-isolated worker output is relayed from the container. If response bytes have not been sent, the client receives a generic HTTP 500; an already-started response is safely terminated. This includes FastAPI/Starlette apps, which send a 500 and then re-raise so the server can log. Tracebacks are never included in the HTTP response, and normal client disconnects are not reported as app errors. See [Architecture: runtime errors](https://caddy-snake.readthedocs.io/en/latest/docs/architecture/#runtime-errors).
-
----
-
-## Build with Docker
-
-There's a template file in the project: [builder.Dockerfile](/builder.Dockerfile). It supports build arguments to configure which Python or Go version to use.
-
-```bash
-# Build the Docker image
-docker build -f builder.Dockerfile --build-arg PY_VERSION=3.13 -t caddy-snake-builder .
-
-# Extract the caddy binary to your current directory
-docker run --rm -v $(pwd):/output caddy-snake-builder
-```
-
-Make sure to match the Python version with your target environment.
-
----
-
-## Benchmarks
+### Features
+
+- **WSGI and ASGI**, with the kind detected automatically if you want (`module_auto`)
+- **Worker processes**, WebSockets, streaming uploads, ASGI lifespan events
+- **Many apps in one server**: Caddy placeholders load a different app per host or path, on first request
+- **Autoreload** for development
+- **Shared cache** between workers, optionally across several Caddy servers
+- **On-demand HTTPS** for wildcard hosts, allowed by a folder existing on disk
+- **Isolation** of workers in Docker containers, memory limits, request size limits
+- **Ways to get it**: `pip`, pre-built binaries with Python inside, Docker images, your own `xcaddy` build, or your app packaged as one executable
+
+### Documentation
+
+| | |
+|---|---|
+| [Quickstart](https://caddy-snake.readthedocs.io/en/latest/docs/intro) | First app in five minutes |
+| [Installation](https://caddy-snake.readthedocs.io/en/latest/docs/installation) | PyPI, binaries, Docker, building from source |
+| [Examples](https://caddy-snake.readthedocs.io/en/latest/docs/examples) | Flask, FastAPI, Django, Socket.IO, many apps per server |
+| [Configuration](https://caddy-snake.readthedocs.io/en/latest/docs/reference) | Every `python` directive and command-line flag |
+| [Architecture](https://caddy-snake.readthedocs.io/en/latest/docs/architecture) | Workers, sockets, errors, limits |
+| [Standalone apps](https://caddy-snake.readthedocs.io/en/latest/docs/embed-app) | Your app, Caddy and Python in one file |
+
+### Benchmarks
 
 Caddy Snake compares favorably to **separate reverse-proxy stacks** for **Flask (WSGI)** and **FastAPI (ASGI)** on the JSON `/hello` workload below. Figures are the averages committed in [`benchmarks/results.json`](benchmarks/results.json) from a **4 vCPU / 16 GB cloud VM (linux/amd64)** run of the Docker harness; use local Docker or [`benchmarks/scaleway_bench.sh`](benchmarks/scaleway_bench.sh) to reproduce on other hardware.
 
@@ -564,18 +165,23 @@ Caddy Snake serves **~60% more requests/sec than Gunicorn** for Flask and **~51%
 
 ## Platform support
 
-| Platform       | Workers | Notes                          |
-|----------------|---------|--------------------------------|
-| Linux (x86_64) | process | Primary platform, full support |
-| Linux (arm64)  | process | Full support                   |
-| Linux (riscv64) | process | PyPI wheel, Docker images, Caddy and standalone release binaries (cross-compiled; tested under QEMU) |
-| macOS          | process | Full support                   |
-| Windows        | process | Loopback TCP instead of Unix sockets |
+| Platform | Plugin | Apps | Notes |
+|----------|--------|------|-------|
+| Linux (x86_64, arm64) | yes | yes | Primary platform |
+| Linux (riscv64) | yes | not tested | Cross-compiled; the plugin is tested under QEMU |
+| macOS | yes | yes | |
+| Windows | yes | yes | Workers use loopback TCP instead of Unix sockets |
 
-**Python versions:** 3.13, 3.13-nogil (free-threaded), 3.14, 3.14-nogil (free-threaded), 3.15, 3.15-nogil (free-threaded)
+**Python versions:** 3.13, 3.14, 3.15, and their free-threaded builds.
 
----
+## Development
 
-## LICENSE
+```bash
+./scripts/qa.sh
+```
+
+[`AGENTS.md`](AGENTS.md) describes how the project is organised, the checks to run and how releases are made.
+
+## License
 
 [MIT License](/LICENSE).

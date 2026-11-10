@@ -18,7 +18,7 @@ jobs:
       fail-fast: false
       matrix:
         python-version: ["3.13", "3.14", "3.15"]
-        platform: [linux-amd64, linux-arm64, linux-riscv64, macos-arm64, macos-amd64]
+        platform: [linux-amd64, linux-arm64, linux-riscv64, macos-arm64, macos-amd64, windows-amd64, windows-arm64]
         include:
           - platform: linux-amd64
             os: ubuntu-22.04
@@ -40,7 +40,23 @@ jobs:
           - platform: macos-amd64
             os: macos-15-intel
             use_docker: false
+          # New in 0.8.0 and not yet proven on a release: a Windows build that
+          # fails must not stop the other wheels from being published. Remove
+          # `experimental` once a release has shipped Windows wheels.
+          - platform: windows-amd64
+            os: windows-2025
+            use_docker: false
+            experimental: true
+          - platform: windows-arm64
+            os: windows-11-arm
+            use_docker: false
+            experimental: true
     runs-on: ${{ matrix.os }}
+    continue-on-error: ${{ matrix.experimental == true }}
+    defaults:
+      run:
+        # The steps are written for bash; Windows runners have it too.
+        shell: bash
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -105,7 +121,7 @@ jobs:
         run: |
           # Install xcaddy for the host; only the Caddy build itself is cross-compiled.
           go install github.com/caddyserver/xcaddy/cmd/xcaddy@v0.4.6
-          CGO_ENABLED=0 GOARCH="${TARGET_GOARCH:-$(go env GOARCH)}" "$(go env GOPATH)/bin/xcaddy" build --with github.com/mliezun/caddy-snake=.
+          CGO_ENABLED=0 GOARCH="${TARGET_GOARCH:-$(go env GOARCH)}" "$(go env GOPATH)/bin/xcaddy" build --with github.com/mliezun/caddy-snake=. --with github.com/mliezun/caddy-snake/apps
       - name: Install Rust
         if: ${{ !matrix.use_docker }}
         env:
@@ -122,14 +138,22 @@ jobs:
           PY_VERSION: ${{ matrix.python-version }}
           RUST_TARGET: ${{ matrix.rust_target }}
         run: |
-          mv caddy cmd/cli/caddysnake-cli
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            # A program needs the .exe ending there, and the Python that
+            # setup-python selected is called plain "python".
+            mv caddy.exe cmd/cli/caddysnake-cli.exe
+            PY=python
+          else
+            mv caddy cmd/cli/caddysnake-cli
+            PY="python${PY_VERSION}"
+          fi
           cd cmd/cli/
           if [ -n "$RUST_TARGET" ]; then
-            python"${PY_VERSION}" -m pip install maturin ziglang
-            python"${PY_VERSION}" -m maturin build --release --target "$RUST_TARGET" --zig -i python"${PY_VERSION}"
+            "$PY" -m pip install maturin ziglang
+            "$PY" -m maturin build --release --target "$RUST_TARGET" --zig -i "$PY"
           else
-            python"${PY_VERSION}" -m pip install maturin
-            python"${PY_VERSION}" -m maturin build --release
+            "$PY" -m pip install maturin
+            "$PY" -m maturin build --release
           fi
       - name: Upload artifacts
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -159,7 +183,7 @@ jobs:
           pattern: caddysnake-cli-*
           merge-multiple: true
       - name: Publish package to PyPI
-        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
+        uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086 # v1.14.3
         with:
           skip-existing: true
           packages-dir: dist

@@ -1,0 +1,39 @@
+{
+	http_port 9080
+	https_port 9443
+	log {
+		level info
+	}
+}
+http://localhost:9080 {
+	python /wsgi* {
+		module_wsgi "wsgi_app:app"
+		workers 1
+		venv "./venv"
+		mount_prefix /wsgi
+	}
+
+	python /asgi* {
+		module_asgi "asgi_app:app"
+		workers 1
+		venv "./venv"
+		mount_prefix /asgi/
+	}
+
+	python /root/* {
+		module_wsgi "wsgi_app:app"
+		workers 1
+		venv "./venv"
+	}
+}
+
+# One handler serving a directory of apps by first path segment. module_auto
+# lets WSGI (alpha, beta) and ASGI (gamma) apps share it.
+http://localhost:9081 {
+	python {
+		module_auto "main:app"
+		working_dir "apps/{http.request.uri.path.0}/"
+		mount_prefix "/{http.request.uri.path.0}"
+		workers 1
+	}
+}

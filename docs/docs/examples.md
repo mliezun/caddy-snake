@@ -161,6 +161,12 @@ Edits to `.py` files reload the app in place (500ms debounce). Syntax errors →
 
 Avoid autoreload behind long-lived production WebSockets; see [Architecture](architecture.md#autoreload).
 
+To restart the whole Caddy process on changes instead, use [watchmedo](https://github.com/gorakhargosh/watchdog?tab=readme-ov-file#shell-utilities):
+
+```bash
+watchmedo auto-restart -d . -p "*.py" --recursive -- caddy run --config Caddyfile
+```
+
 ---
 
 ## Multi-tenant / branch hosts

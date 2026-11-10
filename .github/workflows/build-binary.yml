@@ -11,11 +11,24 @@ on:
     types:
       - published
 
-permissions:
-  contents: write
+permissions: {}
+
+# A new push to a pull request cancels the runs of the push before it.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  changes:
+    permissions:
+      pull-requests: read
+    uses: ./.github/workflows/changes.yml
+
   build:
+    permissions:
+      contents: write
+    needs: changes
+    if: needs.changes.outputs.go == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -32,6 +45,16 @@ jobs:
             artifact: caddy-darwin-arm64
           - os: macos-15-intel
             artifact: caddy-darwin-amd64
+          # Windows binaries are built on Linux: with CGO off, Go builds them
+          # for another system as easily as for its own.
+          - os: ubuntu-22.04
+            artifact: caddy-windows-amd64
+            goos: windows
+            goarch: amd64
+          - os: ubuntu-22.04
+            artifact: caddy-windows-arm64
+            goos: windows
+            goarch: arm64
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -44,23 +67,42 @@ jobs:
       - name: Install Xcaddy
         run: go install github.com/caddyserver/xcaddy/cmd/xcaddy@v0.4.6
       - name: Build the server
-        run: CGO_ENABLED=0 xcaddy build --with github.com/mliezun/caddy-snake=.
+        if: matrix.goos != 'windows'
+        run: CGO_ENABLED=0 xcaddy build --with github.com/mliezun/caddy-snake=. --with github.com/mliezun/caddy-snake/apps
         env:
           GOARCH: ${{ matrix.goarch }}
       - name: Rename binary
+        if: matrix.goos != 'windows'
         run: mv caddy ${{ matrix.artifact }} # zizmor: ignore[template-injection]
+      - name: Build the server (Windows)
+        if: matrix.goos == 'windows'
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          ARTIFACT: ${{ matrix.artifact }}
+        run: CGO_ENABLED=0 xcaddy build --output "${ARTIFACT}.exe" --with github.com/mliezun/caddy-snake=. --with github.com/mliezun/caddy-snake/apps
       - name: Upload caddy binary
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: ${{ matrix.artifact }}
-          path: ${{ matrix.artifact }}
+          path: ${{ matrix.artifact }}${{ matrix.goos == 'windows' && '.exe' || '' }}
       - name: Package caddy binary
-        if: github.event_name == 'release'
+        if: github.event_name == 'release' && matrix.goos != 'windows'
         run: | # zizmor: ignore[template-injection]
           tar -czf ${{ matrix.artifact }}.tar.gz ${{ matrix.artifact }}
       - name: Upload to release
-        if: github.event_name == 'release'
+        if: github.event_name == 'release' && matrix.goos != 'windows'
         run: | # zizmor: ignore[template-injection]
           gh release upload ${{ github.event.release.tag_name }} ${{ matrix.artifact }}.tar.gz --repo ${{ github.repository }} --clobber
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Package and upload to release (Windows)
+        if: github.event_name == 'release' && matrix.goos == 'windows'
+        env:
+          ARTIFACT: ${{ matrix.artifact }}
+          TAG: ${{ github.event.release.tag_name }}
+          REPO: ${{ github.repository }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          zip "${ARTIFACT}.zip" "${ARTIFACT}.exe"
+          gh release upload "$TAG" "${ARTIFACT}.zip" --repo "$REPO" --clobber

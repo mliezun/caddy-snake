@@ -1,0 +1,104 @@
+name: Apps Tests
+
+# Tests for the apps platform (apps/): Go tests against a real Postgres, a check
+# that the sqlc-generated code is up to date, and the end-to-end test that
+# drives a running server through MCP.
+
+on:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+
+permissions: {}
+
+# A new push to a pull request cancels the runs of the push before it.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  changes:
+    permissions:
+      pull-requests: read
+    uses: ./.github/workflows/changes.yml
+
+  apps:
+    needs: changes
+    if: needs.changes.outputs.apps == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: "1.26.10"
+          cache: true
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+      - name: Install Postgres programs, git and uv
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y postgresql postgresql-client git
+          # The tests start their own private instance; the system one is not used.
+          sudo systemctl stop postgresql || true
+          python -m pip install uv
+      - name: Generated SQL code is up to date
+        working-directory: apps
+        run: |
+          go run github.com/sqlc-dev/sqlc/cmd/sqlc@v1.30.0 generate
+          git diff --exit-code -- db
+      - name: Go tests
+        run: go test -race -timeout 15m ./apps/...
+      - name: Build Caddy with the plugin and the apps package
+        run: |
+          go install github.com/caddyserver/xcaddy/cmd/xcaddy@v0.4.6
+          CGO_ENABLED=0 xcaddy build --output tests/apps_e2e/caddy \
+            --with github.com/mliezun/caddy-snake=. \
+            --with github.com/mliezun/caddy-snake/apps
+      - name: End-to-end test through MCP
+        working-directory: tests/apps_e2e
+        run: |
+          python -m venv venv
+          source venv/bin/activate
+          pip install -r requirements.txt
+          ./caddy python-apps --data-dir "$PWD/data" > caddy.log 2>&1 &
+          for _ in $(seq 1 90); do
+            curl -fsS http://localhost:9080/_apps/health > /dev/null 2>&1 && break
+            sleep 1
+          done
+          python main_test.py || { echo "---- caddy.log ----"; tail -200 caddy.log; exit 1; }
+
+  # The same Go tests on Windows, where files in use cannot be deleted, the
+  # version link is a junction and Postgres is started without a console.
+  apps-windows:
+    needs: changes
+    if: needs.changes.outputs.apps == 'true'
+    runs-on: windows-2025
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: "1.26.10"
+          cache: true
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+      - name: Install uv
+        run: python -m pip install uv
+      # The image ships the Postgres programs and points PGBIN at them; the
+      # tests start their own private instance.
+      - name: Go tests
+        run: go test -timeout 20m ./apps/...

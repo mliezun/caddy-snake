@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "caddysnake"
-version = "0.7.0"
+version = "0.8.0"
 description = "Python WSGI/ASGI server powered by Caddy"
 authors = [
     {name = "Miguel Liezun", email = "liezun.js@gmail.com"},
@@ -21,9 +21,14 @@ classifiers = [
     "Programming Language :: Python :: 3.14",
     "Programming Language :: Python :: 3.15",
     "Programming Language :: Go",
+    "Operating System :: POSIX :: Linux",
+    "Operating System :: MacOS",
+    "Operating System :: Microsoft :: Windows",
 ]
 dependencies = [
     "click>=8.3.0",
+    # `caddysnake apps` builds each app's environment with uv.
+    "uv>=0.5",
 ]
 
 [project.urls]
@@ -35,10 +40,11 @@ python-source = "."
 module-name = "caddysnake"
 include = [
     "caddysnake-cli",
+    "caddysnake-cli.exe",
     "caddysnake_cli.py",
     "caddysnake/kv_cache.py",
     "caddysnake/__init__.py"
 ]
 
 [project.scripts]
-caddysnake = "caddysnake_cli:main"
+caddysnake = "caddysnake_cli:cli"

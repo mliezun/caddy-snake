@@ -1,0 +1,30 @@
+# caddy-snake apps with Docker Compose.
+#
+#   docker compose up
+#
+# then open http://localhost:9080 and point your AI assistant at
+# http://localhost:9080/_apps/mcp
+#
+# App files, version history and the database are kept in the "apps-data"
+# volume. Removing that volume removes every app.
+services:
+  apps:
+    build:
+      context: .
+      args:
+        # Override to try a locally built image:
+        #   BASE_IMAGE=caddy-snake:dev docker compose up --build
+        BASE_IMAGE: ${BASE_IMAGE:-mliezun/caddy-snake:latest-py3.13}
+    ports:
+      # Published on this computer only. Change to "9080:9080" (and switch the
+      # command to --require-login) to let other machines reach it.
+      - "127.0.0.1:9080:9080"
+    volumes:
+      - apps-data:/data
+    restart: unless-stopped
+    stop_grace_period: 90s
+    # Stop with SIGINT so the server shuts its database down cleanly.
+    stop_signal: SIGINT
+
+volumes:
+  apps-data:

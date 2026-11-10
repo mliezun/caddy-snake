@@ -7,3 +7,6 @@ import "os/exec"
 func setSysProcAttr(cmd *exec.Cmd) {
 	// Pdeathsig is Linux-only; not available on darwin/BSD.
 }
+
+// tieToParent is only needed on Windows.
+func tieToParent(cmd *exec.Cmd) {}
