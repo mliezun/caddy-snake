@@ -1,0 +1,7 @@
+# Unfixed upstream, re-check on every Caddy bump. Remove once a release drops it.
+#
+# go-jose/v3 v3.0.5: DoS via crafted RSA parameters in JWKs. No fixed v3 release
+# exists. Caddy pulls v3 in via smallstep/certificates -> go.step.sm/crypto (its
+# internal PKI / ACME-server provisioners). go.step.sm/crypto v0.92.0 moves to
+# go-jose v4, but smallstep/certificates v0.30.2 (latest) does not build against it.
+CVE-2026-116587

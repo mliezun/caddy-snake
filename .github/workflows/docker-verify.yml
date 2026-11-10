@@ -82,6 +82,7 @@ jobs:
           severity: CRITICAL,HIGH
           limit-severities-for-sarif: true
           scanners: vuln
+          trivyignores: .trivyignore
           exit-code: "1"
       - name: Upload Trivy scan results
         if: always()
