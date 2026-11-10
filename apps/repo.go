@@ -11,14 +11,14 @@ import (
 	"strings"
 	"time"
 
-	"github.com/go-git/go-billy/v5/memfs"
-	"github.com/go-git/go-billy/v5/osfs"
-	"github.com/go-git/go-billy/v5/util"
-	"github.com/go-git/go-git/v5"
-	"github.com/go-git/go-git/v5/plumbing"
-	"github.com/go-git/go-git/v5/plumbing/cache"
-	"github.com/go-git/go-git/v5/plumbing/object"
-	"github.com/go-git/go-git/v5/storage/filesystem"
+	"github.com/go-git/go-billy/v6/memfs"
+	"github.com/go-git/go-billy/v6/osfs"
+	"github.com/go-git/go-billy/v6/util"
+	"github.com/go-git/go-git/v6"
+	"github.com/go-git/go-git/v6/plumbing"
+	"github.com/go-git/go-git/v6/plumbing/cache"
+	"github.com/go-git/go-git/v6/plumbing/object"
+	"github.com/go-git/go-git/v6/storage/filesystem"
 )
 
 const (
@@ -60,7 +60,7 @@ func initRepo(dir string) (*repo, error) {
 		return nil, err
 	}
 	r := &repo{dir: dir}
-	g, err := git.InitWithOptions(r.storage(), memfs.New(), git.InitOptions{DefaultBranch: plumbing.NewBranchReferenceName(mainBranch)})
+	g, err := git.Init(r.storage(), git.WithWorkTree(memfs.New()), git.WithDefaultBranch(plumbing.NewBranchReferenceName(mainBranch)))
 	if err != nil {
 		return nil, err
 	}
@@ -70,6 +70,10 @@ func initRepo(dir string) (*repo, error) {
 		return nil, err
 	}
 	cfg.Core.IsBare = true
+	// The in-memory checkout is not a folder git could use; a path left here
+	// makes git warn on every push.
+	cfg.Core.Worktree = ""
+	cfg.Raw.Section("core").RemoveOption("worktree")
 	if err := g.SetConfig(cfg); err != nil {
 		return nil, err
 	}
@@ -153,7 +157,7 @@ func (r *repo) Save(branch string, changes map[string][]byte, message, author st
 			return "", err
 		}
 		if content == nil {
-			if _, statErr := wt.Filesystem.Stat(clean); statErr == nil {
+			if _, statErr := wt.Filesystem().Stat(clean); statErr == nil {
 				if _, err := wt.Remove(clean); err != nil {
 					return "", err
 				}
@@ -163,7 +167,7 @@ func (r *repo) Save(branch string, changes map[string][]byte, message, author st
 		if len(content) > maxFileBytes {
 			return "", fmt.Errorf("file %q is too large (%d bytes, at most %d)", clean, len(content), maxFileBytes)
 		}
-		if err := util.WriteFile(wt.Filesystem, clean, content, 0o644); err != nil {
+		if err := util.WriteFile(wt.Filesystem(), clean, content, 0o644); err != nil {
 			return "", err
 		}
 		if _, err := wt.Add(clean); err != nil {

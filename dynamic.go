@@ -435,6 +435,27 @@ func (d *DynamicApp) resolve(r *http.Request) (key, module, dir, venv string, en
 // exclusive lock so a slow or indefinite start_timeout for one tenant cannot
 // stall other dynamic keys (same pattern as AutoreloadableApp.reload).
 func (d *DynamicApp) getOrCreateApp(key, module, dir, venv string, envFiles []string, envVars map[string]string) (AppServer, error) {
+	// A start is thrown away when the working directory's link moved to
+	// another release while the app was starting (see errStaleStart). The next
+	// attempt starts from the new release; a few tries cover quick successive
+	// publishes.
+	var app AppServer
+	var err error
+	for attempt := 0; attempt < 3; attempt++ {
+		app, err = d.getOrCreateAppOnce(key, module, dir, venv, envFiles, envVars)
+		if !errors.Is(err, errStaleStart) {
+			break
+		}
+	}
+	return app, err
+}
+
+// errStaleStart reports that the directory an app was started from is no
+// longer where its working_dir points: a link in the path was switched to
+// another release during the start.
+var errStaleStart = errors.New("the app was replaced by a newer version while it was starting; try again")
+
+func (d *DynamicApp) getOrCreateAppOnce(key, module, dir, venv string, envFiles []string, envVars map[string]string) (AppServer, error) {
 	if err := validateResolvedValues(module, dir, venv); err != nil {
 		return nil, err
 	}
@@ -529,6 +550,10 @@ func (d *DynamicApp) getOrCreateApp(key, module, dir, venv string, envFiles []st
 		zap.String("venv", venv),
 	)
 
+	// Pin the worker to the directories the links point at right now, so a
+	// link switched during or after the start cannot change what it runs.
+	runDir, runVenv := pinPath(dir), pinPath(venv)
+
 	// Factory runs outside the lock; if it panics, still remove the inflight
 	// entry and close done so waiters and Cleanup cannot hang forever.
 	var err error
@@ -546,8 +571,17 @@ func (d *DynamicApp) getOrCreateApp(key, module, dir, venv string, envFiles []st
 				panic(r)
 			}
 		}()
-		app, err = d.factory(module, dir, venv, cloneEnvFiles(envFiles), cloneEnvVars(envVars))
+		app, err = d.factory(module, runDir, runVenv, cloneEnvFiles(envFiles), cloneEnvVars(envVars))
 	}()
+	// The link moved while the app was starting: this instance runs a release
+	// that is no longer the current one, and nothing would ever replace it
+	// (whoever switched the link could not unload an app that was not loaded
+	// yet). Drop it and let the caller start again from where the link points.
+	if err == nil && pinPath(dir) != runDir {
+		stale := app
+		app, err = nil, errStaleStart
+		d.cleanupAppsAsync([]AppServer{stale})
+	}
 
 	releaseCreate()
 
@@ -589,7 +623,7 @@ func (d *DynamicApp) getOrCreateApp(key, module, dir, venv string, envFiles []st
 		if d.autoreload && dir != "" {
 			d.startWatchingDir(resolvedDir, key)
 		}
-	} else {
+	} else if !errors.Is(err, errStaleStart) {
 		d.rememberFailedCreateLocked(key, err)
 	}
 	c.app = app

@@ -1261,8 +1261,9 @@ func TestDynamicAppHandleRequest(t *testing.T) {
 	if handledModule != "main:app" {
 		t.Errorf("expected module 'main:app', got %q", handledModule)
 	}
-	if handledDir != dir {
-		t.Errorf("expected dir %q, got %q", dir, handledDir)
+	// The worker is started from where the path really points (see pinPath).
+	if handledDir != pinPath(dir) {
+		t.Errorf("expected dir %q, got %q", pinPath(dir), handledDir)
 	}
 }
 
