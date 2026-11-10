@@ -715,7 +715,7 @@ func TestValidate(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error when neither wsgi nor asgi specified")
 	}
-	if !strings.Contains(err.Error(), "exactly one of module_wsgi, module_asgi, or module_esgi is required") {
+	if !strings.Contains(err.Error(), "exactly one of module_wsgi, module_asgi, module_esgi, or module_auto is required") {
 		t.Errorf("expected module required error, got: %v", err)
 	}
 }
@@ -829,7 +829,7 @@ func TestProvision_NoModule(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error when neither wsgi nor asgi nor esgi specified")
 	}
-	if !strings.Contains(err.Error(), "wsgi, asgi, or esgi") {
+	if !strings.Contains(err.Error(), "wsgi, asgi, esgi, or auto") {
 		t.Errorf("expected module error in error, got: %v", err)
 	}
 }
@@ -3215,5 +3215,19 @@ func TestDynamicAppCacheKeyCollisionSafe(t *testing.T) {
 	k3 := dynamicAppCacheKey("main:app", dir, "", nil, map[string]string{"A": "1", "B": "3"})
 	if k1 == k3 {
 		t.Fatal("different env values must produce different keys")
+	}
+}
+
+func TestSystemPython(t *testing.T) {
+	found := func(string) (string, error) { return "python", nil }
+	missing := func(string) (string, error) { return "", errors.New("not found") }
+	if got := systemPython("windows", found); got != "python" {
+		t.Errorf("windows with python installed = %q", got)
+	}
+	if got := systemPython("windows", missing); got != "python3" {
+		t.Errorf("windows without python = %q", got)
+	}
+	if got := systemPython("linux", found); got != "python3" {
+		t.Errorf("linux = %q", got)
 	}
 }

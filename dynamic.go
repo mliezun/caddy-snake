@@ -35,10 +35,49 @@ const (
 	defaultDynamicFailureTTL     = 5 * time.Second
 	defaultDynamicAppIdleTTL     = 30 * time.Minute
 
-	envMaxDynamicApps      = "CADDYSNAKE_MAX_DYNAMIC_APPS"
-	envDynamicAppIdleTTL   = "CADDYSNAKE_DYNAMIC_APP_IDLE_TTL"
-	dynamicAppCleanupGrace = 10 * time.Second
+	envMaxDynamicApps     = "CADDYSNAKE_MAX_DYNAMIC_APPS"
+	envDynamicAppIdleTTL  = "CADDYSNAKE_DYNAMIC_APP_IDLE_TTL"
+	envReloadDrainTimeout = "CADDYSNAKE_RELOAD_DRAIN_TIMEOUT"
+
+	// defaultReloadDrainTimeout bounds how long an evicted app instance is kept
+	// alive for requests that were already running on it.
+	defaultReloadDrainTimeout = 30 * time.Second
 )
+
+// parseReloadDrainTimeout reads CADDYSNAKE_RELOAD_DRAIN_TIMEOUT (Go duration).
+// Invalid or negative values fall back to the default; "0" disables draining.
+func parseReloadDrainTimeout() time.Duration {
+	raw := strings.TrimSpace(os.Getenv(envReloadDrainTimeout))
+	if raw == "" {
+		return defaultReloadDrainTimeout
+	}
+	dur, err := time.ParseDuration(raw)
+	if err != nil || dur < 0 {
+		return defaultReloadDrainTimeout
+	}
+	return dur
+}
+
+// waitDrained blocks until no request is running on an evicted app instance or
+// the timeout passes, and reports whether it drained in time.
+func waitDrained(active *sync.WaitGroup, timeout time.Duration) bool {
+	if active == nil {
+		return true
+	}
+	done := make(chan struct{})
+	go func() {
+		active.Wait()
+		close(done)
+	}()
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	select {
+	case <-done:
+		return true
+	case <-timer.C:
+		return false
+	}
+}
 
 // DynamicAppLimits configures capacity for dynamic app loading.
 // MaxConcurrency and FailureTTL are internal; only MaxApps is user-configurable.
@@ -46,6 +85,8 @@ type DynamicAppLimits struct {
 	MaxApps        int
 	MaxConcurrency int
 	FailureTTL     time.Duration
+	// MemoryLimitBytes restarts an app whose workers use more than this; 0 = no limit.
+	MemoryLimitBytes int64
 }
 
 func defaultDynamicAppLimits() DynamicAppLimits {
@@ -66,6 +107,9 @@ func normalizeDynamicAppLimits(l DynamicAppLimits) DynamicAppLimits {
 	}
 	if l.FailureTTL > 0 {
 		d.FailureTTL = l.FailureTTL
+	}
+	if l.MemoryLimitBytes > 0 {
+		d.MemoryLimitBytes = l.MemoryLimitBytes
 	}
 	return d
 }
@@ -270,8 +314,12 @@ type DynamicApp struct {
 	limits          DynamicAppLimits
 	maxApps         int
 	idleTTL         time.Duration
-	createSem       chan struct{}
-	now             func() time.Time // overridable in tests
+	drainTimeout    time.Duration
+	// active counts requests running on each app instance (not cache key), so an
+	// evicted instance is stopped only after the requests it is serving finish.
+	active    map[AppServer]*sync.WaitGroup
+	createSem chan struct{}
+	now       func() time.Time // overridable in tests
 
 	// Autoreload fields
 	autoreload          bool
@@ -282,6 +330,9 @@ type DynamicApp struct {
 	cleanupMu           sync.Mutex
 	pendingCleanups     []context.CancelFunc
 	exitOnReloadFailure func(code int) // if set and autoreload, process exits when app creation fails
+
+	monitorStop     chan struct{} // closed on Cleanup; stops the memory_limit monitor
+	monitorStopOnce sync.Once
 }
 
 // NewDynamicApp creates a DynamicApp that resolves placeholders from
@@ -308,10 +359,13 @@ func NewDynamicApp(modulePattern, workingDir, venvPath string, envFilePatterns [
 		limits:              limits,
 		maxApps:             effectiveMaxDynamicApps(limits),
 		idleTTL:             parseDynamicAppIdleTTL(),
+		drainTimeout:        parseReloadDrainTimeout(),
+		active:              make(map[AppServer]*sync.WaitGroup),
 		createSem:           make(chan struct{}, limits.MaxConcurrency),
 		now:                 time.Now,
 		autoreload:          autoreload,
 		exitOnReloadFailure: exitOnReloadFailure,
+		monitorStop:         make(chan struct{}),
 	}
 	if autoreload {
 		watcher, err := fsnotify.NewWatcher()
@@ -324,6 +378,10 @@ func NewDynamicApp(modulePattern, workingDir, venvPath string, envFilePatterns [
 		go d.watchForChanges()
 		logger.Info("autoreload enabled for dynamic app")
 	}
+	if limits.MemoryLimitBytes > 0 {
+		go d.monitorMemory(limits.MemoryLimitBytes, parseMemoryCheckInterval())
+	}
+	registerDynamicApp(d)
 
 	return d, nil
 }
@@ -519,8 +577,10 @@ func (d *DynamicApp) getOrCreateApp(key, module, dir, venv string, envFiles []st
 		// the release directory may be gone — resolving again at that point
 		// would fail, fall back to the unresolved path, silently fail to match
 		// dirToKeys, and leak the key. Resolve once, here, while it exists.
+		// Resolved even without autoreload: LoadedDynamicApps, ReloadWorkingDir
+		// and memory_limit notices identify apps by this directory.
 		resolvedDir := dir
-		if d.autoreload && dir != "" {
+		if dir != "" {
 			if r, err := resolveWatchRoot(dir, d.logger); err == nil {
 				resolvedDir = r
 			}
@@ -645,8 +705,18 @@ func (d *DynamicApp) cleanupAppsAsync(apps []AppServer) {
 		return
 	}
 	go func() {
-		time.Sleep(dynamicAppCleanupGrace)
+		// New requests can no longer reach these instances (they were removed
+		// from the map under d.mu), so wait only for the ones already running.
+		deadline := time.Now().Add(d.drainTimeout)
 		for _, app := range apps {
+			d.mu.Lock()
+			active := d.active[app]
+			delete(d.active, app)
+			d.mu.Unlock()
+			if !waitDrained(active, time.Until(deadline)) {
+				d.logger.Warn("stopping python app with requests still running",
+					zap.Duration("drain_timeout", d.drainTimeout))
+			}
 			if err := app.Cleanup(); err != nil {
 				d.logger.Error("failed to cleanup old dynamic app", zap.Error(err))
 			}
@@ -763,7 +833,7 @@ func (d *DynamicApp) cancelPendingCleanups() {
 }
 
 // reloadDir evicts all apps associated with the given directory and
-// cleans them up after a grace period.
+// stops their workers once requests already running on them have finished.
 func (d *DynamicApp) reloadDir(absDir string) {
 	d.logger.Info("reloading dynamic python apps due to file changes",
 		zap.String("working_dir", absDir),
@@ -829,6 +899,15 @@ func (d *DynamicApp) HandleRequest(w http.ResponseWriter, r *http.Request) error
 		}
 		if cur, ok := d.apps[key]; ok && cur == app {
 			d.inUse[key]++
+			// Counted under d.mu, so an instance removed from the map can
+			// never gain new requests while cleanup waits for it to drain.
+			active := d.active[app]
+			if active == nil {
+				active = &sync.WaitGroup{}
+				d.active[app] = active
+			}
+			active.Add(1)
+			defer active.Done()
 			d.mu.Unlock()
 			// defer so a panic in the tenant handler cannot permanently pin the key
 			// out of idle/LRU eviction.
@@ -842,6 +921,12 @@ func (d *DynamicApp) HandleRequest(w http.ResponseWriter, r *http.Request) error
 
 // Cleanup frees all dynamically created apps and stops the autoreload watcher.
 func (d *DynamicApp) Cleanup() error {
+	unregisterDynamicApp(d)
+	d.monitorStopOnce.Do(func() {
+		if d.monitorStop != nil {
+			close(d.monitorStop)
+		}
+	})
 	d.mu.Lock()
 	d.closed = true
 	for len(d.inflight) > 0 {

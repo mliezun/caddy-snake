@@ -16,13 +16,14 @@ set -euo pipefail
 # Valid tool names:
 #   django, django_channels, flask, fastapi, simple_autoreload, simple_async,
 #   simple_esgi, simple_cache, simple_cluster_cache, simple_start_timeout,
-#   simple_isolation, simple_request_body, socketio, dynamic
+#   simple_isolation, simple_request_body, simple_mount_prefix, socketio, dynamic,
+#   apps_e2e
 #
 # Valid python versions:
 #   3.12, 3.13, 3.13-nogil, 3.14, 3.14-nogil
 # ---------------------------------------------------------------------------
 
-VALID_TOOLS=("django" "django_channels" "flask" "fastapi" "simple_autoreload" "simple_async" "simple_esgi" "simple_cache" "simple_cluster_cache" "simple_start_timeout" "simple_isolation" "simple_request_body" "socketio" "dynamic")
+VALID_TOOLS=("django" "django_channels" "flask" "fastapi" "simple_autoreload" "simple_async" "simple_esgi" "simple_cache" "simple_cluster_cache" "simple_start_timeout" "simple_isolation" "simple_request_body" "simple_mount_prefix" "socketio" "dynamic" "apps_e2e")
 VALID_PYVERSIONS=("3.12" "3.13" "3.13-nogil" "3.14" "3.14-nogil")
 
 usage() {
@@ -163,12 +164,35 @@ fi
 
 # Build caddy with caddy-snake plugin (no CGO needed)
 echo ">>> Building caddy with caddy-snake..."
-GOFLAGS=-buildvcs=false CGO_ENABLED=0 xcaddy build --with github.com/mliezun/caddy-snake=__REPO_ROOT__
+if [[ "$TOOL_NAME" == "apps_e2e" ]]; then
+  # The apps platform lives in its own package and needs Postgres, git and uv.
+  apt-get install -yyqq postgresql postgresql-client
+  service postgresql stop || true
+  GOFLAGS=-buildvcs=false CGO_ENABLED=0 xcaddy build \
+    --with github.com/mliezun/caddy-snake=__REPO_ROOT__ \
+    --with github.com/mliezun/caddy-snake/apps
+else
+  GOFLAGS=-buildvcs=false CGO_ENABLED=0 xcaddy build --with github.com/mliezun/caddy-snake=__REPO_ROOT__
+fi
 
 # Run integration tests
 source venv/bin/activate
 
-if [[ "$TOOL_NAME" == "simple_start_timeout" ]]; then
+if [[ "$TOOL_NAME" == "apps_e2e" ]]; then
+  # The built-in Postgres refuses to run as root, so the server runs as a
+  # regular user with its own data folder.
+  echo ">>> Starting caddy python-apps as an unprivileged user..."
+  pip install uv
+  useradd -m appsrunner
+  mkdir -p /tmp/apps-data && chown appsrunner /tmp/apps-data
+  runuser -u appsrunner -- env PATH="$PATH" ./caddy python-apps \
+    --data-dir /tmp/apps-data --python-path "$(command -v python)" > caddy.log 2>&1 &
+  CADDY_PID=$!
+  timeout 120 bash -c 'until curl -fsS http://localhost:9080/_apps/health > /dev/null 2>&1; do sleep 1; done'
+  python main_test.py || { echo ">>> Caddy log (tail):"; tail -300 caddy.log; exit 1; }
+  kill -INT "$CADDY_PID" 2>/dev/null || true
+  wait "$CADDY_PID" 2>/dev/null || true
+elif [[ "$TOOL_NAME" == "simple_start_timeout" ]]; then
   # This suite starts/stops Caddy itself for each start_timeout scenario.
   echo ">>> Running start_timeout scenarios (test-managed Caddy)..."
   python main_test.py

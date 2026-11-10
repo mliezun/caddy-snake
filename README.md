@@ -58,7 +58,7 @@ The easiest way to get started on Linux is to download a pre-compiled Caddy bina
 This starts a server on port `9080` serving your app. See `./caddy python-server --help` for all options:
 
 ```
---server-type wsgi|asgi|esgi   Required. Type of Python app
+--server-type wsgi|asgi|esgi|auto   Required. Type of Python app (auto detects WSGI vs ASGI)
 --app <module:var>        Required. Python module and app variable (e.g. main:app)
 --domain <example.com>    Enable HTTPS with automatic certificates
 --listen <addr>           Custom listen address (default: 127.0.0.1:9080)
@@ -84,7 +84,27 @@ This starts a server on port `9080` serving your app. See `./caddy python-server
 --cache-secret <secret>          Shared peer secret (16-4096 bytes)
 --max-dynamic-apps <n>    Max distinct dynamic Python apps (default: 128)
 --request-body-max-size <size>  Max HTTP request body (e.g. 1KiB, 2GB; empty = unlimited)
+--mount-prefix <path>     Serve the app under a URL path prefix (e.g. /tools/inventory)
+--memory-limit <size>     Memory ceiling per dynamically loaded app (e.g. 256MiB)
 ```
+
+### Apps platform
+
+`caddysnake apps` turns one machine into a place where people build and share small internal web apps **through their own AI assistant**. The assistant connects over MCP, writes the app and publishes it; the person gets an address to share.
+
+```bash
+pip install caddysnake
+caddysnake apps
+# Open:             http://localhost:9080/
+# Assistant (MCP):  http://localhost:9080/_apps/mcp
+```
+
+- Each app is served at `/<app-name>/` and has its own Postgres database (the server starts and manages a private one).
+- Every save is a version; a version that does not start is refused and the running one stays up; you can go back to any earlier one.
+- Drafts are private copies of an app, with a copy of its data, for trying changes safely.
+- Open by default on this computer; `--require-login` adds usernames and passwords for anything wider.
+
+See the [apps documentation](https://caddy-snake.readthedocs.io/en/latest/docs/apps).
 
 ### Option 2: Build from source
 
@@ -256,6 +276,7 @@ python {
     module_wsgi "module:variable"       # WSGI app (e.g. "main:app")
     module_asgi "module:variable"       # ASGI app (e.g. "main:app")
     module_esgi "module:variable"       # ESGI app (gevent worker; requires gevent installed)
+    module_auto "module:variable"       # Detect WSGI vs ASGI when the app is imported
     runtime sync|gevent|native|uvloop   # See table; ESGI allows gevent only
     venv "/path/to/venv"                # Virtual environment path
     working_dir "/path/to/app"          # Working directory for module resolution
@@ -263,6 +284,8 @@ python {
     env_var VARNAME value               # Inline env var; overrides env_file (repeatable)
     workers 4                           # Number of worker processes (default: CPU count)
     max_dynamic_apps 32                 # Cap request-resolved app instances (default: 128)
+    mount_prefix /inventory             # Serve under a URL prefix (SCRIPT_NAME / root_path)
+    memory_limit 256MiB                 # Restart a dynamic app whose workers use more than this
     start_timeout 120s                  # Wait for worker readiness (default: 120s; -1 = indefinite)
     lifespan on|off                     # ASGI lifespan events (default: off)
     python_path "/usr/bin/python3"       # Explicit Python interpreter
@@ -411,6 +434,20 @@ python {
 ```
 
 Shorthand: `request_body 1KiB`. CLI: `--request-body-max-size 2GB`.
+
+### `mount_prefix`
+
+Serve the app under a URL path prefix so several apps can share one hostname. The app receives the prefix as WSGI `SCRIPT_NAME` or ASGI `root_path`, so the links it generates include it.
+
+```caddyfile
+python {
+    module_wsgi "main:app"
+    working_dir "/srv/apps/{http.request.uri.path.0}/"
+    mount_prefix "/{http.request.uri.path.0}"
+}
+```
+
+With this, `/inventory/items` is served by the app in `/srv/apps/inventory/`. A request for the bare prefix redirects to `<prefix>/`; requests outside it return 404. CLI: `--mount-prefix /inventory`. See the [reference](https://caddy-snake.readthedocs.io/en/latest/docs/reference#mount_prefix).
 
 ---
 

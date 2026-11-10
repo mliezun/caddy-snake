@@ -18,7 +18,7 @@ jobs:
       fail-fast: false
       matrix:
         python-version: ["3.12", "3.13", "3.14"]
-        os: [ubuntu-22.04, ubuntu-22.04-arm, macos-15, macos-15-intel]
+        os: [ubuntu-22.04, ubuntu-22.04-arm, macos-15, macos-15-intel, windows-2025, windows-11-arm]
         include:
           - os: ubuntu-22.04
             docker_platform: linux/amd64
@@ -30,7 +30,21 @@ jobs:
             use_docker: false
           - os: macos-15-intel
             use_docker: false
+          # New in 0.7.0 and not yet proven on a release: a Windows build that
+          # fails must not stop the other wheels from being published. Remove
+          # `experimental` once a release has shipped Windows wheels.
+          - os: windows-2025
+            use_docker: false
+            experimental: true
+          - os: windows-11-arm
+            use_docker: false
+            experimental: true
     runs-on: ${{ matrix.os }}
+    continue-on-error: ${{ matrix.experimental == true }}
+    defaults:
+      run:
+        # The steps are written for bash; Windows runners have it too.
+        shell: bash
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -92,7 +106,7 @@ jobs:
         if: ${{ !matrix.use_docker }}
         run: |
           go install github.com/caddyserver/xcaddy/cmd/xcaddy@v0.4.6
-          CGO_ENABLED=0 xcaddy build --with github.com/mliezun/caddy-snake=.
+          CGO_ENABLED=0 xcaddy build --with github.com/mliezun/caddy-snake=. --with github.com/mliezun/caddy-snake/apps
       - name: Install Rust
         if: ${{ !matrix.use_docker }}
         run: rustup toolchain install stable
@@ -104,10 +118,18 @@ jobs:
         env:
           PY_VERSION: ${{ matrix.python-version }}
         run: |
-          mv caddy cmd/cli/caddysnake-cli
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            # A program needs the .exe ending there, and the Python that
+            # setup-python selected is called plain "python".
+            mv caddy.exe cmd/cli/caddysnake-cli.exe
+            PY=python
+          else
+            mv caddy cmd/cli/caddysnake-cli
+            PY="python${PY_VERSION}"
+          fi
           cd cmd/cli/
-          python"${PY_VERSION}" -m pip install maturin
-          python"${PY_VERSION}" -m maturin build --release
+          "$PY" -m pip install maturin
+          "$PY" -m maturin build --release
       - name: Upload artifacts
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:

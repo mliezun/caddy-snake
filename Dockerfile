@@ -18,7 +18,7 @@ ENV PATH=$PATH:/usr/local/go/bin
 
 RUN go install github.com/caddyserver/xcaddy/cmd/xcaddy@v0.4.6 &&\
     cd /usr/local/bin &&\
-    CGO_ENABLED=0 /root/go/bin/xcaddy build --with github.com/mliezun/caddy-snake=/build
+    CGO_ENABLED=0 /root/go/bin/xcaddy build --with github.com/mliezun/caddy-snake=/build --with github.com/mliezun/caddy-snake/apps
 
 FROM ubuntu:22.04
 

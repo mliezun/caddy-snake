@@ -35,7 +35,7 @@ jobs:
       - name: Build the CLI binary
         working-directory: cmd/cli
         run: |
-          CGO_ENABLED=0 xcaddy build --with github.com/mliezun/caddy-snake=../..
+          CGO_ENABLED=0 xcaddy build --with github.com/mliezun/caddy-snake=../.. --with github.com/mliezun/caddy-snake/apps
           mv caddy caddysnake-cli
       - name: Build and install the Python package
         working-directory: cmd/cli

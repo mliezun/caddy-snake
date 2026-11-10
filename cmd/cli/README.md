@@ -10,7 +10,7 @@ The `caddysnake` package is available on [PyPI](https://pypi.org/project/caddysn
 pip install caddysnake
 ```
 
-Available for Python 3.12 through 3.14 on Linux and macOS (x86_64 and ARM64).
+Available for Python 3.12 through 3.14 on Linux, macOS and Windows (x86_64 and ARM64).
 
 ## Usage
 
@@ -25,19 +25,34 @@ caddysnake --server-type asgi --app main:app
 caddysnake --server-type esgi --app main:application
 ```
 
+## Apps platform
+
+`caddysnake apps` runs a small platform where people build and share internal web apps through their own AI assistant: each app is served at `/<app-name>/` with its own Postgres database, versions, drafts and roll back.
+
+```bash
+caddysnake apps                         # http://localhost:9080, assistants connect to /_apps/mcp
+caddysnake apps user add ana --admin    # with --require-login
+caddysnake apps call list               # run a tool from the command line
+caddysnake apps install                 # run it as a service that starts by itself
+```
+
+It needs the Postgres programs installed (it starts its own private database). See the [apps documentation](https://caddy-snake.readthedocs.io/en/latest/docs/apps).
+
 ## CLI Options
 
 Python-handler flags mirror the Caddyfile `python` block. Extra flags cover listen address, HTTPS, and static files.
 
 | Flag | Short | Description | Default |
 |------|-------|-------------|---------|
-| `--server-type` | `-t` | **Required.** Type of Python app: `wsgi`, `asgi`, or `esgi` | — |
+| `--server-type` | `-t` | **Required.** Type of Python app: `wsgi`, `asgi`, `esgi`, or `auto` (detect WSGI vs ASGI) | — |
 | `--app` | `-a` | **Required.** Python module and app variable (e.g. `main:app`) | — |
 | `--domain` | `-d` | Domain name for HTTPS with automatic certificates | — |
 | `--listen` | `-l` | Custom listen address | `:9080` |
 | `--workers` | `-w` | Number of worker processes (0 = CPU count) | `0` |
 | `--max-dynamic-apps` | | Max distinct dynamic Python apps | `128` |
 | `--request-body-max-size` | | Maximum HTTP request body size (e.g. `1KiB`, `2GB`) | unlimited |
+| `--mount-prefix` | | URL path prefix the app is mounted under (e.g. `/tools/inventory`) | — |
+| `--memory-limit` | | Memory ceiling per dynamically loaded app (e.g. `256MiB`); an app over it is restarted | — |
 | `--python-path` | | Path to the Python interpreter | — |
 | `--working-dir` | | Working directory for the Python app | — |
 | `--venv` | | Path to a Python virtual environment | — |

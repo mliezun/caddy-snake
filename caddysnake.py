@@ -15,8 +15,10 @@ import asyncio
 import base64
 import concurrent.futures
 import contextlib
+import functools
 import hashlib
 import importlib
+import inspect
 import ipaddress
 import os
 import signal
@@ -227,6 +229,15 @@ def _http_path_str(path_part: str) -> str:
     Invalid UTF-8 is replaced with U+FFFD (ASGI and ESGI 0.1-draft).
     """
     return _unquote_percent_bytes(path_part).decode("utf-8", errors="replace")
+
+
+def _mount_prefix(raw_headers) -> str:
+    """Mount prefix resolved by the Caddy module for this request ("" if none).
+
+    The header is set only by the Go side (client-supplied values are stripped)
+    and is limited to unreserved ASCII characters, so no decoding is needed.
+    """
+    return raw_headers.get("caddy-snake-mount-prefix") or ""
 
 
 def _forwarded_scheme(raw_headers):
@@ -579,10 +590,19 @@ def _build_wsgi_environ(method, path, version, headers_list, raw_headers, wsgi_i
     if trusted_client is not None:
         remote_ip = trusted_client[0]
 
+    # PEP 3333: SCRIPT_NAME is the mount point, PATH_INFO the rest of the path.
+    script_name = _mount_prefix(raw_headers)
+    path_info = _wsgi_path_info(path_part)
+    if script_name:
+        if path_info.startswith(script_name):
+            path_info = path_info[len(script_name) :]
+        else:
+            script_name = ""
+
     environ = {
         "REQUEST_METHOD": method,
-        "SCRIPT_NAME": "",  # mount prefixes must use _wsgi_path_info if ever set
-        "PATH_INFO": _wsgi_path_info(path_part),
+        "SCRIPT_NAME": script_name,
+        "PATH_INFO": path_info,
         "QUERY_STRING": query_string,
         "SERVER_NAME": server_name,
         "SERVER_PORT": str(server_port),
@@ -616,6 +636,7 @@ def _build_wsgi_environ(method, path, version, headers_list, raw_headers, wsgi_i
             "PROXY",
             "CADDY_SNAKE_REMOTE_ADDR",
             "CADDY_SNAKE_REMOTE_PORT",
+            "CADDY_SNAKE_MOUNT_PREFIX",
         ):
             continue
         http_key = "HTTP_" + key_upper
@@ -1602,7 +1623,12 @@ def _esgi_headers_mapping(headers_list, raw_headers: dict) -> dict:
     headers_map = {}
     for n, v in headers_list:
         k = _header_name_str(n)
-        if k in ("caddy-snake-remote-addr", "caddy-snake-remote-port", "proxy"):
+        if k in (
+            "caddy-snake-remote-addr",
+            "caddy-snake-remote-port",
+            "caddy-snake-mount-prefix",
+            "proxy",
+        ):
             continue
         val = v.decode("latin-1")
         existing = headers_map.get(k)
@@ -1637,6 +1663,7 @@ def _build_esgi_http_scope(method, path, version, headers_list, raw_headers: dic
         "scheme": _esgi_scheme_from_headers(raw_headers),
         "method": method.upper(),
         "path": path_decoded,
+        "root_path": _mount_prefix(raw_headers),
         "query_string": query_string,
         "headers": _esgi_headers_mapping(headers_list, raw_headers),
         "authority": raw_headers.get("host") or None,
@@ -1663,6 +1690,7 @@ def _build_esgi_ws_scope(method, path, version, headers_list, raw_headers: dict)
         "scheme": _esgi_ws_scheme_from_headers(raw_headers),
         "method": method.upper(),
         "path": path_decoded,
+        "root_path": _mount_prefix(raw_headers),
         "query_string": query_string,
         "headers": _esgi_headers_mapping(headers_list, raw_headers),
         "authority": raw_headers.get("host") or None,
@@ -2153,6 +2181,7 @@ async def _handle_asgi_connection(reader, writer, app, state):
                     b"caddy-snake-remote-addr",
                     b"caddy-snake-remote-port",
                     b"caddy-snake-worker-token",
+                    b"caddy-snake-mount-prefix",
                     b"proxy",
                 )
             ]
@@ -2178,7 +2207,9 @@ async def _handle_asgi_connection(reader, writer, app, state):
                 "path": _http_path_str(path_part),
                 "raw_path": path_part.encode("latin-1"),
                 "query_string": query_string.encode("latin-1"),
-                "root_path": "",  # mount prefixes must use _http_path_str if ever set
+                # ASGI: root_path is the mount point and path stays the full
+                # path including it (same as uvicorn --root-path).
+                "root_path": _mount_prefix(raw_headers),
                 "scheme": scheme,
                 "headers": headers_for_scope,
                 "server": (server_host, server_port),
@@ -2382,6 +2413,30 @@ async def run_asgi_server(app, socket_path, lifespan, lifespan_timeout=None):
         pass
 
 
+def detect_interface(app) -> str:
+    """Pick the interface for ``--interface auto``: "asgi" or "wsgi".
+
+    An app is ASGI when calling it returns a coroutine: an ``async def``
+    function, or an object whose ``__call__`` is ``async def`` (FastAPI,
+    Starlette, Django's ASGIHandler, Quart). Everything else is served as
+    WSGI (Flask, Django's WSGIHandler, plain callables). ESGI apps have the
+    same shape as WSGI ones and must be configured explicitly.
+    """
+    target = app
+    while isinstance(target, functools.partial):
+        target = target.func
+    if inspect.iscoroutinefunction(target):
+        return "asgi"
+    # Look the method up on the type: that is what Python calls for app(...).
+    call = vars(type(target)).get("__call__") or next(
+        (vars(base)["__call__"] for base in type(target).__mro__ if "__call__" in vars(base)),
+        None,
+    )
+    if inspect.iscoroutinefunction(call):
+        return "asgi"
+    return "wsgi"
+
+
 # ==================== Main Entry Point ====================
 
 
@@ -2396,8 +2451,8 @@ def main():
     parser.add_argument(
         "--interface",
         required=True,
-        choices=["wsgi", "asgi", "esgi"],
-        help="Server interface type",
+        choices=["wsgi", "asgi", "esgi", "auto"],
+        help="Server interface type (auto: asgi for async apps, else wsgi)",
     )
     parser.add_argument("--working-dir", default="", help="Working directory")
     parser.add_argument("--venv", default="", help="Virtual environment path")
@@ -2421,9 +2476,13 @@ def main():
     setup_paths(args.working_dir, args.venv)
     app = import_app(args.app)
 
-    if args.interface == "wsgi":
+    interface = args.interface
+    if interface == "auto":
+        interface = detect_interface(app)
+
+    if interface == "wsgi":
         run_wsgi_server(app, args.socket, args.runtime or "sync")
-    elif args.interface == "asgi":
+    elif interface == "asgi":
         run_kwargs = {}
         loop_factory = _asgi_loop_factory(args.runtime or "uvloop")
         if loop_factory is not None:

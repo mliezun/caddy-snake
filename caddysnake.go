@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strconv"
@@ -67,6 +68,10 @@ func setPythonWorkerOutboundHeaders(pr *httputil.ProxyRequest, dialAddr, workerT
 	pr.Out.Header.Del(caddySnakeRemoteAddrHeader)
 	pr.Out.Header.Del(caddySnakeRemotePortHeader)
 	pr.Out.Header.Del(caddySnakeWorkerTokenHeader)
+	pr.Out.Header.Del(caddySnakeMountPrefixHeader)
+	if prefix := mountPrefixFromContext(pr.In.Context()); prefix != "" {
+		pr.Out.Header.Set(caddySnakeMountPrefixHeader, prefix)
+	}
 	host, port, err := net.SplitHostPort(pr.In.RemoteAddr)
 	if err != nil {
 		host = pr.In.RemoteAddr
@@ -141,6 +146,11 @@ type CaddySnake struct {
 	// ESGI app import path as "module:variable" (synchronous application(scope, protocol) callable).
 	// Mutually exclusive with module_wsgi and module_asgi. Supports Caddy placeholders for dynamic loading.
 	ModuleEsgi string `json:"module_esgi,omitempty"`
+	// App import path as "module:variable" whose interface the worker detects at import:
+	// an async callable is served as ASGI, anything else as WSGI (ESGI is never auto-detected).
+	// Mutually exclusive with the other module_* options; runtime must be left empty.
+	// Supports Caddy placeholders for dynamic loading.
+	ModuleAuto string `json:"module_auto,omitempty"`
 	// Python worker runtime at the gateway boundary.
 	// WSGI: "sync" (default) or "gevent". ESGI: "gevent" only (default).
 	// ASGI: "native" or "uvloop" (default when omitted: "uvloop").
@@ -183,6 +193,17 @@ type CaddySnake struct {
 	// Empty means unlimited. Caddyfile: request_body { max_size <size> } (or
 	// request_body <size>). CLI: --request-body-max-size.
 	RequestBodyMaxSize string `json:"request_body_max_size,omitempty"`
+	// URL path prefix the app is mounted under (e.g. "/tools/inventory"). Requests must
+	// start with it; the app sees it as WSGI SCRIPT_NAME / ASGI root_path, so the URLs
+	// it generates include the prefix. Empty or "/" means mounted at the site root.
+	// Supports Caddy placeholders (e.g. "/{http.request.uri.path.0}").
+	// Caddyfile: mount_prefix. CLI: --mount-prefix.
+	MountPrefix string `json:"mount_prefix,omitempty"`
+	// Memory ceiling per dynamically loaded app, as a human-readable size (e.g. "256MiB").
+	// An app whose workers together use more is restarted: it takes no new requests,
+	// finishes the running ones, and is imported again on the next request.
+	// Requires dynamic module loading (placeholders). Caddyfile: memory_limit. CLI: --memory-limit.
+	MemoryLimit string `json:"memory_limit,omitempty"`
 
 	logger              *zap.Logger
 	app                 AppServer
@@ -328,6 +349,10 @@ func limitRequestBody(w http.ResponseWriter, r *http.Request, max int64) error {
 // effectivePythonRuntime returns the runtime string passed to the Python worker.
 // When Runtime is empty: sync for WSGI, gevent for ESGI, uvloop for ASGI.
 func effectivePythonRuntime(iface, runtime string) string {
+	if iface == "auto" {
+		// The worker picks the default for whichever interface it detects.
+		return runtime
+	}
 	if iface == "asgi" && runtime == "libuv" {
 		runtime = "uvloop" // legacy alias; configuration name is uvloop
 	}
@@ -358,6 +383,10 @@ func validatePythonRuntime(iface, runtime string) error {
 		if eff != "native" && eff != "uvloop" {
 			return fmt.Errorf("asgi runtime must be native or uvloop, got %q", eff)
 		}
+	case "auto":
+		if eff != "" {
+			return fmt.Errorf("runtime cannot be set with module_auto (the interface is not known until the app is imported), got %q", eff)
+		}
 	default:
 		return fmt.Errorf("unknown python interface %q", iface)
 	}
@@ -384,6 +413,10 @@ func (f *CaddySnake) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 				case "module_wsgi":
 					if !d.Args(&f.ModuleWsgi) {
 						return d.Errf("expected exactly one argument for module_wsgi")
+					}
+				case "module_auto":
+					if !d.Args(&f.ModuleAuto) {
+						return d.Errf("expected exactly one argument for module_auto")
 					}
 				case "runtime":
 					if !d.Args(&f.Runtime) {
@@ -452,6 +485,14 @@ func (f *CaddySnake) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 					if !d.Args(&f.MaxDynamicApps) {
 						return d.Errf("expected exactly one argument for max_dynamic_apps")
 					}
+				case "mount_prefix":
+					if !d.Args(&f.MountPrefix) {
+						return d.Errf("expected exactly one argument for mount_prefix")
+					}
+				case "memory_limit":
+					if !d.Args(&f.MemoryLimit) {
+						return d.Errf("expected exactly one argument for memory_limit")
+					}
 				default:
 					return d.Errf("unknown subdirective: %s", d.Val())
 				}
@@ -512,9 +553,13 @@ func (f *CaddySnake) Provision(ctx caddy.Context) error {
 	}
 
 	isDynamic := containsPlaceholder(f.ModuleWsgi) || containsPlaceholder(f.ModuleAsgi) ||
-		containsPlaceholder(f.ModuleEsgi) ||
+		containsPlaceholder(f.ModuleEsgi) || containsPlaceholder(f.ModuleAuto) ||
 		containsPlaceholder(f.WorkingDir) || containsPlaceholder(f.VenvPath) ||
 		envFilesContainPlaceholder(f.EnvFiles) || envMapContainsPlaceholder(f.EnvVars)
+
+	if !isDynamic && f.MemoryLimit != "" {
+		return errors.New("memory_limit requires dynamic module loading (placeholders in module, working_dir, venv or env settings)")
+	}
 
 	if isDynamic {
 		if err = f.provisionDynamic(workers, cacheAddr, cacheToken, startTimeout); err != nil {
@@ -535,7 +580,7 @@ func (f *CaddySnake) Provision(ctx caddy.Context) error {
 		return err
 	}
 	lifespan := ""
-	if iface == "asgi" {
+	if iface == "asgi" || iface == "auto" {
 		lifespan = f.Lifespan
 	} else if f.Lifespan != "" {
 		if iface == "wsgi" {
@@ -591,8 +636,10 @@ func (f *CaddySnake) pythonInterfaceAndModule() (iface, module string, err error
 		return "asgi", f.ModuleAsgi, nil
 	case f.ModuleEsgi != "":
 		return "esgi", f.ModuleEsgi, nil
+	case f.ModuleAuto != "":
+		return "auto", f.ModuleAuto, nil
 	default:
-		return "", "", errors.New("a wsgi, asgi, or esgi app must be specified")
+		return "", "", errors.New("a wsgi, asgi, esgi, or auto app must be specified")
 	}
 }
 
@@ -610,12 +657,16 @@ func (f *CaddySnake) provisionDynamic(workers int, cacheAddr, cacheToken string,
 		return err
 	}
 
+	if limits.MemoryLimitBytes, err = parseMemoryLimit(f.MemoryLimit); err != nil {
+		return err
+	}
+
 	iface, modulePattern, err := f.pythonInterfaceAndModule()
 	if err != nil {
 		return errors.New("a wsgi, asgi, or esgi app must be specified for dynamic mode")
 	}
 	lifespan := ""
-	if iface == "asgi" {
+	if iface == "asgi" || iface == "auto" {
 		lifespan = f.Lifespan
 	} else if f.Lifespan != "" {
 		if iface == "wsgi" {
@@ -653,8 +704,11 @@ func (m *CaddySnake) Validate() error {
 	if m.ModuleEsgi != "" {
 		n++
 	}
+	if m.ModuleAuto != "" {
+		n++
+	}
 	if n != 1 {
-		return errors.New("exactly one of module_wsgi, module_asgi, or module_esgi is required")
+		return errors.New("exactly one of module_wsgi, module_asgi, module_esgi, or module_auto is required")
 	}
 	var iface string
 	switch {
@@ -662,6 +716,8 @@ func (m *CaddySnake) Validate() error {
 		iface = "wsgi"
 	case m.ModuleAsgi != "":
 		iface = "asgi"
+	case m.ModuleAuto != "":
+		iface = "auto"
 	default:
 		iface = "esgi"
 	}
@@ -703,6 +759,14 @@ func (m *CaddySnake) Validate() error {
 		return err
 	}
 	m.requestBodyMaxBytes = nBytes
+	if _, err := parseMemoryLimit(m.MemoryLimit); err != nil {
+		return err
+	}
+	if m.MountPrefix != "" && !containsPlaceholder(m.MountPrefix) {
+		if _, err := normalizeMountPrefix(m.MountPrefix); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -726,6 +790,13 @@ func (m *CaddySnake) Cleanup() error {
 func (f CaddySnake) ServeHTTP(w http.ResponseWriter, r *http.Request, next caddyhttp.Handler) error {
 	if err := limitRequestBody(w, r, f.requestBodyMaxBytes); err != nil {
 		return err
+	}
+	r, handled, err := applyMountPrefix(f.MountPrefix, w, r)
+	if err != nil {
+		return err
+	}
+	if handled {
+		return nil
 	}
 	if err := f.app.HandleRequest(w, r); err != nil {
 		return err
@@ -777,6 +848,18 @@ func resolvePythonInterpreter(pythonPath, venvPath string) string {
 		}
 	}
 
+	return systemPython(runtime.GOOS, exec.LookPath)
+}
+
+// systemPython is the interpreter used when none is configured. Python on
+// Windows is installed as "python"; "python3" there is usually missing or the
+// Microsoft Store placeholder, so it is only the fallback.
+func systemPython(goos string, lookPath func(string) (string, error)) string {
+	if goos == "windows" {
+		if _, err := lookPath("python"); err == nil {
+			return "python"
+		}
+	}
 	return "python3"
 }
 
@@ -1211,6 +1294,7 @@ func init() {
 			"[--cache-namespace <name>] [--cache-secret <secret>] " +
 			"[--max-dynamic-apps <count>] " +
 			"[--request-body-max-size <size>] " +
+			"[--mount-prefix <path>] [--memory-limit <size>] " +
 			"[--debug] [--access-logs] [--autoreload]",
 		Short: "Spins up a Python server",
 		Long: `
@@ -1230,7 +1314,7 @@ Providing a domain name with the '--domain' flag enables HTTPS and sets the list
 Ensure DNS A/AAAA records are correctly set up if using a public domain for secure connections.
 `,
 		CobraFunc: func(cmd *cobra.Command) {
-			cmd.Flags().StringP("server-type", "t", "", "Required. The type of server to use: wsgi|asgi|esgi")
+			cmd.Flags().StringP("server-type", "t", "", "Required. The type of server to use: wsgi|asgi|esgi|auto (auto detects wsgi or asgi from the app)")
 			cmd.Flags().StringP("app", "a", "", "Required. App module to be imported")
 			cmd.Flags().StringP("domain", "d", "", "Domain name at which to serve the files")
 			cmd.Flags().StringP("listen", "l", "", "The address to which to bind the listener")
@@ -1263,6 +1347,8 @@ Ensure DNS A/AAAA records are correctly set up if using a public domain for secu
 			cmd.Flags().String("cache-secret", "", "Cluster peer shared secret (16-4096 bytes)")
 			cmd.Flags().String("max-dynamic-apps", "", "Max distinct dynamic Python apps (empty = env/default, usually 128)")
 			cmd.Flags().String("request-body-max-size", "", "Maximum HTTP request body size (e.g. 1KiB, 2GB). Empty means unlimited.")
+			cmd.Flags().String("mount-prefix", "", "URL path prefix the app is mounted under (e.g. /tools/inventory). The app sees it as SCRIPT_NAME / root_path.")
+			cmd.Flags().String("memory-limit", "", "Memory ceiling per dynamically loaded app (e.g. 256MiB); an app over it is restarted. Requires placeholders.")
 			cmd.RunE = caddycmd.WrapCommandFuncForCobra(pythonServer)
 		},
 	})
@@ -1289,6 +1375,8 @@ func pythonServer(fs caddycmd.Flags) (int, error) {
 	runtimeFlag := fs.String("runtime")
 	maxDynamicApps := fs.String("max-dynamic-apps")
 	requestBodyMaxSize := fs.String("request-body-max-size")
+	mountPrefix := fs.String("mount-prefix")
+	memoryLimit := fs.String("memory-limit")
 	startTimeout := fs.String("start-timeout")
 	isolationFlag := fs.String("isolation")
 	isolationImage := fs.String("isolation-image")
@@ -1322,8 +1410,8 @@ func pythonServer(fs caddycmd.Flags) (int, error) {
 	if serverType == "" {
 		return caddy.ExitCodeFailedStartup, errors.New("--server-type is required")
 	}
-	if serverType != "wsgi" && serverType != "asgi" && serverType != "esgi" {
-		return caddy.ExitCodeFailedStartup, fmt.Errorf("invalid --server-type %q (want wsgi, asgi, or esgi)", serverType)
+	if serverType != "wsgi" && serverType != "asgi" && serverType != "esgi" && serverType != "auto" {
+		return caddy.ExitCodeFailedStartup, fmt.Errorf("invalid --server-type %q (want wsgi, asgi, esgi, or auto)", serverType)
 	}
 	if app == "" {
 		return caddy.ExitCodeFailedStartup, errors.New("--app is required")
@@ -1350,6 +1438,8 @@ func pythonServer(fs caddycmd.Flags) (int, error) {
 		pythonHandler.ModuleWsgi = app
 	} else if serverType == "asgi" {
 		pythonHandler.ModuleAsgi = app
+	} else if serverType == "auto" {
+		pythonHandler.ModuleAuto = app
 	} else {
 		pythonHandler.ModuleEsgi = app
 	}
@@ -1370,6 +1460,8 @@ func pythonServer(fs caddycmd.Flags) (int, error) {
 	pythonHandler.StartTimeout = startTimeout
 	pythonHandler.MaxDynamicApps = maxDynamicApps
 	pythonHandler.RequestBodyMaxSize = requestBodyMaxSize
+	pythonHandler.MountPrefix = mountPrefix
+	pythonHandler.MemoryLimit = memoryLimit
 	pythonHandler.EnvFiles = cloneEnvFiles(envFiles)
 	pythonHandler.EnvVars = envVars
 	if iso, err := buildIsolationFromCLI(isolationFlag, isolationImage, isolationNetwork, isolationDockerHost, isolationMemory, isolationCPUs, isolationReadOnly); err != nil {

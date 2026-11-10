@@ -1,0 +1,33 @@
+# SQL lives in db/ as plain files; sqlc compiles the queries to Go. After
+# changing a migration or a query, regenerate from this directory and commit
+# the result (never edit the generated packages by hand):
+#
+#   go run github.com/sqlc-dev/sqlc/cmd/sqlc@v1.30.0 generate
+#
+#   db/bootstrap/    idempotent bookkeeping applied on every start
+#   db/migrations/   the platform's schema, one numbered file per change
+#   db/queries/      queries on the platform database      -> db/dbgen
+#   db/appdb/        schema + queries run inside each app's own database
+#                                                          -> db/appdb/appdbgen
+version: "2"
+sql:
+  - engine: postgresql
+    schema:
+      - db/bootstrap
+      - db/migrations
+    queries: db/queries
+    gen:
+      go:
+        package: dbgen
+        out: db/dbgen
+        sql_package: database/sql
+        emit_empty_slices: true
+  - engine: postgresql
+    schema: db/appdb/schema
+    queries: db/appdb/queries
+    gen:
+      go:
+        package: appdbgen
+        out: db/appdb/appdbgen
+        sql_package: database/sql
+        emit_empty_slices: true

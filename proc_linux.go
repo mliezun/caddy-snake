@@ -12,3 +12,6 @@ func setSysProcAttr(cmd *exec.Cmd) {
 		Pdeathsig: syscall.SIGTERM,
 	}
 }
+
+// tieToParent is only needed on Windows.
+func tieToParent(cmd *exec.Cmd) {}

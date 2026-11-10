@@ -8,7 +8,7 @@ sidebar_position: 2
 
 Serve WSGI, ASGI, or ESGI apps with the `python` directive. Prefer the **route form**; use the block form for full options. CLI flags for `caddysnake` / `caddy python-server` mirror the same fields — see [python-server](#python-server-command).
 
-**Jump to:** [Subdirectives](#subdirectives) · [Dynamic apps](#dynamic-module-loading) · [On-demand TLS](#on-demand-tls-certificate-permission-without-ask) · [Shared cache](#shared-worker-cache) · [CLI](#python-server-command)
+**Jump to:** [Subdirectives](#subdirectives) | [Dynamic apps](#dynamic-module-loading) | [On-demand TLS](#on-demand-tls-certificate-permission-without-ask) | [Shared cache](#shared-worker-cache) | [CLI](#python-server-command)
 
 ---
 
@@ -63,6 +63,7 @@ python {
     module_wsgi <module_name:variable_name>
     module_asgi <module_name:variable_name>
     module_esgi <module_name:variable_name>
+    module_auto <module_name:variable_name>
     runtime <sync|gevent|native|uvloop>
     lifespan on|off
     working_dir <path>
@@ -79,6 +80,8 @@ python {
     request_body {
         max_size <size>
     }
+    mount_prefix <path>
+    memory_limit <size>
 }
 ```
 
@@ -124,6 +127,21 @@ python {
     runtime gevent
 }
 ```
+
+### `module_auto`
+
+The Python module and app variable to import, with the interface detected when the app is imported:
+
+- an **async** callable (an `async def` function, or an object whose `__call__` is `async def` — FastAPI, Starlette, Django's ASGI handler, Quart) is served as **ASGI**;
+- anything else (Flask, Django's WSGI handler, a plain function) is served as **WSGI**.
+
+```caddyfile
+python {
+    module_auto "main:app"
+}
+```
+
+Use it when one handler serves apps of both kinds, typically with [dynamic module loading](#dynamic-module-loading). `runtime` cannot be set together with `module_auto` (each interface uses its default); `lifespan` applies if the app turns out to be ASGI. ESGI apps are never auto-detected — use `module_esgi`. On the CLI: `--server-type auto`.
 
 ### `runtime`
 
@@ -243,7 +261,7 @@ Workers are separate processes: a venv configured for one `python` handler (or o
 
 ### `python_path`
 
-Path to the Python interpreter used to start workers. It takes precedence over the interpreter in `venv`; when omitted, Caddy Snake uses the venv interpreter or falls back to `python3`.
+Path to the Python interpreter used to start workers. It takes precedence over the interpreter in `venv`; when omitted, Caddy Snake uses the venv interpreter or falls back to `python3` (`python` on Windows).
 
 ```caddyfile
 python {
@@ -404,6 +422,75 @@ Site-level `request_body` (or wrapping `route { request_body { ... } python { ..
 
 On the CLI: `--request-body-max-size 2GB`.
 
+### `mount_prefix`
+
+Serves the app under a URL path prefix instead of the site root. Use it to host several apps on one hostname (`/inventory/...`, `/timesheets/...`).
+
+```caddyfile
+example.com {
+    handle /inventory* {
+        python {
+            module_wsgi "main:app"
+            working_dir "/srv/inventory"
+            mount_prefix /inventory
+        }
+    }
+}
+```
+
+The prefix is passed to the app the standard way, so frameworks generate correct links, redirects and cookie paths without app changes:
+
+| Interface | Mount point | Request path seen by the app |
+|-----------|-------------|------------------------------|
+| WSGI | `SCRIPT_NAME` = prefix | `PATH_INFO` = path **without** the prefix |
+| ASGI | `scope["root_path"]` = prefix | `scope["path"]` = full path **including** the prefix (same as `uvicorn --root-path`) |
+| ESGI | `scope["root_path"]` = prefix (caddy-snake extension) | `scope["path"]` = full path including the prefix |
+
+Behavior:
+
+- A request for the bare prefix (`/inventory`) is redirected with **308** to `/inventory/`, so relative links in plain HTML resolve inside the app.
+- A request outside the prefix gets **404**. Unlike `handle_path`, the handler does not need the path stripped first — use `handle`, not `handle_path`.
+- The prefix must start with `/`; a trailing slash is ignored; `/` or empty means "mounted at the root". Segments may contain only letters, digits and `- . _ ~`.
+- [Placeholders](#dynamic-module-loading) are supported, which lets one handler serve a directory of apps by first path segment:
+
+```caddyfile
+example.com {
+    python {
+        module_wsgi "main:app"
+        working_dir "/srv/apps/{http.request.uri.path.0}/"
+        mount_prefix "/{http.request.uri.path.0}"
+        workers 1
+    }
+}
+```
+
+Here `/inventory/items` is served by `/srv/apps/inventory/` with `SCRIPT_NAME=/inventory`. A first segment that is not a valid prefix (for example one containing spaces) returns 404.
+
+ASGI frameworks must follow the current ASGI spec for `root_path` (Starlette/FastAPI 0.33+, Django, Quart). On the CLI: `--mount-prefix /inventory`.
+
+### `memory_limit`
+
+A memory ceiling for each [dynamically loaded](#dynamic-module-loading) app, so one heavy app cannot exhaust the machine.
+
+```caddyfile
+python {
+    module_auto "main:app"
+    working_dir "/srv/apps/{http.request.uri.path.0}/"
+    mount_prefix "/{http.request.uri.path.0}"
+    workers 1
+    memory_limit 256MiB
+}
+```
+
+Every few seconds caddy-snake measures the memory of each loaded app's workers (all workers of the app added together). An app over the limit is **restarted**: it stops taking new requests, the requests already running finish, its workers are stopped, and the next request imports the app again. A warning is logged, and the event is reported to [output observers](#observing-apps-from-go).
+
+- Sizes use the same syntax as `request_body` (`256MiB`, `1GB`).
+- Memory is measured as PSS on Linux (shared pages are split between the processes using them) and RSS via `ps` on macOS/BSD. It is not enforced on Windows or for Docker-isolated workers (use `isolation docker { memory ... }` there).
+- It requires placeholders: a handler serving a single fixed app has no way to restart it, so `memory_limit` there is a configuration error.
+- The check interval is 5s; override with `CADDYSNAKE_MEMORY_CHECK_INTERVAL` (Go duration).
+
+On the CLI: `--memory-limit 256MiB`.
+
 ---
 
 ## Dynamic Module Loading
@@ -436,8 +523,9 @@ Cached dynamic apps are bounded to avoid unbounded process growth under multi-te
 | --- | --- | --- |
 | Max cached apps | **128** | `CADDYSNAKE_MAX_DYNAMIC_APPS`, or Caddyfile/CLI [`max_dynamic_apps`](#max_dynamic_apps) / `--max-dynamic-apps` |
 | Idle eviction TTL | **30m** | `CADDYSNAKE_DYNAMIC_APP_IDLE_TTL` (Go duration, e.g. `15m`) |
+| Reload drain timeout | **30s** | `CADDYSNAKE_RELOAD_DRAIN_TIMEOUT` (Go duration; how long evicted workers wait for running requests) |
 
-When the cache is full, the least-recently-used idle app is evicted (cleaned up after a short grace period). Apps with active requests are not evicted; if every slot is busy, new keys fail until capacity frees.
+When the cache is full, the least-recently-used idle app is evicted and its workers are stopped. Apps with active requests are not evicted; if every slot is busy, new keys fail until capacity frees.
 
 ### How it works
 
@@ -469,9 +557,24 @@ Dynamic module loading works with `autoreload`. When enabled, each resolved work
 }
 ```
 
-Old app instances are evicted immediately and their worker processes are cleaned up after a fixed 10s
-grace period. Unlike idle/LRU eviction, this does **not** wait for active requests: a request still
-running 10s after the reload has its worker killed under it.
+Old app instances are evicted immediately, so every new request imports the new code. Requests that
+were already running keep their old workers until they finish; the old workers are then stopped. An
+instance with nothing running is stopped right away. The wait is bounded by
+`CADDYSNAKE_RELOAD_DRAIN_TIMEOUT` (Go duration, default **30s**; `0` stops old workers at once): a
+request still running after that has its worker stopped under it, which mainly affects long-lived
+connections such as WebSockets.
+
+---
+
+## Observing apps from Go
+
+Go code compiled into the same Caddy binary can watch and nudge dynamically loaded apps through three functions in `github.com/mliezun/caddy-snake`:
+
+| Function | Purpose |
+|----------|---------|
+| `ObserveWorkerOutput(fn) (cancel func())` | Receive every line local workers write to stdout/stderr (tracebacks, `print`, import errors), tagged with the app's working directory. Output still goes to Caddy's own streams. Not available for Docker-isolated workers. |
+| `LoadedDynamicApps() []DynamicAppInfo` | List loaded app instances with working directory, memory, running requests and last use. |
+| `ReloadWorkingDir(dir string) int` | Unload the apps under a directory so the next request imports them again — for changes autoreload does not watch, such as an `env_file`. Running requests finish first. |
 
 ---
 
@@ -804,7 +907,7 @@ caddy python-server --server-type asgi --app main:app \
 
 | Caddyfile | CLI flag |
 |-----------|----------|
-| `module_wsgi` / `module_asgi` / `module_esgi` | `--server-type` + `--app` |
+| `module_wsgi` / `module_asgi` / `module_esgi` / `module_auto` | `--server-type` + `--app` |
 | `runtime` | `--runtime` |
 | `lifespan` | `--lifespan` |
 | `working_dir` | `--working-dir` |
@@ -821,6 +924,8 @@ caddy python-server --server-type asgi --app main:app \
 | `cache local` | `--cache-mode local` |
 | `cache cluster { ... }` | `--cache-mode cluster` + `--cache-listen`, `--cache-advertise`, `--cache-peer` (repeatable), `--cache-namespace`, `--cache-secret` |
 | `request_body { max_size <size> }` | `--request-body-max-size` |
+| `mount_prefix <path>` | `--mount-prefix` |
+| `memory_limit <size>` | `--memory-limit` |
 
 CLI-only: `--domain`, `--listen` (default **`127.0.0.1:9080`** when no `--domain`), `--static-path`, `--static-route`, `--debug`, `--access-logs`.
 

@@ -1,5 +1,7 @@
 import os
+import subprocess
 import sys
+import sysconfig
 
 import click
 
@@ -8,9 +10,9 @@ import click
 @click.option(
     "--server-type",
     "-t",
-    type=click.Choice(["wsgi", "asgi", "esgi"], case_sensitive=False),
+    type=click.Choice(["wsgi", "asgi", "esgi", "auto"], case_sensitive=False),
     required=True,
-    help="Required. The type of server to use: wsgi|asgi|esgi",
+    help="Required. The type of server to use: wsgi|asgi|esgi|auto",
 )
 @click.option(
     "--domain",
@@ -96,6 +98,14 @@ import click
     "--request-body-max-size",
     help="Maximum HTTP request body size (e.g. 1KiB, 2GB). Empty means unlimited.",
 )
+@click.option(
+    "--mount-prefix",
+    help="URL path prefix the app is mounted under (e.g. /tools/inventory).",
+)
+@click.option(
+    "--memory-limit",
+    help="Memory ceiling per dynamically loaded app (e.g. 256MiB); needs placeholders.",
+)
 def main(
     server_type,
     domain,
@@ -130,6 +140,8 @@ def main(
     cache_secret,
     max_dynamic_apps,
     request_body_max_size,
+    mount_prefix,
+    memory_limit,
 ):
     """
     A Python WSGI, ASGI, or ESGI server designed for apps and frameworks.
@@ -142,7 +154,7 @@ def main(
     Providing a domain name with the '--domain' flag enables HTTPS and sets the listener to the appropriate secure port.
     Ensure DNS A/AAAA records are correctly set up if using a public domain for secure connections.
     """
-    binary_path = os.path.join(os.path.dirname(__file__), "caddysnake-cli")
+    binary_path = _binary_path()
 
     if not os.path.exists(binary_path):
         click.echo(f"caddysnake-cli binary file not found at {binary_path}", err=True)
@@ -219,10 +231,87 @@ def main(
         args.extend(["--max-dynamic-apps", max_dynamic_apps])
     if request_body_max_size:
         args.extend(["--request-body-max-size", request_body_max_size])
+    if mount_prefix:
+        args.extend(["--mount-prefix", mount_prefix])
+    if memory_limit:
+        args.extend(["--memory-limit", memory_limit])
 
     # Execute the binary with the constructed arguments
+    if _WINDOWS:
+        _run_and_exit(args)
     os.execv(binary_path, args)
 
 
-if __name__ == "__main__":
+# Subcommands of `caddysnake apps` that are not "start the server".
+_APPS_SUBCOMMANDS = {"user", "key", "call", "guide", "install", "uninstall", "help", "completion"}
+
+
+_WINDOWS = os.name == "nt"
+
+
+def _binary_path() -> str:
+    name = "caddysnake-cli.exe" if _WINDOWS else "caddysnake-cli"
+    return os.path.join(os.path.dirname(__file__), name)
+
+
+def _run_and_exit(args: list[str], env: dict[str, str] | None = None) -> None:
+    """Run the bundled binary and exit with its exit code.
+
+    Windows cannot replace the running program with another one the way
+    os.execv does elsewhere: the shell would get its prompt back while the
+    server kept running. So the binary runs as a child and this waits for it.
+    """
+    proc = subprocess.Popen(args, env=env)  # noqa: S603 - our own bundled binary
+    while True:
+        try:
+            sys.exit(proc.wait())
+        except KeyboardInterrupt:
+            # Ctrl-C reaches the server as well; keep waiting while it stops cleanly.
+            continue
+
+
+def _tool_dirs() -> list[str]:
+    """Folders where this Python installation keeps programs such as uv."""
+    dirs = [os.path.dirname(sys.executable)]
+    scripts = sysconfig.get_path("scripts")
+    if scripts and scripts not in dirs:
+        dirs.append(scripts)
+    return dirs
+
+
+def apps_argv(argv: list[str]) -> list[str]:
+    """Build the argument list for `caddysnake apps ...` (everything after "apps").
+
+    The bundled binary's `python-apps` command takes the arguments unchanged.
+    When starting the server, apps are built with the Python that caddysnake
+    itself is installed in, unless the caller chose one.
+    """
+    args = [_binary_path(), "python-apps", *argv]
+    starts_server = not any(a in _APPS_SUBCOMMANDS for a in argv if not a.startswith("-"))
+    wants_help = any(a in ("-h", "--help") for a in argv)
+    has_python = any(a == "--python-path" or a.startswith("--python-path=") for a in argv)
+    if starts_server and not wants_help and not has_python:
+        args += ["--python-path", sys.executable]
+    return args
+
+
+def cli() -> None:
+    """Entry point: `caddysnake apps ...` runs the apps platform, anything else the server."""
+    if len(sys.argv) > 1 and sys.argv[1] == "apps":
+        binary_path = _binary_path()
+        if not os.path.exists(binary_path):
+            click.echo(f"caddysnake-cli binary file not found at {binary_path}", err=True)
+            sys.exit(1)
+        # uv is installed next to this interpreter (it is a dependency); make sure
+        # the binary finds it even when the environment is not activated.
+        env = dict(os.environ)
+        env["PATH"] = os.pathsep.join([*_tool_dirs(), env.get("PATH", "")])
+        if _WINDOWS:
+            _run_and_exit(apps_argv(sys.argv[2:]), env)
+        os.execve(binary_path, apps_argv(sys.argv[2:]), env)
+        return
     main()
+
+
+if __name__ == "__main__":
+    cli()
