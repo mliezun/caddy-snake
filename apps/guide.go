@@ -10,9 +10,9 @@ const Guide = `You are building small internal web apps for people at one compan
 
 HOW AN APP IS BUILT
 - Python only. The entry point is main.py, which must define a variable called app: a Flask app (preferred for simple tools) or a FastAPI/Starlette app. Both kinds work without configuration.
-- List packages in requirements.txt, one per line. They are installed for you on publish. Keep the list short.
-- No build step. Write plain HTML, vanilla JavaScript and CSS. Do not use npm, bundlers, TypeScript, React or anything that must be compiled. Small libraries loaded from a CDN with a script tag are fine.
-- Keep everything in a few files: main.py, optionally templates/ and static/, migrations/, requirements.txt.
+- List packages in requirements.txt, one per line, or in pyproject.toml ([project] with a name, a version and dependencies; a uv.lock next to it is followed exactly). They are installed for you on publish, with uv. With both files, pyproject.toml is used. Keep the list short.
+- Prefer plain HTML, vanilla JavaScript and CSS, with small libraries loaded from a CDN with a script tag: such an app has nothing to compile and is easy to change later. This is a recommendation, not a rule. Nothing is compiled on publish, so if the person wants a framework that needs a build step (npm, TypeScript, React), build it yourself and save the built files.
+- Keep everything in a few files: main.py, optionally templates/ and static/, migrations/, and requirements.txt or pyproject.toml.
 
 ADDRESSES
 - Each app is served under its own path: https://<server>/<app-name>/. It is NOT at the site root.
@@ -21,7 +21,7 @@ ADDRESSES
 - The environment variable APP_BASE_PATH holds the path ("/<app-name>") if you need it.
 
 DATA
-- Each app has its own Postgres database. Its address is in the DATABASE_URL environment variable; use psycopg ("psycopg[binary]" in requirements.txt) and open connections when needed.
+- Each app has its own Postgres database. Its address is in the DATABASE_URL environment variable; use psycopg (list "psycopg[binary]" among the packages) and open connections when needed.
 - Never store data in local files or in memory: apps are stopped when idle and restarted on each publish.
 - Change the shape of the data only through numbered SQL files in migrations/, for example migrations/001_create_items.sql, then 002_add_due_date.sql. Each file runs once, in order, when a version is published. Never edit a migration that has already been published; add a new file. Write them so they are safe to run against existing data.
 - Do not create tables from main.py.

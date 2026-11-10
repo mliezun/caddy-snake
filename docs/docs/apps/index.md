@@ -15,6 +15,8 @@ sidebar_position: 1
 
 It is one program: Caddy, the caddy-snake plugin and the platform, with a database it manages for you.
 
+![An assistant is asked for an app; the app appears in the dashboard and opens](/img/apps-demo.gif)
+
 ## Quick start
 
 You need Python 3.13+ and the Postgres programs installed (macOS: `brew install postgresql@18`; Debian/Ubuntu: `sudo apt install postgresql`; Fedora/Rocky: `sudo dnf install postgresql-server`; Windows: the installer from [postgresql.org](https://www.postgresql.org/download/windows/)). The server starts its own private database; it does not touch one you already run.

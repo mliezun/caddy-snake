@@ -65,9 +65,17 @@ Rules for every workflow under `.github/workflows/` (maintainer, 2026-11-10: a n
 
 When you add or change a **user-facing feature** (Caddyfile directives, worker env vars, Python/Go APIs, cache protocol, CLI behavior, integration-test apps), update the docs in the same PR:
 
-1. [`docs/docs/reference.md`](docs/docs/reference.md) — the authoritative configuration and API reference.
-2. [`README.md`](README.md) — overview and quick examples.
-3. [`AGENTS.md`](AGENTS.md) — only when agent or workflow guidance changes.
+1. [`docs/docs/reference.md`](docs/docs/reference.md) — the authoritative configuration and API reference for the plugin.
+2. [`docs/docs/apps/`](docs/docs/apps/) — the apps platform.
+3. [`README.md`](README.md) — only if the overview changes (see below).
+4. [`AGENTS.md`](AGENTS.md) — only when agent or workflow guidance changes.
+
+How the docs are laid out (maintainer, 2026-11-10: lead with apps, keep the plugin's documentation in its own part):
+
+- **Two sections**, each with its own sidebar in [`docs/sidebars.js`](docs/sidebars.js): **Apps** (`docs/docs/apps/`: overview, connecting an assistant, how apps work, sharing, running) and **Caddy plugin** (every other page). The plugin pages keep the addresses they always had (`/docs/intro`, `/docs/reference`, ...); do not move them.
+- **The README is an overview, not a reference**: what it is, the demo, a quick start for each of the two, and links into the docs. Directive and flag details live in the docs only. It keeps the benchmark table.
+- **The demo GIF** (`docs/static/img/apps-demo.gif`) is recorded from a real server by [`scripts/record_demo.py`](scripts/record_demo.py). Record it again when the dashboard changes visibly.
+- **The logo** is `docs/static/img/logo.svg`, the same mark as the dashboard's (`logoSVG` and the favicon in `apps/pages.go`). After changing it, run [`scripts/render_logo.sh`](scripts/render_logo.sh) to regenerate the PNGs and the favicon.
 
 For cache or multi-worker features, also cover env vars, the wire protocol (`CS*` commands), the Python API, limits, the security/trust model, and an integration test under `tests/` when behavior spans workers.
 
@@ -81,10 +89,10 @@ The `python` Caddyfile block and the `python-server` / `caddysnake` CLIs must ex
 
 Whenever you add or change a `python { ... }` subdirective (or a field on `CaddySnake`):
 
-1. **Caddyfile** — `UnmarshalCaddyfile`, JSON tags, `Validate`, and docs in `docs/docs/reference.md` + `README.md`.
+1. **Caddyfile** — `UnmarshalCaddyfile`, JSON tags, `Validate`, and docs in `docs/docs/reference.md`.
 2. **Go CLI** — `caddy python-server` flags in `caddysnake.go` (`CobraFunc` + `pythonServer` wiring into `CaddySnake`).
 3. **PyPI CLI wrapper** — pass the same flags through [`cmd/cli/caddysnake_cli.py`](cmd/cli/caddysnake_cli.py) and update [`cmd/cli/README.md`](cmd/cli/README.md).
-4. **Docs that list CLI flags** — `README.md`, `docs/docs/intro.md`, `docs/docs/installation.md`, `docs/docs/reference.md`.
+4. **Docs that list CLI flags** — `docs/docs/reference.md` (the full list), `docs/docs/intro.md`, `docs/docs/installation.md`.
 
 | Caddyfile | CLI flag |
 |-----------|----------|
@@ -114,7 +122,7 @@ CLI-only conveniences with no Caddyfile equivalent are fine: `--domain`, `--list
 
 ## The `apps` package
 
-[`apps/`](apps/) is the apps platform (`caddysnake apps` / `caddy python-apps`), documented for users in [`docs/docs/apps.md`](docs/docs/apps.md). It is a separate Go package on purpose: builds with only `--with github.com/mliezun/caddy-snake` must not pull in its dependencies (Postgres driver, go-git). Release artefacts (PyPI wheel, binaries, Docker image) add `--with github.com/mliezun/caddy-snake/apps`.
+[`apps/`](apps/) is the apps platform (`caddysnake apps` / `caddy python-apps`), documented for users in [`docs/docs/apps/`](docs/docs/apps/). It is a separate Go package on purpose: builds with only `--with github.com/mliezun/caddy-snake` must not pull in its dependencies (Postgres driver, go-git). Release artefacts (PyPI wheel, binaries, Docker image) add `--with github.com/mliezun/caddy-snake/apps`.
 
 | File | What it holds |
 |------|---------------|
@@ -130,6 +138,7 @@ CLI-only conveniences with no Caddyfile equivalent are fine: `--domain`, `--list
 
 Rules that are easy to break:
 
+- **App packages** come from `pyproject.toml` (installed with `uv sync`, following a `uv.lock` exactly) or `requirements.txt`; with both, `pyproject.toml` wins. Plain HTML without a build step is what the guide recommends to assistants, not a rule the platform enforces.
 - **Plain language.** The audience is people who do not program. Anything they or their assistant may read — tool descriptions, errors, pages, the guide — says app, version, draft, publish, settings; not repository, commit, branch, deploy, environment variable.
 - **Page design** (maintainer, 2026-11-10, in his words: "it needs to feel like a rock, super solid software"; "reduce the amount of slop text, avoid too many explanations"; "for inspiration look at corporate pages like oracle or aws"; "modernize the style, current trend is liquid glass"). In `pages.go` that means: the *structure* of an enterprise console (global bar, side navigation, panels with a title, a count and actions, filterable tables, a details grid, tabs, dialogs) in a *liquid glass* material (translucent blurred chrome with a bright top edge, capsule controls, floating over a soft ambient background). Glass is for the chrome; panels that hold text stay near-opaque, and the solid fallbacks for reduced transparency stay. Copy is labels and data: no lead paragraphs, no inline tutorials, one short line at most for an empty state or a dialog. No separate breadcrumb bar under the main bar.
 - **No accent bars** (maintainer, 2026-11-10: a coloured vertical bar marking the selected item "gives me vibe-coded sensation"). Never mark a selected item, an alert, a card or a notice with a thick coloured stripe along one edge. Show selection with the weight and colour of the text.
@@ -137,7 +146,7 @@ Rules that are easy to break:
 - **Windows runs it too.** Keep operating-system differences in `os.go` behind functions that take `goos`, so they are tested on any machine. Windows cannot replace a running program, cannot rename over a folder, keeps a pipe open in programs left running (see `runDetached`), and names its accounts differently per language (use the fixed identifiers in `install.go`).
 - **A failed publish must leave the running version untouched**, and say what went wrong in a way an assistant can act on.
 - **The plugin stays independent.** `apps` talks to the plugin only through its config struct and the three exported functions (`ObserveWorkerOutput`, `LoadedDynamicApps`, `ReloadWorkingDir`).
-- When a tool or flag changes, update `docs/docs/apps.md`, the `README.md` section and `cmd/cli/README.md`. The end-to-end test is [`tests/apps_e2e/main_test.py`](tests/apps_e2e/main_test.py).
+- When a tool or flag changes, update the pages in `docs/docs/apps/` (tools in `assistant.md`, flags and settings in `running.md`) and `cmd/cli/README.md`. The end-to-end test is [`tests/apps_e2e/main_test.py`](tests/apps_e2e/main_test.py).
 
 ## SQL in the `apps` package
 

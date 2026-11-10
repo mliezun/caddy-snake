@@ -12,6 +12,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/BurntSushi/toml"
+
 	caddysnake "github.com/mliezun/caddy-snake"
 	"github.com/mliezun/caddy-snake/apps/db"
 	"github.com/mliezun/caddy-snake/apps/db/appdb/appdbgen"
@@ -121,10 +123,15 @@ func (p *Platform) doPublish(ctx context.Context, a *App, version string, res *P
 	}
 	res.step("Copied the files of version %s.", version)
 
-	if out, err := p.buildEnvironment(ctx, release); err != nil {
+	source, out, err := p.buildEnvironment(ctx, release)
+	if err != nil {
 		return fmt.Errorf("installing the app's packages failed:\n%s", tail(out, maxDetailBytes))
 	}
-	res.step("Installed the packages listed in requirements.txt.")
+	if source != "" {
+		res.step("Installed the packages listed in %s.", source)
+	} else {
+		res.step("Set up Python (the app lists no packages).")
+	}
 
 	env, err := p.appEnv(ctx, a)
 	if err != nil {
@@ -176,13 +183,50 @@ func venvPython(release string) string {
 	return venvPythonFor(runtime.GOOS, release)
 }
 
-// buildEnvironment creates <release>/.venv and installs requirements.txt.
-func (p *Platform) buildEnvironment(ctx context.Context, release string) (string, error) {
+// packageSource says where an app lists its packages: "pyproject.toml" when
+// that file describes a project, else "requirements.txt" when there is one,
+// else "". A pyproject.toml that only configures tools is not a package list.
+func packageSource(release string) (string, error) {
+	path := filepath.Join(release, "pyproject.toml")
+	if _, err := os.Stat(path); err == nil {
+		var py struct {
+			Project map[string]any `toml:"project"`
+		}
+		if _, err := toml.DecodeFile(path, &py); err != nil {
+			return "", fmt.Errorf("pyproject.toml cannot be read: %w", err)
+		}
+		if py.Project != nil {
+			return "pyproject.toml", nil
+		}
+	}
+	if _, err := os.Stat(filepath.Join(release, "requirements.txt")); err == nil {
+		return "requirements.txt", nil
+	}
+	return "", nil
+}
+
+// listDependenciesScript prints the dependencies of pyproject.toml, one per
+// line, for installs without uv.
+const listDependenciesScript = `import tomllib
+with open("pyproject.toml", "rb") as f:
+    print("\n".join(tomllib.load(f).get("project", {}).get("dependencies", [])))
+`
+
+// buildEnvironment creates <release>/.venv with the app's packages and
+// returns the file they were listed in ("" when the app lists none).
+//
+// Packages come from pyproject.toml ([project] dependencies; a uv.lock next to
+// it is followed exactly) or from requirements.txt. With both present,
+// pyproject.toml is used.
+func (p *Platform) buildEnvironment(ctx context.Context, release string) (source, output string, err error) {
 	ctx, cancel := context.WithTimeout(ctx, installTimeout)
 	defer cancel()
+	source, err = packageSource(release)
+	if err != nil {
+		return "", err.Error(), err
+	}
 	venv := filepath.Join(release, ".venv")
 	requirements := filepath.Join(release, "requirements.txt")
-	_, reqErr := os.Stat(requirements)
 
 	run := func(name string, args ...string) (string, error) {
 		cmd := exec.CommandContext(ctx, name, args...)
@@ -191,33 +235,58 @@ func (p *Platform) buildEnvironment(ctx context.Context, release string) (string
 		return string(out), err
 	}
 	if uv := p.uvCommand(ctx); uv != nil {
-		out, err := run(uv[0], append(uv[1:], "venv", "--quiet", "--python", p.cfg.PythonBin, venv)...)
-		if err != nil {
-			return out, err
+		// uv shares one copy of each package file between environments.
+		// Windows will not delete a file a running program has loaded,
+		// through any of its names, so a shared file would stop one app
+		// from being removed while another is running. Copy there.
+		var linkMode []string
+		if runtime.GOOS == "windows" {
+			linkMode = []string{"--link-mode", "copy"}
 		}
-		if reqErr == nil {
-			install := []string{"pip", "install", "--quiet", "--python", venvPython(release), "-r", requirements}
-			if runtime.GOOS == "windows" {
-				// uv shares one copy of each package file between environments.
-				// Windows will not delete a file a running program has loaded,
-				// through any of its names, so a shared file would stop one app
-				// from being removed while another is running. Copy there.
-				install = append(install, "--link-mode", "copy")
+		if source == "pyproject.toml" {
+			// The app is a folder of files, not a package to build and install.
+			sync := []string{"sync", "--quiet", "--project", release, "--python", p.cfg.PythonBin, "--no-dev", "--no-install-project"}
+			if _, err := os.Stat(filepath.Join(release, "uv.lock")); err == nil {
+				// Follow the lock file exactly; refuse one that no longer matches.
+				sync = append(sync, "--locked")
 			}
-			more, err := run(uv[0], append(uv[1:], install...)...)
-			return out + more, err
+			out, err := run(uv[0], append(uv[1:], append(sync, linkMode...)...)...)
+			return source, out, err
 		}
-		return out, nil
+		out, err := run(uv[0], append(uv[1:], "venv", "--quiet", "--python", p.cfg.PythonBin, venv)...)
+		if err != nil || source == "" {
+			return source, out, err
+		}
+		install := append([]string{"pip", "install", "--quiet", "--python", venvPython(release), "-r", requirements}, linkMode...)
+		more, err := run(uv[0], append(uv[1:], install...)...)
+		return source, out + more, err
 	}
+
+	// Without uv: the standard tools. A lock file is not followed.
 	out, err := run(p.cfg.PythonBin, "-m", "venv", venv)
-	if err != nil {
-		return out, err
+	if err != nil || source == "" {
+		return source, out, err
 	}
-	if reqErr == nil {
-		more, err := run(venvPython(release), "-m", "pip", "install", "--quiet", "--disable-pip-version-check", "-r", requirements)
-		return out + more, err
+	pip := []string{"-m", "pip", "install", "--quiet", "--disable-pip-version-check"}
+	if source == "pyproject.toml" {
+		listed, err := run(venvPython(release), "-c", listDependenciesScript)
+		if err != nil {
+			return source, out + listed, err
+		}
+		var deps []string
+		for _, line := range strings.Split(listed, "\n") {
+			if line = strings.TrimSpace(line); line != "" {
+				deps = append(deps, line)
+			}
+		}
+		if len(deps) == 0 {
+			return source, out, nil
+		}
+		more, err := run(venvPython(release), append(pip, deps...)...)
+		return source, out + more, err
 	}
-	return out, nil
+	more, err := run(venvPython(release), append(pip, "-r", requirements)...)
+	return source, out + more, err
 }
 
 const importCheckScript = `

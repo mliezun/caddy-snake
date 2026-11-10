@@ -2,7 +2,7 @@
 
 [![PyPI](https://img.shields.io/pypi/v/caddysnake)](https://pypi.org/project/caddysnake/)
 
-The `caddysnake` package is available on [PyPI](https://pypi.org/project/caddysnake/) and provides a CLI to serve Python WSGI/ASGI applications powered by Caddy.
+The `caddysnake` package does two things: `caddysnake apps` lets people build and share small internal web apps with their own AI assistant, and `caddysnake --app ...` serves a Python WSGI/ASGI application with Caddy.
 
 ## Install
 
@@ -24,7 +24,7 @@ caddysnake --server-type asgi --app main:app
 
 ## Apps platform
 
-`caddysnake apps` runs a small platform where people build and share internal web apps through their own AI assistant: each app is served at `/<app-name>/` with its own Postgres database, versions, drafts and roll back.
+`caddysnake apps` runs a small platform where people build and share internal web apps through their own AI assistant: each app is served at `/<app-name>/` with its own Postgres database, versions, drafts and roll back. Apps list their packages in `requirements.txt` or `pyproject.toml`.
 
 ```bash
 caddysnake apps                         # http://localhost:9080, assistants connect to /_apps/mcp

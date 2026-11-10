@@ -11,8 +11,8 @@ sidebar_position: 3
 The instructions steer assistants toward apps this platform runs well:
 
 - **Python**, with `main.py` defining `app` — a Flask app, a FastAPI/Starlette app, or any WSGI/ASGI callable. The kind is detected automatically.
-- Packages listed in `requirements.txt` are installed on publish (with [uv](https://docs.astral.sh/uv/)).
-- **No build step**: plain HTML, vanilla JavaScript and CSS.
+- Packages are installed on publish with [uv](https://docs.astral.sh/uv/), from `requirements.txt` or from `pyproject.toml` (`[project]` dependencies; a `uv.lock` next to it is followed exactly). With both files, `pyproject.toml` is used.
+- **Plain HTML, vanilla JavaScript and CSS are recommended**, not required: nothing is compiled on publish, so an app that needs a build step has to be saved already built.
 - **Relative links.** The app lives under `/<app-name>/`, and the platform passes that prefix to the framework ([`mount_prefix`](../reference.md#mount_prefix)), so `url_for`, redirects and static files work. Hand-written absolute links such as `href="/items"` would point outside the app.
 - Data in the app's own database, at `DATABASE_URL`. The shape of the data changes only through numbered SQL files in `migrations/`, each applied once, in order, on publish.
 
@@ -21,7 +21,7 @@ Environment variables every app gets: `DATABASE_URL`, `APP_NAME`, `APP_SLUG`, `A
 ### What happens on publish
 
 1. The version's files are copied to a fresh folder — the running version is never modified in place.
-2. A Python environment is built and `requirements.txt` installed.
+2. A Python environment is built and the app's packages are installed.
 3. The app is imported, to check that it starts.
 4. New `migrations/*.sql` files are applied to the app's database.
 5. The app is switched to the new version. Requests already running finish on the old one.

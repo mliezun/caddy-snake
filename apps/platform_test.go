@@ -317,3 +317,55 @@ func TestCleanPath(t *testing.T) {
 		}
 	}
 }
+
+func TestPackageFiles(t *testing.T) {
+	dir := t.TempDir()
+	write := func(name, body string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got, err := packageSource(dir); got != "" || err != nil {
+		t.Fatalf("no files: %q %v", got, err)
+	}
+	write("requirements.txt", "flask\n")
+	if got, _ := packageSource(dir); got != "requirements.txt" {
+		t.Fatalf("requirements only: %q", got)
+	}
+	// A pyproject.toml that only configures tools is not a package list.
+	write("pyproject.toml", "[tool.ruff]\nline-length = 100\n")
+	if got, _ := packageSource(dir); got != "requirements.txt" {
+		t.Fatalf("tool-only pyproject: %q", got)
+	}
+	write("pyproject.toml", "[project]\nname = \"lunch\"\nversion = \"1\"\ndependencies = []\n")
+	if got, _ := packageSource(dir); got != "pyproject.toml" {
+		t.Fatalf("pyproject with a project: %q", got)
+	}
+	write("pyproject.toml", "[project\n")
+	if _, err := packageSource(dir); err == nil {
+		t.Fatal("a broken pyproject.toml was accepted")
+	}
+}
+
+// An app may list its packages in pyproject.toml instead of requirements.txt.
+func TestPublishWithPyproject(t *testing.T) {
+	p := newTestPlatform(t)
+	ctx := context.Background()
+	app, _, err := p.CreateApp(ctx, "With pyproject", "", "ana")
+	if err != nil {
+		t.Fatal(err)
+	}
+	files := plainFiles("1")
+	files["pyproject.toml"] = []byte("[project]\nname = \"with-pyproject\"\nversion = \"1\"\nrequires-python = \">=3.9\"\ndependencies = []\n")
+	if _, err := p.SaveFiles(ctx, app.Slug, "", files, "pyproject", "ana"); err != nil {
+		t.Fatal(err)
+	}
+	res := mustOK(t)(p.Publish(ctx, app.Slug, "", "ana"))
+	if !strings.Contains(strings.Join(res.Steps, "\n"), "listed in pyproject.toml") {
+		t.Fatalf("steps do not mention pyproject.toml: %v", res.Steps)
+	}
+	if _, err := os.Stat(venvPython(currentRelease(t, p, app.Slug))); err != nil {
+		t.Fatalf("no Python environment: %v", err)
+	}
+}
