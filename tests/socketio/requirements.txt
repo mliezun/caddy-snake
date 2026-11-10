@@ -1,5 +1,5 @@
 bidict==0.23.1
-certifi==2026.7.22
+certifi==2026.10.18
 charset-normalizer==3.4.4
 h11==0.16.0
 idna==3.18
@@ -8,6 +8,6 @@ python-engineio==4.13.3
 python-socketio==5.16.3
 requests==2.34.2
 simple-websocket==1.0.0
-urllib3==2.7.0
+urllib3==2.8.0
 websocket-client==1.8.0
 wsproto==1.2.0

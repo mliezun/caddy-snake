@@ -40,7 +40,7 @@ if [[ "$ARCH" == "arm64" ]]; then
 else
     GO_ARCH="amd64"
 fi
-curl -fsSL "https://go.dev/dl/go1.26.0.linux-${GO_ARCH}.tar.gz" -o /tmp/go.tar.gz
+curl -fsSL "https://go.dev/dl/go1.26.10.linux-${GO_ARCH}.tar.gz" -o /tmp/go.tar.gz
 tar -C /tmp -xzf /tmp/go.tar.gz
 rm /tmp/go.tar.gz
 go version
