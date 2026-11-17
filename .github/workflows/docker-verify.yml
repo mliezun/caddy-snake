@@ -30,7 +30,8 @@ jobs:
     if: needs.changes.outputs.docker == 'true'
     strategy:
       matrix:
-        python-version: ["3.13", "3.14", "3.15"]
+        # The oldest and the newest Python; every version is built on release.
+        python-version: ["3.13", "3.15"]
         os: [ubuntu-24.04]
     runs-on: ${{ matrix.os }}
     permissions:
@@ -72,49 +73,35 @@ jobs:
             test "$got" = "riscv64 3.13"
           done
 
-  python-symlink:
+  verify:
     needs: changes
     if: needs.changes.outputs.docker == 'true'
-    name: Verify python/python3 symlink
+    name: Verify image
     runs-on: ubuntu-24.04
-    permissions:
-      contents: read
-    strategy:
-      matrix:
-        python-version: ["3.13", "3.14", "3.15"]
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - name: Build image and verify interpreters
-        run: |
-          expected="${{ matrix.python-version }}"
-          docker build --build-arg PY_VERSION="$expected" -t caddy-snake:pycheck .
-          for bin in python python3; do
-            got=$(docker run --rm --entrypoint "$bin" caddy-snake:pycheck -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')
-            echo "$bin -> $got (expected $expected)"
-            test "$got" = "$expected"
-          done
-
-  trivy:
-    name: Trivy scan
-    runs-on: ubuntu-24.04
-    needs: [changes, build]
-    if: needs.changes.outputs.docker == 'true'
     permissions:
       contents: read
       security-events: write
     strategy:
       matrix:
-        python-version: ["3.13"]
+        # The oldest and the newest Python; every version is built on release.
+        python-version: ["3.13", "3.15"]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Build image for scanning
+      # One build serves both checks below.
+      - name: Build image and verify interpreters
+        env:
+          EXPECTED: ${{ matrix.python-version }}
         run: |
-          docker build --build-arg PY_VERSION=${{ matrix.python-version }} -t caddy-snake:scan .
+          docker build --build-arg PY_VERSION="$EXPECTED" -t caddy-snake:scan .
+          for bin in python python3; do
+            got=$(docker run --rm --entrypoint "$bin" caddy-snake:scan -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')
+            echo "$bin -> $got (expected $EXPECTED)"
+            test "$got" = "$EXPECTED"
+          done
       - name: Run Trivy vulnerability scanner
+        if: matrix.python-version == '3.13'
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           image-ref: caddy-snake:scan
@@ -126,7 +113,7 @@ jobs:
           trivyignores: .trivyignore
           exit-code: "1"
       - name: Upload Trivy scan results
-        if: always()
+        if: always() && matrix.python-version == '3.13'
         uses: github/codeql-action/upload-sarif@f205ea1c3313d32999d8d6a48b4f6530d4437b38 # v4.37.4
         with:
           sarif_file: trivy-results.sarif

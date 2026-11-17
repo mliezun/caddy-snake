@@ -60,6 +60,11 @@ Rules for every workflow under `.github/workflows/` (maintainer, 2026-11-10: a n
 - **Required checks must still report.** Branch protection requires some checks by their matrix name (`tests (ubuntu-24.04)`, `python-tests (3.13)`, `Analyze (go)`). A skipped matrix job reports under its bare name and would block the pull request for ever, so those jobs always start and skip their *steps* (see `go-tests.yml`). Other jobs are skipped whole with a job-level `if`.
 - **Small matrix on pull requests, full matrix on `main`.** The Linux integration tests take their Python versions and runners from `changes.yml`: two Pythons on one runner for pull requests, all of them on `main`.
 - **Go cache**: on (`cache: true`) in test-only workflows, off in workflows that build release files.
+- **Test the picking.** [`scripts/test_ci_changes.py`](scripts/test_ci_changes.py) runs the script of `changes.yml` against sample changes and checks which areas it turns on; Lint runs it. Add a case there when you add an area.
+- **Tests must really run.** CI runs `go test` with `-count=1` (never a cached result) and sets `CADDYSNAKE_REQUIRE_TESTS`, which turns "Postgres or Python is missing, skipping" into a failure.
+- **Builds on pull requests bundle two Pythons** (`build_pythons` in `changes.yml`): the Go program is the same for every Python version. `main` and releases build all of them. The Docker checks build the oldest and the newest.
+- **Semgrep**: findings silenced in the code with a `nosemgrep` comment and a reason are left out of the upload to code scanning, so its alerts match what the scan itself reports.
+- **Module downloads** in the release-building workflows fall back to the source when the Go proxy fails (`GOPROXY` with `|`).
 
 ## Documentation
 

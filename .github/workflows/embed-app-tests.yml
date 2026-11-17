@@ -29,8 +29,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.13", "3.13-nogil", "3.14", "3.14-nogil", "3.15", "3.15-nogil"]
-        os: [ubuntu-22.04, ubuntu-22.04-arm]
+        # Two Pythons on one kind of machine for pull requests, all of them on main.
+        python-version: ${{ fromJSON(needs.changes.outputs.build_pythons) }}
+        os: ${{ fromJSON(needs.changes.outputs.oses) }}
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -44,8 +45,10 @@ jobs:
         run: go install github.com/caddyserver/xcaddy/cmd/xcaddy@v0.4.6
       - name: Get setup-python version
         id: py-ver
+        env:
+          PY_VERSION: ${{ matrix.python-version }}
         run: |
-          ver="${{ matrix.python-version }}"
+          ver="$PY_VERSION"
           if [[ "$ver" == *"-nogil" ]]; then
             ver="${ver%-nogil}t"
           fi
@@ -55,8 +58,10 @@ jobs:
           python-version: ${{ steps.py-ver.outputs.ver }}
       - name: Choose architecture
         id: arch
+        env:
+          RUNNER_NAME: ${{ matrix.os }}
         run: |
-          if [ "${{ matrix.os }}" == "ubuntu-22.04-arm" ]; then
+          if [ "$RUNNER_NAME" == "ubuntu-22.04-arm" ]; then
             echo "arch=aarch64-unknown-linux-gnu" >> "$GITHUB_OUTPUT"
           else
             echo "arch=x86_64_v2-unknown-linux-gnu" >> "$GITHUB_OUTPUT"

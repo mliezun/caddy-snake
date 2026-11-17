@@ -136,6 +136,19 @@ jobs:
             --config p/python \
             --sarif --sarif-output semgrep.sarif \
             --metrics=off
+      - name: Leave findings suppressed in the code out of the upload
+        if: always()
+        run: |
+          # The scan above passes or fails without the findings that carry a
+          # `nosemgrep` comment in the code (each with its reason, reviewed like
+          # any other line). The SARIF file still lists them, marked as
+          # suppressed, and code scanning would open an alert for every one.
+          # Drop them so the two agree.
+          test -f semgrep.sarif || exit 0
+          before=$(jq '[.runs[].results[]] | length' semgrep.sarif)
+          jq '.runs[].results |= map(select((.suppressions // []) | length == 0))' semgrep.sarif > semgrep.filtered.sarif
+          mv semgrep.filtered.sarif semgrep.sarif
+          echo "results: $before found, $(jq '[.runs[].results[]] | length' semgrep.sarif) uploaded"
       - name: Upload SARIF
         if: always()
         uses: github/codeql-action/upload-sarif@f205ea1c3313d32999d8d6a48b4f6530d4437b38 # v4.37.4

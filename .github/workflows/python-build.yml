@@ -12,6 +12,11 @@ on:
 
 permissions: {}
 
+env:
+  # If the Go module proxy fails mid-download, fetch from the source instead
+  # ("|" falls back on any error, "," only on "not found").
+  GOPROXY: "https://proxy.golang.org|direct"
+
 jobs:
   build:
     strategy:

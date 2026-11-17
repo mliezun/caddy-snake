@@ -56,7 +56,11 @@ jobs:
           go run github.com/sqlc-dev/sqlc/cmd/sqlc@v1.30.0 generate
           git diff --exit-code -- db
       - name: Go tests
-        run: go test -race -timeout 15m ./apps/...
+        # -count=1: never a cached result. CADDYSNAKE_REQUIRE_TESTS: fail, do not
+        # skip, when Postgres or Python is missing.
+        env:
+          CADDYSNAKE_REQUIRE_TESTS: "1"
+        run: go test -race -count=1 -timeout 15m ./apps/...
       - name: Build Caddy with the plugin and the apps package
         run: |
           go install github.com/caddyserver/xcaddy/cmd/xcaddy@v0.4.6
@@ -101,4 +105,6 @@ jobs:
       # The image ships the Postgres programs and points PGBIN at them; the
       # tests start their own private instance.
       - name: Go tests
-        run: go test -timeout 20m ./apps/...
+        env:
+          CADDYSNAKE_REQUIRE_TESTS: "1"
+        run: go test -count=1 -timeout 20m ./apps/...

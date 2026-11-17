@@ -20,11 +20,17 @@ func newTestPlatform(t *testing.T) *Platform {
 	if testing.Short() {
 		t.Skip("starts Postgres and builds Python environments")
 	}
+	// CI sets CADDYSNAKE_REQUIRE_TESTS so a missing program fails the run
+	// instead of quietly skipping every test that matters.
+	missing := t.Skip
+	if os.Getenv("CADDYSNAKE_REQUIRE_TESTS") != "" {
+		missing = t.Fatal
+	}
 	if findPostgresBin() == "" {
-		t.Skip("Postgres is not installed")
+		missing("Postgres is not installed")
 	}
 	if _, err := exec.LookPath(defaultPythonFor(runtime.GOOS)); err != nil {
-		t.Skip("Python is not installed")
+		missing("Python is not installed")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()

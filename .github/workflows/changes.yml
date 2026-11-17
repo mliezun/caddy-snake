@@ -59,6 +59,9 @@ on:
       oses:
         description: Runners for the integration tests, as a JSON list
         value: ${{ jobs.detect.outputs.oses }}
+      build_pythons:
+        description: Python versions for the standalone and embed builds, as a JSON list
+        value: ${{ jobs.detect.outputs.build_pythons }}
 
 permissions: {}
 
@@ -85,6 +88,7 @@ jobs:
       full: ${{ steps.detect.outputs.full }}
       pythons: ${{ steps.detect.outputs.pythons }}
       oses: ${{ steps.detect.outputs.oses }}
+      build_pythons: ${{ steps.detect.outputs.build_pythons }}
     steps:
       - name: Detect what changed
         id: detect
@@ -104,6 +108,7 @@ jobs:
             out full true
             out pythons '["3.13", "3.13t", "3.14", "3.14t", "3.15", "3.15t"]'
             out oses '["ubuntu-22.04", "ubuntu-22.04-arm"]'
+            out build_pythons '["3.13", "3.13-nogil", "3.14", "3.14-nogil", "3.15", "3.15-nogil"]'
             exit 0
           fi
 
@@ -112,6 +117,9 @@ jobs:
           out full false
           out pythons '["3.13", "3.15t"]'
           out oses '["ubuntu-22.04"]'
+          # The Go program is the same for every Python version; the builds
+          # differ only in which Python they bundle.
+          out build_pythons '["3.13", "3.15-nogil"]'
 
           files="$(gh api "repos/$REPO/pulls/$PR/files" --paginate --jq '.[].filename')"
           echo "Changed files:"

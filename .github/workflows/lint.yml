@@ -54,6 +54,11 @@ jobs:
       - name: Stub embedded Caddy binaries for static analysis
         run: ./scripts/stub-embed-caddy.sh
 
+      - name: Check that changes.yml picks the right jobs
+        run: |
+          pip install pyyaml
+          python scripts/test_ci_changes.py
+
       - name: Check pre-commit
         uses: pre-commit/action@2c7b3805fd2a0fd8c1884dcaebf91fc102a13ecd # v3.0.1
 

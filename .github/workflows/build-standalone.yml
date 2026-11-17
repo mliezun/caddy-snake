@@ -13,6 +13,11 @@ on:
 
 permissions: {}
 
+env:
+  # If the Go module proxy fails mid-download, fetch from the source instead
+  # ("|" falls back on any error, "," only on "not found").
+  GOPROXY: "https://proxy.golang.org|direct"
+
 # A new push to a pull request cancels the runs of the push before it.
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
@@ -34,7 +39,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.13", "3.13-nogil", "3.14", "3.14-nogil", "3.15", "3.15-nogil"]
+        # Two Pythons for pull requests, all of them for main and releases.
+        python-version: ${{ fromJSON(needs.changes.outputs.build_pythons) }}
         target: [linux-amd64, linux-arm64, linux-riscv64, darwin-arm64, darwin-amd64]
         include:
           - target: linux-amd64
