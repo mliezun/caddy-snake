@@ -29,10 +29,54 @@ jobs:
       pull-requests: read
     uses: ./.github/workflows/changes.yml
 
+  # The Caddy server inside a standalone binary is the same whatever Python is
+  # bundled with it, so it is compiled once per target, on Linux (pure Go, CGO
+  # off: it cross-compiles for every system), and handed to the jobs below.
+  server:
+    needs: changes
+    if: needs.changes.outputs.embed == 'true'
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {target: linux-amd64, goos: linux, goarch: amd64}
+          - {target: linux-arm64, goos: linux, goarch: arm64}
+          - {target: linux-riscv64, goos: linux, goarch: riscv64}
+          - {target: darwin-arm64, goos: darwin, goarch: arm64}
+          - {target: darwin-amd64, goos: darwin, goarch: amd64}
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: "1.26.11"
+          cache: false
+      # Installed for this machine; only the Caddy build below is cross-compiled.
+      - name: Install Xcaddy
+        run: go install github.com/caddyserver/xcaddy/cmd/xcaddy@v0.4.6
+      - name: Build the server
+        working-directory: cmd/embed
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+        run: CGO_ENABLED=0 xcaddy build --output caddy --with github.com/mliezun/caddy-snake=../..
+      - name: Hand the server to the bundling jobs
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: embed-server-${{ matrix.target }}
+          path: cmd/embed/caddy
+          retention-days: 1
+
+  # Bundles the server with one Python build into the standalone binary. Also
+  # pure Go and cross-compiled, so it runs on Linux for every target.
   build:
     permissions:
       contents: write
-    needs: changes
+    needs: [changes, server]
     if: needs.changes.outputs.embed == 'true'
     env:
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -44,25 +88,29 @@ jobs:
         target: [linux-amd64, linux-arm64, linux-riscv64, darwin-arm64, darwin-amd64]
         include:
           - target: linux-amd64
-            os: ubuntu-22.04
+            goos: linux
+            goarch: amd64
             pybs-arch: x86_64_v2-unknown-linux-gnu
           - target: linux-arm64
-            os: ubuntu-22.04-arm
+            goos: linux
+            goarch: arm64
             pybs-arch: aarch64-unknown-linux-gnu
-          # Cross-compiled from amd64 (the embed launcher is pure Go). python-build-standalone
-          # has no PGO builds for riscv64, so the free-threaded variant uses lto only.
+          # python-build-standalone has no PGO builds for riscv64, so the
+          # free-threaded variant uses lto only.
           - target: linux-riscv64
-            os: ubuntu-22.04
-            pybs-arch: riscv64-unknown-linux-gnu
+            goos: linux
             goarch: riscv64
+            pybs-arch: riscv64-unknown-linux-gnu
             nogil-build-config: freethreaded+lto
           - target: darwin-arm64
-            os: macos-15
+            goos: darwin
+            goarch: arm64
             pybs-arch: aarch64-apple-darwin
           - target: darwin-amd64
-            os: macos-15-intel
+            goos: darwin
+            goarch: amd64
             pybs-arch: x86_64-apple-darwin
-    runs-on: ${{ matrix.os }}
+    runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -76,13 +124,11 @@ jobs:
         with:
           go-version: "1.26.11"
           cache: false
-      - name: Install Xcaddy
-        run: go install github.com/caddyserver/xcaddy/cmd/xcaddy@v0.4.6
-      - name: Build the server
-        working-directory: cmd/embed
-        run: CGO_ENABLED=0 xcaddy build --with github.com/mliezun/caddy-snake=../..
-        env:
-          GOARCH: ${{ matrix.goarch }}
+      - name: Fetch the server built for this target
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: embed-server-${{ matrix.target }}
+          path: cmd/embed
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.13"
@@ -90,17 +136,21 @@ jobs:
         if: ${{ !endsWith(matrix.python-version, '-nogil') }}
         working-directory: cmd/embed
         env:
+          GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: "0"
         run: | # zizmor: ignore[template-injection]
           python3 pybs.py latest --python-version ${{ matrix.python-version }} --architecture ${{ steps.choose-arch.outputs.PYBS_ARCH }} --build-config pgo+lto --content-type install_only_stripped
           mv cpython-*.tar.gz python-standalone.tar.gz
-          go build main.go
-          mv main caddy
+          go build -o caddy-standalone main.go
+          mv caddy-standalone caddy
       - name: Retrieve python build standalone (nogil)
         if: ${{ endsWith(matrix.python-version, '-nogil') }}
         working-directory: cmd/embed
         env:
+          GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: "0"
           NOGIL_BUILD_CONFIG: ${{ matrix.nogil-build-config || 'freethreaded+pgo+lto' }}
         run: | # zizmor: ignore[template-injection]
           PY_VERSION_BASE="${{ matrix.python-version }}"
@@ -111,8 +161,31 @@ jobs:
           rm -rf python
           mv install python
           tar -czf python-standalone.tar.gz python
-          go build main.go
-          mv main caddy
+          go build -o caddy-standalone main.go
+          mv caddy-standalone caddy
+      # The one target this runner can run. The machine's own Python is a
+      # different version from the bundled one, so this fails if the binary
+      # does not use the Python it carries.
+      - name: Smoke test the standalone binary
+        if: matrix.target == 'linux-amd64'
+        run: |
+          mkdir -p /tmp/smoke && cd /tmp/smoke
+          printf 'import sys\n\ndef app(environ, start_response):\n    start_response("200 OK", [("Content-Type", "text/plain")])\n    return [("python %%d.%%d" %% sys.version_info[:2]).encode()]\n' > main.py
+          chmod +x "$GITHUB_WORKSPACE/cmd/embed/caddy"
+          # Only the system folders on PATH, so the Python set up for this job is out of reach.
+          env PATH=/usr/bin:/bin "$GITHUB_WORKSPACE/cmd/embed/caddy" python-server --server-type wsgi --app main:app --listen 127.0.0.1:9077 > run.log 2>&1 &
+          for _ in $(seq 1 60); do
+            got="$(curl -s -m 3 http://127.0.0.1:9077/ || true)"
+            if [ -n "$got" ]; then break; fi
+            sleep 1
+          done
+          echo "the app answered: $got (bundled: $PY_VERSION, this machine: $(/usr/bin/python3 --version 2>&1))"
+          case "$got" in
+            "python ${PY_VERSION%-nogil}") ;;
+            *) tail -20 run.log; exit 1 ;;
+          esac
+        env:
+          PY_VERSION: ${{ matrix.python-version }}
       - name: Upload caddy standalone
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:

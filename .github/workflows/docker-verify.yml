@@ -36,16 +36,48 @@ jobs:
     runs-on: ${{ matrix.os }}
     permissions:
       contents: read
+      security-events: write
     steps:
       # Required before uses: ./.github/actions/... — the runner must have the repo (and action.yml) on disk.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      # One build serves the three checks: that the image builds with the
+      # action releases use, that it has the right Python, and the scan.
       - uses: ./.github/actions/docker-build-push
         with:
           python-version: ${{ matrix.python-version }}
           push-image: "false"
           platforms: linux/amd64
+          load: "true"
+      - name: Verify interpreters
+        env:
+          EXPECTED: ${{ matrix.python-version }}
+          IMAGE: ${{ env.REGISTRY_GHCR }}/${{ env.IMAGE_NAME }}:latest-py${{ matrix.python-version }}
+        run: |
+          for bin in python python3; do
+            got=$(docker run --rm --entrypoint "$bin" "$IMAGE" -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')
+            echo "$bin -> $got (expected $EXPECTED)"
+            test "$got" = "$EXPECTED"
+          done
+      - name: Run Trivy vulnerability scanner
+        if: matrix.python-version == '3.13'
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: ${{ env.REGISTRY_GHCR }}/${{ env.IMAGE_NAME }}:latest-py${{ matrix.python-version }}
+          format: sarif
+          output: trivy-results.sarif
+          severity: CRITICAL,HIGH
+          limit-severities-for-sarif: true
+          scanners: vuln
+          trivyignores: .trivyignore
+          exit-code: "1"
+      - name: Upload Trivy scan results
+        if: always() && matrix.python-version == '3.13'
+        uses: github/codeql-action/upload-sarif@f205ea1c3313d32999d8d6a48b4f6530d4437b38 # v4.37.4
+        with:
+          sarif_file: trivy-results.sarif
+          category: trivy
 
   riscv64:
     needs: changes
@@ -72,49 +104,3 @@ jobs:
             echo "$bin -> $got"
             test "$got" = "riscv64 3.13"
           done
-
-  verify:
-    needs: changes
-    if: needs.changes.outputs.docker == 'true'
-    name: Verify image
-    runs-on: ubuntu-24.04
-    permissions:
-      contents: read
-      security-events: write
-    strategy:
-      matrix:
-        # The oldest and the newest Python; every version is built on release.
-        python-version: ["3.13", "3.15"]
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      # One build serves both checks below.
-      - name: Build image and verify interpreters
-        env:
-          EXPECTED: ${{ matrix.python-version }}
-        run: |
-          docker build --build-arg PY_VERSION="$EXPECTED" -t caddy-snake:scan .
-          for bin in python python3; do
-            got=$(docker run --rm --entrypoint "$bin" caddy-snake:scan -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')
-            echo "$bin -> $got (expected $EXPECTED)"
-            test "$got" = "$EXPECTED"
-          done
-      - name: Run Trivy vulnerability scanner
-        if: matrix.python-version == '3.13'
-        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
-        with:
-          image-ref: caddy-snake:scan
-          format: sarif
-          output: trivy-results.sarif
-          severity: CRITICAL,HIGH
-          limit-severities-for-sarif: true
-          scanners: vuln
-          trivyignores: .trivyignore
-          exit-code: "1"
-      - name: Upload Trivy scan results
-        if: always() && matrix.python-version == '3.13'
-        uses: github/codeql-action/upload-sarif@f205ea1c3313d32999d8d6a48b4f6530d4437b38 # v4.37.4
-        with:
-          sarif_file: trivy-results.sarif
-          category: trivy

@@ -131,13 +131,18 @@ func run() int {
 		if strings.HasPrefix(e, "LD_LIBRARY_PATH=") {
 			ldLibraryPath = strings.SplitN(e, "=", 2)[1]
 		}
-		if strings.HasPrefix(e, "PYTHONHOME=") || strings.HasPrefix(e, "LD_LIBRARY_PATH=") || strings.HasPrefix(e, "DYLD_LIBRARY_PATH=") {
+		if strings.HasPrefix(e, "PYTHONHOME=") || strings.HasPrefix(e, "LD_LIBRARY_PATH=") || strings.HasPrefix(e, "DYLD_LIBRARY_PATH=") || strings.HasPrefix(e, "PATH=") {
 			continue
 		}
 		env = append(env, e)
 	}
 	pythonHome := filepath.Join(tmpDirPkg, "python")
 	env = append(env, fmt.Sprintf("PYTHONHOME=%s", pythonHome))
+	// Put the bundled Python first on PATH: Caddy starts its workers with
+	// "python3" unless told otherwise, and without this it would use whatever
+	// Python the machine has (or none) together with the bundled Python's
+	// libraries, which only works when the two happen to be the same version.
+	env = append(env, fmt.Sprintf("PATH=%s%c%s", filepath.Join(pythonHome, "bin"), os.PathListSeparator, os.Getenv("PATH")))
 	env = append(env, fmt.Sprintf("LD_LIBRARY_PATH=%s:%s", filepath.Join(pythonHome, "lib"), ldLibraryPath))
 	if runtime.GOOS == "darwin" {
 		env = append(env, fmt.Sprintf("DYLD_LIBRARY_PATH=%s:%s", filepath.Join(pythonHome, "lib"), os.Getenv("DYLD_LIBRARY_PATH")))

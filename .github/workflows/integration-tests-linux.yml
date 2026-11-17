@@ -131,6 +131,9 @@ jobs:
       - name: Run integration tests
         working-directory: tests/${{ matrix.tool-name }}/
         if: ${{ !endsWith(matrix.python-version, 't') && matrix.tool-name != 'simple_isolation' }}
+        env:
+          FULL_RUN: ${{ needs.changes.outputs.full }}
+          TOOL: ${{ matrix.tool-name }}
         run: |
           chmod +x caddy
           source venv/bin/activate
@@ -139,7 +142,14 @@ jobs:
           else
             ./caddy run --config Caddyfile > caddy.log 2>&1 &
             timeout 60 bash -c 'while ! grep -q "finished cleaning storage units" caddy.log; do sleep 1; done'
-            python main_test.py
+            # The Flask and FastAPI tests end with a load test (2,500 rounds of
+            # create, read, delete and upload by default). Pull requests run a
+            # short one; main runs it in full.
+            if [ "$FULL_RUN" != "true" ] && { [ "$TOOL" = "flask" ] || [ "$TOOL" = "fastapi" ]; }; then
+              python main_test.py 300
+            else
+              python main_test.py
+            fi
           fi
       - name: Run simple_isolation (host Docker)
         if: matrix.tool-name == 'simple_isolation' && matrix.python-version == '3.13' && matrix.os == 'ubuntu-22.04'

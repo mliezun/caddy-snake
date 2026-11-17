@@ -63,6 +63,9 @@ Rules for every workflow under `.github/workflows/` (maintainer, 2026-11-10: a n
 - **Test the picking.** [`scripts/test_ci_changes.py`](scripts/test_ci_changes.py) runs the script of `changes.yml` against sample changes and checks which areas it turns on; Lint runs it. Add a case there when you add an area.
 - **Tests must really run.** CI runs `go test` with `-count=1` (never a cached result) and sets `CADDYSNAKE_REQUIRE_TESTS`, which turns "Postgres or Python is missing, skipping" into a failure.
 - **Builds on pull requests bundle two Pythons** (`build_pythons` in `changes.yml`): the Go program is the same for every Python version. `main` and releases build all of them. The Docker checks build the oldest and the newest.
+- **Go is compiled on Linux for every target.** The builds are pure Go (CGO off), so the release binaries for macOS and Windows are cross-compiled on Linux runners, which are faster and easier to get than macOS ones. The standalone workflow compiles the server once per target (`server` job) and bundles each Python with it afterwards; the one target the runner can run (`linux-amd64`) is smoke-tested with only the system folders on `PATH`, so it must use the Python it carries.
+- **One image build per Python version** in the Docker checks: the same image is checked for its interpreter and scanned.
+- **Load tests are short on pull requests**: the Flask and FastAPI integration tests run 300 rounds there and the full 2,500 on `main`.
 - **Semgrep**: findings silenced in the code with a `nosemgrep` comment and a reason are left out of the upload to code scanning, so its alerts match what the scan itself reports.
 - **Module downloads** in the release-building workflows fall back to the source when the Go proxy fails (`GOPROXY` with `|`).
 

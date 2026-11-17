@@ -52,8 +52,16 @@ jobs:
           python -m pip install uv
       - name: Generated SQL code is up to date
         working-directory: apps
+        env:
+          SQLC_VERSION: "1.30.0"
+          SQLC_SHA256: 468aecee071bfe55e97fcbcac52ea0208eeca444f67736f3b8f0f3d6a106132e
         run: |
-          go run github.com/sqlc-dev/sqlc/cmd/sqlc@v1.30.0 generate
+          # The released program, checked against a recorded checksum: compiling
+          # sqlc from source here took about a minute on every run.
+          curl -fsSL -o /tmp/sqlc.tar.gz "https://github.com/sqlc-dev/sqlc/releases/download/v${SQLC_VERSION}/sqlc_${SQLC_VERSION}_linux_amd64.tar.gz"
+          echo "${SQLC_SHA256}  /tmp/sqlc.tar.gz" | sha256sum --check
+          tar -xzf /tmp/sqlc.tar.gz -C /tmp sqlc
+          /tmp/sqlc generate
           git diff --exit-code -- db
       - name: Go tests
         # -count=1: never a cached result. CADDYSNAKE_REQUIRE_TESTS: fail, do not
