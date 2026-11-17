@@ -34,6 +34,7 @@ CASES = {
     "docs dependencies": ["docs/package-lock.json"],
     "a workflow": [".github/workflows/lint.yml"],
     "push to main (not a pull request)": None,
+    "GitHub cannot list the files": "fail",
 }
 EXPECT = {
     "docs only": {"docs"},
@@ -68,8 +69,15 @@ for name, files in CASES.items():
     with tempfile.TemporaryDirectory() as tmp:
         gh = os.path.join(tmp, "gh")
         with open(gh, "w") as f:
-            f.write("#!/bin/sh\ncat <<'EOF'\n" + "\n".join(files or []) + "\nEOF\n")
+            if files == "fail":
+                f.write("#!/bin/sh\necho 'gh: Server Error (HTTP 500)' >&2\nexit 1\n")
+            else:
+                f.write("#!/bin/sh\ncat <<'EOF'\n" + "\n".join(files or []) + "\nEOF\n")
         os.chmod(gh, os.stat(gh).st_mode | stat.S_IEXEC)
+        # The script waits between attempts; no need to here.
+        nosleep = os.path.join(tmp, "sleep")
+        Path(nosleep).write_text("#!/bin/sh\nexit 0\n")
+        os.chmod(nosleep, os.stat(nosleep).st_mode | stat.S_IEXEC)
         out = os.path.join(tmp, "out")
         env = dict(
             os.environ,

@@ -3,7 +3,7 @@
 # compilation out of QEMU when building arm64/riscv64 images on amd64 runners.
 FROM --platform=$BUILDPLATFORM ubuntu:22.04 AS builder
 
-ARG GO_VERSION=1.26.10
+ARG GO_VERSION=1.26.11
 ARG TARGETOS
 ARG TARGETARCH
 
@@ -35,7 +35,10 @@ ARG TARGETARCH
 # cmd/embed when refreshing Python patch versions.
 ARG PBS_RELEASE=20261026
 
+# Package mirrors (the deadsnakes PPA in particular) answer 503 now and then;
+# let apt try again before giving up.
 RUN export DEBIAN_FRONTEND=noninteractive &&\
+    echo 'Acquire::Retries "5";' > /etc/apt/apt.conf.d/80-retries &&\
     apt-get update -yyqq &&\
     apt-get upgrade -yyqq &&\
     if [ "${TARGETARCH}" = "riscv64" ]; then \

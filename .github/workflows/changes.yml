@@ -121,7 +121,24 @@ jobs:
           # differ only in which Python they bundle.
           out build_pythons '["3.13", "3.15-nogil"]'
 
-          files="$(gh api "repos/$REPO/pulls/$PR/files" --paginate --jq '.[].filename')"
+          # GitHub sometimes cannot produce the list ("this diff is temporarily
+          # unavailable", common on large pull requests). Try a few times, then
+          # run everything: too many checks is safe, a failed or skipped one is not.
+          files=""
+          listed=false
+          for attempt in 1 2 3; do
+            if files="$(gh api "repos/$REPO/pulls/$PR/files" --paginate --jq '.[].filename')"; then
+              listed=true
+              break
+            fi
+            echo "could not list the changed files (attempt $attempt)"
+            sleep $((attempt * 5))
+          done
+          if [ "$listed" != true ]; then
+            echo "running every check because the changed files could not be listed"
+            everything
+            exit 0
+          fi
           echo "Changed files:"
           echo "$files"
           has() { if grep -Eq "$1" <<< "$files"; then echo true; else echo false; fi; }
