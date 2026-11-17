@@ -16,7 +16,6 @@ type App struct {
 	Parent      string     `json:"parent,omitempty"`
 	Name        string     `json:"name"`
 	Description string     `json:"description,omitempty"`
-	DatabaseURL string     `json:"-"`
 	LiveVersion string     `json:"live_version,omitempty"`
 	CreatedBy   string     `json:"created_by,omitempty"`
 	CreatedAt   time.Time  `json:"created_at"`
@@ -39,31 +38,33 @@ type store struct {
 
 func newStore(conn *sql.DB) *store { return &store{conn: conn, q: dbgen.New(conn)} }
 
+// now is the current time as the database stores it.
+func now() int64 { return unix(time.Now()) }
+
 func (s *store) migrate(ctx context.Context) error {
 	_, err := db.Migrate(ctx, s.conn)
 	return err
 }
 
-func toApp(row dbgen.CaddysnakeAppsApp) *App {
+func toApp(row dbgen.App) *App {
 	a := &App{
 		Slug:        row.Slug,
 		Parent:      row.Parent.String,
 		Name:        row.Name,
 		Description: row.Description,
-		DatabaseURL: row.DatabaseUrl,
 		LiveVersion: row.LiveVersion,
 		CreatedBy:   row.CreatedBy,
-		CreatedAt:   row.CreatedAt,
-		LastUsedAt:  row.LastUsedAt,
+		CreatedAt:   fromUnix(row.CreatedAt),
+		LastUsedAt:  fromUnix(row.LastUsedAt),
 	}
 	if row.PublishedAt.Valid {
-		t := row.PublishedAt.Time
+		t := fromUnix(row.PublishedAt.Int64)
 		a.PublishedAt = &t
 	}
 	return a
 }
 
-func toApps(rows []dbgen.CaddysnakeAppsApp, err error) ([]*App, error) {
+func toApps(rows []dbgen.App, err error) ([]*App, error) {
 	if err != nil {
 		return nil, err
 	}
@@ -95,7 +96,7 @@ func (s *store) ListAll(ctx context.Context) ([]*App, error) { return toApps(s.q
 
 // ListDrafts returns the drafts of one app.
 func (s *store) ListDrafts(ctx context.Context, parent string) ([]*App, error) {
-	return toApps(s.q.ListDrafts(ctx, parent))
+	return toApps(s.q.ListDrafts(ctx, sql.NullString{String: parent, Valid: true}))
 }
 
 func (s *store) InsertApp(ctx context.Context, a *App) error {
@@ -104,8 +105,8 @@ func (s *store) InsertApp(ctx context.Context, a *App) error {
 		Parent:      sql.NullString{String: a.Parent, Valid: a.Parent != ""},
 		Name:        a.Name,
 		Description: a.Description,
-		DatabaseUrl: a.DatabaseURL,
 		CreatedBy:   a.CreatedBy,
+		Now:         now(),
 	})
 }
 
@@ -120,16 +121,16 @@ func (s *store) DeleteApp(ctx context.Context, slug string) error {
 }
 
 func (s *store) SetLive(ctx context.Context, slug, version string) error {
-	return s.q.SetLiveVersion(ctx, dbgen.SetLiveVersionParams{Slug: slug, LiveVersion: version})
+	return s.q.SetLiveVersion(ctx, dbgen.SetLiveVersionParams{Slug: slug, LiveVersion: version, Now: sql.NullInt64{Int64: now(), Valid: true}})
 }
 
 func (s *store) RecordPublish(ctx context.Context, slug, version, by string, ok bool, detail string) {
-	_ = s.q.RecordPublish(ctx, dbgen.RecordPublishParams{Slug: slug, Version: version, PublishedBy: by, Ok: ok, Detail: detail})
+	_ = s.q.RecordPublish(ctx, dbgen.RecordPublishParams{Slug: slug, Version: version, PublishedBy: by, Now: now(), Ok: ok, Detail: detail})
 }
 
 func (s *store) Touch(ctx context.Context, slugs []string) {
 	for _, slug := range slugs {
-		_ = s.q.TouchApp(ctx, slug)
+		_ = s.q.TouchApp(ctx, dbgen.TouchAppParams{Slug: slug, Now: now()})
 	}
 }
 

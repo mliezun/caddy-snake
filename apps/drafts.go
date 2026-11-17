@@ -43,26 +43,18 @@ func (p *Platform) CreateDraft(ctx context.Context, app, name, by string) (*Draf
 	}
 	cleanup := func() {
 		_ = r.DeleteBranch(branchFor(draft))
-		_ = p.pg.DropAppDatabase(context.Background(), slug)
 		_ = os.RemoveAll(p.appDir(slug))
 		_ = p.store.DeleteApp(context.Background(), slug)
 		p.forget(slug)
 	}
-	dbURL, err := p.pg.CreateAppDatabase(ctx, slug)
-	if err != nil {
+	// A folder left behind by a draft of the same name must not leak its data.
+	_ = os.RemoveAll(p.appDir(slug))
+	res := &DraftResult{DataCopied: true}
+	if err := p.cloneAppData(ctx, app, slug); err != nil {
 		cleanup()
 		return nil, err
 	}
-	res := &DraftResult{DataCopied: true}
-	if err := p.pg.CloneDatabase(ctx, app, slug, dbURL); err != nil {
-		if !errors.Is(err, errNoCloneTools) {
-			cleanup()
-			return nil, err
-		}
-		res.DataCopied = false
-		res.Note = "The draft starts with empty data: the Postgres tools pg_dump and psql are not installed on the server, so the app's data could not be copied."
-	}
-	d := &App{Slug: slug, Parent: app, Name: parent.Name + " (draft: " + draft + ")", Description: parent.Description, DatabaseURL: dbURL, CreatedBy: by}
+	d := &App{Slug: slug, Parent: app, Name: parent.Name + " (draft: " + draft + ")", Description: parent.Description, CreatedBy: by}
 	if err := p.store.InsertApp(ctx, d); err != nil {
 		cleanup()
 		return nil, err

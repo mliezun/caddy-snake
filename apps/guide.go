@@ -10,6 +10,7 @@ const Guide = `You are building small internal web apps for people at one compan
 
 HOW AN APP IS BUILT
 - Python only. The entry point is main.py, which must define a variable called app: a Flask app (preferred for simple tools) or a FastAPI/Starlette app. Both kinds work without configuration.
+- If the person brings an app written in another language (JavaScript or Node.js, PHP, Ruby, Go, anything else), or asks for one, do not try to run it here and do not ask them to host it elsewhere: rewrite it in Python, keeping the same pages, behaviour and look. Tell them in one plain sentence that you rebuilt it so it can run on this server. The same goes for an app that needs a separate server process of its own.
 - List packages in requirements.txt, one per line, or in pyproject.toml ([project] with a name, a version and dependencies; a uv.lock next to it is followed exactly). They are installed for you on publish, with uv. With both files, pyproject.toml is used. Keep the list short.
 - Prefer plain HTML, vanilla JavaScript and CSS, with small libraries loaded from a CDN with a script tag: such an app has nothing to compile and is easy to change later. This is a recommendation, not a rule. Nothing is compiled on publish, so if the person wants a framework that needs a build step (npm, TypeScript, React), build it yourself and save the built files.
 - Keep everything in a few files: main.py, optionally templates/ and static/, migrations/, and requirements.txt or pyproject.toml.
@@ -21,15 +22,18 @@ ADDRESSES
 - The environment variable APP_BASE_PATH holds the path ("/<app-name>") if you need it.
 
 DATA
-- Each app has its own Postgres database. Its address is in the DATABASE_URL environment variable; use psycopg (list "psycopg[binary]" among the packages) and open connections when needed.
-- Never store data in local files or in memory: apps are stopped when idle and restarted on each publish.
+- Each app has its own database: one SQLite file kept by the server. There is nothing to install or configure and no package to add: Python's own sqlite3 module opens it.
+- Every new app comes with db.py. Use it and keep it: "from db import db", then "with db() as conn: rows = conn.execute('select id, name from items').fetchall()". It opens the app's data, returns rows you can read by column name, saves your changes when the block ends and undoes them if the block fails. Open it inside each request; do not keep a connection in a global variable.
+- The file's location is in the DATABASE_PATH environment variable (DATABASE_URL holds the same as sqlite:///... for libraries that want a URL). Never open any other database file, and never store data in other local files or in memory: apps are stopped when idle and restarted on each publish.
+- Use ? for values in SQL ("where id = ?", (item_id,)), never string formatting.
 - Change the shape of the data only through numbered SQL files in migrations/, for example migrations/001_create_items.sql, then 002_add_due_date.sql. Each file runs once, in order, when a version is published. Never edit a migration that has already been published; add a new file. Write them so they are safe to run against existing data.
 - Do not create tables from main.py.
-- Give each text column the narrowest type that fits: varchar(100) for a name, char(2) for a country code. Use text only for long content such as notes or articles, and check the length in the app before saving.
+- Give each text column the narrowest type that fits, and make the database hold to it, because SQLite does not enforce a length by itself: name varchar(100) not null check (length(name) <= 100). Use text only for long content such as notes or articles. Check the length in the app too, so people get a friendly message.
+- SQLite specifics: an id column is "id integer primary key"; there are no separate date types, so store dates as text in ISO form (2026-11-17) or as whole seconds; true and false are 1 and 0. Adding a column is "alter table ... add column"; to change or remove one, create a new table, copy the rows and rename it.
 
 SETTINGS AND SECRETS
 - API tokens, passwords and other configuration are settings, stored with set_setting and read in the app from environment variables. Never write secrets into files.
-- Environment variables provided for you: DATABASE_URL, APP_NAME, APP_SLUG, APP_BASE_PATH, APP_URL, APP_IS_DRAFT ("1" in a draft).
+- Environment variables provided for you: DATABASE_PATH, DATABASE_URL, APP_NAME, APP_SLUG, APP_BASE_PATH, APP_URL, APP_IS_DRAFT ("1" in a draft).
 
 WHO IS USING THE APP
 - If the server requires people to log in, the request header X-Forwarded-User holds the person's username. Do not build your own login page. If the header is absent, the server is open and there is no identity.
@@ -74,6 +78,42 @@ def index():
     return render_template_string(PAGE, name=__APP_NAME__)
 `
 
+// starterDB is db.py: the one way an app opens its data. It needs nothing
+// beyond Python itself.
+const starterDB = `"""This app's database: one SQLite file kept by the server.
+
+    from db import db
+
+    with db() as conn:
+        conn.execute("insert into items (name) values (?)", ("Milk",))
+        rows = conn.execute("select id, name from items").fetchall()
+        first = rows[0]["name"]
+
+Changes are saved when the block ends, and undone if it fails. Change the
+shape of the data (tables, columns) with numbered files in migrations/, not
+from here.
+"""
+
+import os
+import sqlite3
+from contextlib import contextmanager
+
+
+@contextmanager
+def db():
+    conn = sqlite3.connect(os.environ["DATABASE_PATH"], timeout=30)
+    conn.row_factory = sqlite3.Row
+    conn.execute("pragma foreign_keys = on")
+    try:
+        yield conn
+        conn.commit()
+    except BaseException:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+`
+
 const starterCSS = `body {
   font-family: system-ui, sans-serif;
   margin: 0;
@@ -102,6 +142,7 @@ func starterFiles(name string) map[string][]byte {
 	return map[string][]byte{
 		"main.py":          []byte(strings.ReplaceAll(starterMain, "__APP_NAME__", pythonString(name))),
 		"requirements.txt": []byte("flask\n"),
+		"db.py":            []byte(starterDB),
 		"static/style.css": []byte(starterCSS),
 	}
 }

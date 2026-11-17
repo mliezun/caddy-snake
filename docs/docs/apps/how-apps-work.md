@@ -14,9 +14,11 @@ The instructions steer assistants toward apps this platform runs well:
 - Packages are installed on publish with [uv](https://docs.astral.sh/uv/), from `requirements.txt` or from `pyproject.toml` (`[project]` dependencies; a `uv.lock` next to it is followed exactly). With both files, `pyproject.toml` is used.
 - **Plain HTML, vanilla JavaScript and CSS are recommended**, not required: nothing is compiled on publish, so an app that needs a build step has to be saved already built.
 - **Relative links.** The app lives under `/<app-name>/`, and the platform passes that prefix to the framework ([`mount_prefix`](../reference.md#mount_prefix)), so `url_for`, redirects and static files work. Hand-written absolute links such as `href="/items"` would point outside the app.
-- Data in the app's own database, at `DATABASE_URL`. The shape of the data changes only through numbered SQL files in `migrations/`, each applied once, in order, on publish.
+- **Data in the app's own database**: one SQLite file the server creates and looks after. Python opens it with its own `sqlite3` module, so there is no database package to add. Every new app comes with a small `db.py` (`from db import db`) that opens it the right way.
+- The shape of the data changes only through numbered SQL files in `migrations/`, each applied once, in order, on publish.
+- **Python only.** An app brought from another language is rewritten in Python by the assistant: the instructions tell it to, and publishing says the same when it sees such files.
 
-Environment variables every app gets: `DATABASE_URL`, `APP_NAME`, `APP_SLUG`, `APP_BASE_PATH`, `APP_URL`, `APP_IS_DRAFT`, plus its own settings.
+Environment variables every app gets: `DATABASE_PATH` (the data file; `DATABASE_URL` holds the same as `sqlite:///...`), `APP_NAME`, `APP_SLUG`, `APP_BASE_PATH`, `APP_URL`, `APP_IS_DRAFT`, plus its own settings.
 
 ### What happens on publish
 
@@ -30,7 +32,7 @@ If any step fails, people using the app notice nothing, and the assistant gets t
 
 ### Drafts
 
-`create_draft` copies an app: its files at the current version, its settings, and its data (with `pg_dump`). The draft is served at `/<app>--<draft>/`. Changes there do not touch the live app.
+`create_draft` copies an app: its files at the current version, its settings, and its data (a consistent copy of the data file, taken while the live app keeps running). The draft is served at `/<app>--<draft>/`. Changes there do not touch the live app.
 
 `publish_draft` makes the draft's files the live app and removes the draft. The draft's **data is discarded**; its migration files run against the live data. If the live app changed after the draft was started, publishing is refused rather than overwriting those changes.
 

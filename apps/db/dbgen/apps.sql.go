@@ -11,11 +11,11 @@ import (
 )
 
 const copySettings = `-- name: CopySettings :exec
-INSERT INTO caddysnake_apps.settings (slug, key, value)
-SELECT $1::text, s.key, s.value
-FROM caddysnake_apps.settings AS s
-WHERE s.slug = $2::text
-ON CONFLICT (slug, key) DO UPDATE SET value = EXCLUDED.value
+INSERT INTO settings (slug, key, value)
+SELECT ?1, s.key, s.value
+FROM settings AS s
+WHERE s.slug = ?2
+ON CONFLICT (slug, key) DO UPDATE SET value = excluded.value
 `
 
 type CopySettingsParams struct {
@@ -29,7 +29,7 @@ func (q *Queries) CopySettings(ctx context.Context, arg CopySettingsParams) erro
 }
 
 const deleteApp = `-- name: DeleteApp :exec
-DELETE FROM caddysnake_apps.apps WHERE slug = $1
+DELETE FROM apps WHERE slug = ?1
 `
 
 func (q *Queries) DeleteApp(ctx context.Context, slug string) error {
@@ -38,7 +38,7 @@ func (q *Queries) DeleteApp(ctx context.Context, slug string) error {
 }
 
 const deletePublishes = `-- name: DeletePublishes :exec
-DELETE FROM caddysnake_apps.publishes WHERE slug = $1
+DELETE FROM publishes WHERE slug = ?1
 `
 
 func (q *Queries) DeletePublishes(ctx context.Context, slug string) error {
@@ -47,7 +47,7 @@ func (q *Queries) DeletePublishes(ctx context.Context, slug string) error {
 }
 
 const deleteSetting = `-- name: DeleteSetting :exec
-DELETE FROM caddysnake_apps.settings WHERE slug = $1 AND key = $2
+DELETE FROM settings WHERE slug = ?1 AND key = ?2
 `
 
 type DeleteSettingParams struct {
@@ -61,7 +61,7 @@ func (q *Queries) DeleteSetting(ctx context.Context, arg DeleteSettingParams) er
 }
 
 const deleteSettings = `-- name: DeleteSettings :exec
-DELETE FROM caddysnake_apps.settings WHERE slug = $1
+DELETE FROM settings WHERE slug = ?1
 `
 
 func (q *Queries) DeleteSettings(ctx context.Context, slug string) error {
@@ -70,18 +70,19 @@ func (q *Queries) DeleteSettings(ctx context.Context, slug string) error {
 }
 
 const getApp = `-- name: GetApp :one
-SELECT slug, parent, name, description, database_url, live_version, created_by, created_at, published_at, last_used_at FROM caddysnake_apps.apps WHERE slug = $1
+
+SELECT slug, parent, name, description, live_version, created_by, created_at, published_at, last_used_at FROM apps WHERE slug = ?1
 `
 
-func (q *Queries) GetApp(ctx context.Context, slug string) (CaddysnakeAppsApp, error) {
+// Times are whole seconds since 1970 (UTC), passed in by the Go code.
+func (q *Queries) GetApp(ctx context.Context, slug string) (App, error) {
 	row := q.db.QueryRowContext(ctx, getApp, slug)
-	var i CaddysnakeAppsApp
+	var i App
 	err := row.Scan(
 		&i.Slug,
 		&i.Parent,
 		&i.Name,
 		&i.Description,
-		&i.DatabaseUrl,
 		&i.LiveVersion,
 		&i.CreatedBy,
 		&i.CreatedAt,
@@ -92,8 +93,8 @@ func (q *Queries) GetApp(ctx context.Context, slug string) (CaddysnakeAppsApp, e
 }
 
 const insertApp = `-- name: InsertApp :exec
-INSERT INTO caddysnake_apps.apps (slug, parent, name, description, database_url, created_by)
-VALUES ($1, $2, $3, $4, $5, $6)
+INSERT INTO apps (slug, parent, name, description, created_by, created_at, last_used_at)
+VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6)
 `
 
 type InsertAppParams struct {
@@ -101,8 +102,8 @@ type InsertAppParams struct {
 	Parent      sql.NullString
 	Name        string
 	Description string
-	DatabaseUrl string
 	CreatedBy   string
+	Now         int64
 }
 
 func (q *Queries) InsertApp(ctx context.Context, arg InsertAppParams) error {
@@ -111,31 +112,30 @@ func (q *Queries) InsertApp(ctx context.Context, arg InsertAppParams) error {
 		arg.Parent,
 		arg.Name,
 		arg.Description,
-		arg.DatabaseUrl,
 		arg.CreatedBy,
+		arg.Now,
 	)
 	return err
 }
 
 const listAllApps = `-- name: ListAllApps :many
-SELECT slug, parent, name, description, database_url, live_version, created_by, created_at, published_at, last_used_at FROM caddysnake_apps.apps ORDER BY slug
+SELECT slug, parent, name, description, live_version, created_by, created_at, published_at, last_used_at FROM apps ORDER BY slug
 `
 
-func (q *Queries) ListAllApps(ctx context.Context) ([]CaddysnakeAppsApp, error) {
+func (q *Queries) ListAllApps(ctx context.Context) ([]App, error) {
 	rows, err := q.db.QueryContext(ctx, listAllApps)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	items := []CaddysnakeAppsApp{}
+	items := []App{}
 	for rows.Next() {
-		var i CaddysnakeAppsApp
+		var i App
 		if err := rows.Scan(
 			&i.Slug,
 			&i.Parent,
 			&i.Name,
 			&i.Description,
-			&i.DatabaseUrl,
 			&i.LiveVersion,
 			&i.CreatedBy,
 			&i.CreatedAt,
@@ -156,24 +156,23 @@ func (q *Queries) ListAllApps(ctx context.Context) ([]CaddysnakeAppsApp, error) 
 }
 
 const listDrafts = `-- name: ListDrafts :many
-SELECT slug, parent, name, description, database_url, live_version, created_by, created_at, published_at, last_used_at FROM caddysnake_apps.apps WHERE parent = $1::text ORDER BY slug
+SELECT slug, parent, name, description, live_version, created_by, created_at, published_at, last_used_at FROM apps WHERE parent = ?1 ORDER BY slug
 `
 
-func (q *Queries) ListDrafts(ctx context.Context, parent string) ([]CaddysnakeAppsApp, error) {
+func (q *Queries) ListDrafts(ctx context.Context, parent sql.NullString) ([]App, error) {
 	rows, err := q.db.QueryContext(ctx, listDrafts, parent)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	items := []CaddysnakeAppsApp{}
+	items := []App{}
 	for rows.Next() {
-		var i CaddysnakeAppsApp
+		var i App
 		if err := rows.Scan(
 			&i.Slug,
 			&i.Parent,
 			&i.Name,
 			&i.Description,
-			&i.DatabaseUrl,
 			&i.LiveVersion,
 			&i.CreatedBy,
 			&i.CreatedAt,
@@ -194,24 +193,23 @@ func (q *Queries) ListDrafts(ctx context.Context, parent string) ([]CaddysnakeAp
 }
 
 const listLiveApps = `-- name: ListLiveApps :many
-SELECT slug, parent, name, description, database_url, live_version, created_by, created_at, published_at, last_used_at FROM caddysnake_apps.apps WHERE parent IS NULL ORDER BY slug
+SELECT slug, parent, name, description, live_version, created_by, created_at, published_at, last_used_at FROM apps WHERE parent IS NULL ORDER BY slug
 `
 
-func (q *Queries) ListLiveApps(ctx context.Context) ([]CaddysnakeAppsApp, error) {
+func (q *Queries) ListLiveApps(ctx context.Context) ([]App, error) {
 	rows, err := q.db.QueryContext(ctx, listLiveApps)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	items := []CaddysnakeAppsApp{}
+	items := []App{}
 	for rows.Next() {
-		var i CaddysnakeAppsApp
+		var i App
 		if err := rows.Scan(
 			&i.Slug,
 			&i.Parent,
 			&i.Name,
 			&i.Description,
-			&i.DatabaseUrl,
 			&i.LiveVersion,
 			&i.CreatedBy,
 			&i.CreatedAt,
@@ -232,7 +230,7 @@ func (q *Queries) ListLiveApps(ctx context.Context) ([]CaddysnakeAppsApp, error)
 }
 
 const listSettings = `-- name: ListSettings :many
-SELECT key, value FROM caddysnake_apps.settings WHERE slug = $1 ORDER BY key
+SELECT key, value FROM settings WHERE slug = ?1 ORDER BY key
 `
 
 type ListSettingsRow struct {
@@ -264,14 +262,15 @@ func (q *Queries) ListSettings(ctx context.Context, slug string) ([]ListSettings
 }
 
 const recordPublish = `-- name: RecordPublish :exec
-INSERT INTO caddysnake_apps.publishes (slug, version, published_by, ok, detail)
-VALUES ($1, $2, $3, $4, $5)
+INSERT INTO publishes (slug, version, published_by, published_at, ok, detail)
+VALUES (?1, ?2, ?3, ?4, ?5, ?6)
 `
 
 type RecordPublishParams struct {
 	Slug        string
 	Version     string
 	PublishedBy string
+	Now         int64
 	Ok          bool
 	Detail      string
 }
@@ -281,6 +280,7 @@ func (q *Queries) RecordPublish(ctx context.Context, arg RecordPublishParams) er
 		arg.Slug,
 		arg.Version,
 		arg.PublishedBy,
+		arg.Now,
 		arg.Ok,
 		arg.Detail,
 	)
@@ -288,31 +288,37 @@ func (q *Queries) RecordPublish(ctx context.Context, arg RecordPublishParams) er
 }
 
 const setLiveVersion = `-- name: SetLiveVersion :exec
-UPDATE caddysnake_apps.apps SET live_version = $2, published_at = now() WHERE slug = $1
+UPDATE apps SET live_version = ?1, published_at = ?2 WHERE slug = ?3
 `
 
 type SetLiveVersionParams struct {
-	Slug        string
 	LiveVersion string
+	Now         sql.NullInt64
+	Slug        string
 }
 
 func (q *Queries) SetLiveVersion(ctx context.Context, arg SetLiveVersionParams) error {
-	_, err := q.db.ExecContext(ctx, setLiveVersion, arg.Slug, arg.LiveVersion)
+	_, err := q.db.ExecContext(ctx, setLiveVersion, arg.LiveVersion, arg.Now, arg.Slug)
 	return err
 }
 
 const touchApp = `-- name: TouchApp :exec
-UPDATE caddysnake_apps.apps SET last_used_at = now() WHERE slug = $1
+UPDATE apps SET last_used_at = ?1 WHERE slug = ?2
 `
 
-func (q *Queries) TouchApp(ctx context.Context, slug string) error {
-	_, err := q.db.ExecContext(ctx, touchApp, slug)
+type TouchAppParams struct {
+	Now  int64
+	Slug string
+}
+
+func (q *Queries) TouchApp(ctx context.Context, arg TouchAppParams) error {
+	_, err := q.db.ExecContext(ctx, touchApp, arg.Now, arg.Slug)
 	return err
 }
 
 const upsertSetting = `-- name: UpsertSetting :exec
-INSERT INTO caddysnake_apps.settings (slug, key, value) VALUES ($1, $2, $3)
-ON CONFLICT (slug, key) DO UPDATE SET value = EXCLUDED.value
+INSERT INTO settings (slug, key, value) VALUES (?1, ?2, ?3)
+ON CONFLICT (slug, key) DO UPDATE SET value = excluded.value
 `
 
 type UpsertSettingParams struct {

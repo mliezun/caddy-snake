@@ -5,7 +5,7 @@
 # then open http://localhost:9080 and point your AI assistant at
 # http://localhost:9080/_apps/mcp
 #
-# App files, version history and the database are kept in the "apps-data"
+# App files, their version history and their data are kept in the "apps-data"
 # volume. Removing that volume removes every app.
 services:
   apps:
@@ -23,7 +23,7 @@ services:
       - apps-data:/data
     restart: unless-stopped
     stop_grace_period: 90s
-    # Stop with SIGINT so the server shuts its database down cleanly.
+    # Stop with SIGINT so the server lets apps finish what they are doing.
     stop_signal: SIGINT
 
 volumes:

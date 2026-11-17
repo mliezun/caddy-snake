@@ -10,9 +10,11 @@ import (
 )
 
 const listAppliedMigrations = `-- name: ListAppliedMigrations :many
-SELECT name FROM caddysnake_apps.schema_migrations ORDER BY name
+
+SELECT name FROM schema_migrations ORDER BY name
 `
 
+// Used by the migration runner in ../migrate.go.
 func (q *Queries) ListAppliedMigrations(ctx context.Context) ([]string, error) {
 	rows, err := q.db.QueryContext(ctx, listAppliedMigrations)
 	if err != nil {
@@ -36,31 +38,16 @@ func (q *Queries) ListAppliedMigrations(ctx context.Context) ([]string, error) {
 	return items, nil
 }
 
-const lockMigrations = `-- name: LockMigrations :exec
-
-SELECT pg_advisory_lock($1::bigint)
-`
-
-// Used by the migration runner in ../migrate.go.
-func (q *Queries) LockMigrations(ctx context.Context, key int64) error {
-	_, err := q.db.ExecContext(ctx, lockMigrations, key)
-	return err
-}
-
 const recordMigration = `-- name: RecordMigration :exec
-INSERT INTO caddysnake_apps.schema_migrations (name) VALUES ($1)
+INSERT INTO schema_migrations (name, applied_at) VALUES (?1, ?2)
 `
 
-func (q *Queries) RecordMigration(ctx context.Context, name string) error {
-	_, err := q.db.ExecContext(ctx, recordMigration, name)
-	return err
+type RecordMigrationParams struct {
+	Name      string
+	AppliedAt int64
 }
 
-const unlockMigrations = `-- name: UnlockMigrations :exec
-SELECT pg_advisory_unlock($1::bigint)
-`
-
-func (q *Queries) UnlockMigrations(ctx context.Context, key int64) error {
-	_, err := q.db.ExecContext(ctx, unlockMigrations, key)
+func (q *Queries) RecordMigration(ctx context.Context, arg RecordMigrationParams) error {
+	_, err := q.db.ExecContext(ctx, recordMigration, arg.Name, arg.AppliedAt)
 	return err
 }

@@ -26,7 +26,7 @@ Caddy Snake is two things in one program:
 
 ### Quick start
 
-You need Python 3.13+ and the Postgres programs (macOS: `brew install postgresql@18`; Debian/Ubuntu: `sudo apt install postgresql`; Windows: the installer from [postgresql.org](https://www.postgresql.org/download/windows/)).
+You need Python 3.13+. Nothing else: there is no database to install.
 
 ```bash
 pip install caddysnake
@@ -51,7 +51,7 @@ Then ask for something:
 
 ### What you get
 
-- **An address per app**: `/<app-name>/`, each with its own Postgres database. The server creates and runs a private Postgres for you.
+- **An address per app**: `/<app-name>/`, each with its own database (a single SQLite file the server looks after). Nothing to install or run.
 - **Versions**: every save is a version. A version that does not start is refused and the running one stays up. Go back to any earlier one.
 - **Drafts**: a private copy of an app, with a copy of its data, for trying changes safely.
 - **A dashboard**: apps, versions, settings, activity, people and access keys.

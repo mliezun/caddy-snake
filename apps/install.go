@@ -281,7 +281,7 @@ func launchdPlist(binary, configPath, logPath, runAs string, pathDirs []string) 
 	str := func(s string) string { return "<string>" + xmlText(s) + "</string>" }
 	key("Label", str(launchdLabel))
 	key("ProgramArguments", "<array>\n\t\t"+strings.Join([]string{str(binary), str("python-apps"), str("--config"), str(configPath)}, "\n\t\t")+"\n\t</array>")
-	// Homebrew's folders hold Postgres and Python on most Macs.
+	// Homebrew's folder holds Python on most Macs.
 	path := strings.Join(append(pathDirs, "/opt/homebrew/bin", defaultPathDirs), ":")
 	key("EnvironmentVariables", "<dict>\n\t\t<key>PATH</key>\n\t\t"+str(path)+"\n\t</dict>")
 	if runAs != "" {
@@ -753,7 +753,7 @@ Use --dry-run to see everything first.`,
 			opts.RunAs, opts.UID = installer()
 			text := map[string]*string{
 				"listen": &opts.Settings.Listen, "domain": &opts.Settings.Domain, "public-url": &opts.Settings.PublicURL,
-				"data-dir": &opts.Settings.DataDir, "database-url": &opts.Settings.DatabaseURL, "python-path": &opts.Settings.PythonPath,
+				"data-dir": &opts.Settings.DataDir, "python-path": &opts.Settings.PythonPath,
 			}
 			for name, target := range text {
 				*target = fs.String(name)
@@ -796,9 +796,6 @@ Use --dry-run to see everything first.`,
 					extra = append(extra, "--python-path", opts.Settings.PythonPath)
 				}
 				return elevate(extra...)
-			}
-			if opts.Settings.DatabaseURL == "" && findPostgresBin() == "" {
-				return errors.New(installHint)
 			}
 			if err := plan.apply(os.Stdout); err != nil {
 				return err

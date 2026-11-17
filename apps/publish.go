@@ -126,6 +126,9 @@ func (p *Platform) doPublish(ctx context.Context, a *App, version string, res *P
 		return err
 	}
 	if _, err := os.Stat(filepath.Join(release, "main.py")); err != nil {
+		if other := otherLanguage(release); other != "" {
+			return fmt.Errorf("this looks like %s app, and this server runs Python apps only. Rewrite it in Python: the same pages and behaviour, with a main.py that defines a variable called `app` (Flask or FastAPI), and remove the %s files. Tell the person you did this", other, other)
+		}
 		return errors.New("the app needs a file called main.py that defines a variable called `app`")
 	}
 	res.step("Copied the files of version %s.", version)
@@ -149,7 +152,7 @@ func (p *Platform) doPublish(ctx context.Context, a *App, version string, res *P
 	}
 	res.step("Checked that the app starts.")
 
-	applied, err := applyAppMigrations(ctx, a.DatabaseURL, filepath.Join(release, "migrations"))
+	applied, err := applyAppMigrations(ctx, p.appDataPath(a.Slug), filepath.Join(release, "migrations"))
 	if err != nil {
 		return fmt.Errorf("a database change failed (earlier ones in this publish were kept): %w", err)
 	}
@@ -180,7 +183,7 @@ func (p *Platform) uvCommand(ctx context.Context) []string {
 	if path := besideExecutable("uv"); path != "" {
 		return []string{path}
 	}
-	if _, err := runTool(ctx, nil, p.cfg.PythonBin, "-m", "uv", "--version"); err == nil {
+	if err := exec.CommandContext(ctx, p.cfg.PythonBin, "-m", "uv", "--version").Run(); err == nil {
 		return []string{p.cfg.PythonBin, "-m", "uv"}
 	}
 	return nil
@@ -188,6 +191,28 @@ func (p *Platform) uvCommand(ctx context.Context) []string {
 
 func venvPython(release string) string {
 	return venvPythonFor(runtime.GOOS, release)
+}
+
+// otherLanguage names the language of an app that was written for something
+// other than Python ("a Node.js", "a PHP", ...), judging by the files that
+// only such an app has, or "" when nothing gives it away.
+func otherLanguage(release string) string {
+	signs := []struct{ file, language string }{
+		{"package.json", "a Node.js"}, {"server.js", "a Node.js"}, {"index.js", "a Node.js"}, {"app.js", "a Node.js"},
+		{"index.php", "a PHP"}, {"composer.json", "a PHP"},
+		{"Gemfile", "a Ruby"}, {"config.ru", "a Ruby"},
+		{"go.mod", "a Go"}, {"main.go", "a Go"},
+		{"Cargo.toml", "a Rust"}, {"pom.xml", "a Java"}, {"build.gradle", "a Java"},
+	}
+	for _, s := range signs {
+		if _, err := os.Stat(filepath.Join(release, s.file)); err == nil {
+			return s.language
+		}
+	}
+	if matches, _ := filepath.Glob(filepath.Join(release, "*.csproj")); len(matches) > 0 {
+		return "a .NET"
+	}
+	return ""
 }
 
 // packageSource says where an app lists its packages: "pyproject.toml" when
@@ -328,7 +353,7 @@ func (p *Platform) checkImport(ctx context.Context, release string, env map[stri
 
 // applyAppMigrations runs the app's migrations/*.sql files that have not been
 // applied to its database yet, in file-name order, each in its own transaction.
-func applyAppMigrations(ctx context.Context, databaseURL, dir string) ([]string, error) {
+func applyAppMigrations(ctx context.Context, dataPath, dir string) ([]string, error) {
 	entries, err := os.ReadDir(dir)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, nil
@@ -347,9 +372,9 @@ func applyAppMigrations(ctx context.Context, databaseURL, dir string) ([]string,
 	}
 	sort.Strings(names)
 
-	conn, err := openAppDB(ctx, databaseURL)
+	conn, err := openAppDBAt(ctx, dataPath)
 	if err != nil {
-		return nil, fmt.Errorf("connecting to the app's database: %w", err)
+		return nil, fmt.Errorf("opening the app's data: %w", err)
 	}
 	defer conn.Close()
 	if err := db.PrepareAppDatabase(ctx, conn); err != nil {
@@ -381,7 +406,7 @@ func applyAppMigrations(ctx context.Context, databaseURL, dir string) ([]string,
 			_ = tx.Rollback()
 			return applied, fmt.Errorf("migrations/%s: %w", name, err)
 		}
-		if err := q.WithTx(tx).RecordAppMigration(ctx, name); err != nil {
+		if err := q.WithTx(tx).RecordAppMigration(ctx, appdbgen.RecordAppMigrationParams{Name: name, AppliedAt: now()}); err != nil {
 			_ = tx.Rollback()
 			return applied, fmt.Errorf("migrations/%s: %w", name, err)
 		}

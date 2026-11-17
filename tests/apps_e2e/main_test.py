@@ -19,9 +19,8 @@ from mcp.client.streamable_http import streamable_http_client
 BASE = os.environ.get("APPS_URL", "http://localhost:9080").rstrip("/")
 APP = "lunch-orders"
 
-MAIN_V1 = '''import os
-
-import psycopg
+# The app uses db.py, which every new app comes with: no database package.
+MAIN_V1 = '''from db import db
 from flask import Flask, redirect, render_template_string, request, url_for
 
 app = Flask(__name__)
@@ -36,10 +35,6 @@ PAGE = """<!doctype html>
 <p id="who">{{ who }}</p>"""
 
 
-def db():
-    return psycopg.connect(os.environ["DATABASE_URL"], autocommit=True)
-
-
 @app.get("/")
 def index():
     with db() as conn:
@@ -51,22 +46,22 @@ def index():
 @app.post("/add")
 def add():
     with db() as conn:
-        conn.execute("INSERT INTO orders (dish) VALUES (%s)", (request.form["dish"],))
+        conn.execute("INSERT INTO orders (dish) VALUES (?)", (request.form["dish"],))
     return redirect(url_for("index"))
 '''
 
-MIGRATION_1 = "CREATE TABLE orders (id serial PRIMARY KEY, dish varchar(100) NOT NULL);\n"
-MIGRATION_2 = "ALTER TABLE orders ADD COLUMN note varchar(200) NOT NULL DEFAULT '';\n"
+MIGRATION_1 = "CREATE TABLE orders (id integer PRIMARY KEY, dish varchar(100) NOT NULL CHECK (length(dish) <= 100));\n"
+MIGRATION_2 = "ALTER TABLE orders ADD COLUMN note varchar(200) NOT NULL DEFAULT '' CHECK (length(note) <= 200);\n"
 
 # A FastAPI-style (ASGI) version of the same app, to prove both kinds are served.
 MAIN_V2 = """import os
 
-import psycopg
+from db import db
 
 
 async def app(scope, receive, send):
     assert scope["type"] == "http"
-    with psycopg.connect(os.environ["DATABASE_URL"]) as conn:
+    with db() as conn:
         count = conn.execute("SELECT count(*) FROM orders WHERE note = ''").fetchone()[0]
     body = f"draft={os.environ['APP_IS_DRAFT']} orders={count} root={scope['root_path']}".encode()
     await send({"type": "http.response.start", "status": 200,
@@ -137,7 +132,7 @@ async def run() -> None:
             message="Order list with a form",
             files={
                 "main.py": MAIN_V1,
-                "requirements.txt": "flask\npsycopg[binary]\n",
+                "requirements.txt": "flask\n",
                 "migrations/001_orders.sql": MIGRATION_1,
                 "static/style.css": None,
             },

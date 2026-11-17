@@ -1,5 +1,5 @@
-# caddy-snake apps in one container: the server, the Postgres programs it uses
-# for its built-in database, git and uv. Everything it stores lives in /data.
+# caddy-snake apps in one container: the server, git and uv. Everything it
+# stores (apps, their history and their data) lives in /data.
 #
 #   docker compose up        (from this directory)
 #
@@ -10,12 +10,12 @@ FROM ${BASE_IMAGE}
 USER root
 RUN export DEBIAN_FRONTEND=noninteractive && \
     apt-get update -yyqq && \
-    apt-get install -yyqq --no-install-recommends postgresql postgresql-client git ca-certificates && \
+    apt-get install -yyqq --no-install-recommends git ca-certificates && \
     apt-get clean && rm -rf /var/lib/apt/lists/* && \
     python -m pip install --no-cache-dir --break-system-packages uv && \
     mkdir -p /data && chown caddy:caddy /data
 
-# The built-in Postgres refuses to run as root, which is what we want anyway.
+# Run as a regular user, not as root.
 USER caddy
 ENV HOME=/home/caddy
 VOLUME /data

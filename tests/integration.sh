@@ -165,9 +165,8 @@ fi
 # Build caddy with caddy-snake plugin (no CGO needed)
 echo ">>> Building caddy with caddy-snake..."
 if [[ "$TOOL_NAME" == "apps_e2e" ]]; then
-  # The apps platform lives in its own package and needs Postgres, git and uv.
-  apt-get install -yyqq postgresql postgresql-client
-  service postgresql stop || true
+  # The apps platform lives in its own package. It needs git and uv; there
+  # is no database to install.
   GOFLAGS=-buildvcs=false CGO_ENABLED=0 xcaddy build \
     --with github.com/mliezun/caddy-snake=__REPO_ROOT__ \
     --with github.com/mliezun/caddy-snake/apps
@@ -179,8 +178,8 @@ fi
 source venv/bin/activate
 
 if [[ "$TOOL_NAME" == "apps_e2e" ]]; then
-  # The built-in Postgres refuses to run as root, so the server runs as a
-  # regular user with its own data folder.
+  # Run as a regular user with its own data folder, the way it is meant to
+  # be run.
   echo ">>> Starting caddy python-apps as an unprivileged user..."
   pip install uv
   useradd -m appsrunner

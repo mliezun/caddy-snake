@@ -4,11 +4,7 @@
 
 package appdbgen
 
-import (
-	"time"
-)
-
 type CaddysnakeMigration struct {
 	Name      string
-	AppliedAt time.Time
+	AppliedAt int64
 }

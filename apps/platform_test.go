@@ -13,21 +13,18 @@ import (
 	"go.uber.org/zap"
 )
 
-// newTestPlatform starts a platform with its own built-in Postgres in a temp
-// folder. It skips when Postgres or Python are not installed.
+// newTestPlatform starts a platform in a temp folder. It skips when Python is
+// not installed.
 func newTestPlatform(t *testing.T) *Platform {
 	t.Helper()
 	if testing.Short() {
-		t.Skip("starts Postgres and builds Python environments")
+		t.Skip("builds Python environments")
 	}
 	// CI sets CADDYSNAKE_REQUIRE_TESTS so a missing program fails the run
 	// instead of quietly skipping every test that matters.
 	missing := t.Skip
 	if os.Getenv("CADDYSNAKE_REQUIRE_TESTS") != "" {
 		missing = t.Fatal
-	}
-	if findPostgresBin() == "" {
-		missing("Postgres is not installed")
 	}
 	if _, err := exec.LookPath(defaultPythonFor(runtime.GOOS)); err != nil {
 		missing("Python is not installed")
@@ -124,7 +121,7 @@ func TestPlatformLifecycle(t *testing.T) {
 
 	// A migration is applied once, and data survives later publishes.
 	files := map[string][]byte{
-		"migrations/001_orders.sql": []byte("CREATE TABLE orders (id serial PRIMARY KEY, dish varchar(100) NOT NULL);\nINSERT INTO orders (dish) VALUES ('soup');"),
+		"migrations/001_orders.sql": []byte("CREATE TABLE orders (id integer PRIMARY KEY, dish varchar(100) NOT NULL CHECK (length(dish) <= 100));\nINSERT INTO orders (dish) VALUES ('soup');"),
 	}
 	if _, err := p.SaveFiles(ctx, app.Slug, "", files, "Add orders", "ana"); err != nil {
 		t.Fatal(err)
@@ -137,7 +134,7 @@ func TestPlatformLifecycle(t *testing.T) {
 	if strings.Contains(strings.Join(res.Steps, "\n"), "001_orders.sql") {
 		t.Fatalf("migration was applied twice: %v", res.Steps)
 	}
-	if got := countRows(t, app.DatabaseURL, "orders"); got != 1 {
+	if got := countRows(t, p, app.Slug, "orders"); got != 1 {
 		t.Fatalf("orders rows = %d, want 1", got)
 	}
 
@@ -208,7 +205,7 @@ func TestPlatformLifecycle(t *testing.T) {
 		t.Fatalf("draft = %+v publish = %+v", draft.Draft, draft.Publish)
 	}
 	if draft.DataCopied {
-		if got := countRows(t, draft.Draft.DatabaseURL, "orders"); got != 1 {
+		if got := countRows(t, p, draft.Draft.Slug, "orders"); got != 1 {
 			t.Fatalf("draft orders rows = %d, want the copied 1", got)
 		}
 	}
@@ -267,16 +264,16 @@ func keys(m map[string][]byte) []string {
 	return out
 }
 
-func countRows(t *testing.T, databaseURL, table string) int {
+func countRows(t *testing.T, p *Platform, slug, table string) int {
 	t.Helper()
-	conn, err := openAppDB(context.Background(), databaseURL)
+	conn, err := p.openAppDB(context.Background(), slug)
 	if err != nil {
-		t.Fatalf("connecting to app database: %v", err)
+		t.Fatalf("opening the app's data: %v", err)
 	}
 	defer conn.Close()
 	var n int
 	// Test-only query on a fixed table name.
-	if err := conn.QueryRow("SELECT count(*) FROM " + quoteIdent(table)).Scan(&n); err != nil {
+	if err := conn.QueryRow(`SELECT count(*) FROM "` + table + `"`).Scan(&n); err != nil {
 		t.Fatalf("counting %s: %v", table, err)
 	}
 	return n
@@ -305,9 +302,6 @@ func TestSlugs(t *testing.T) {
 	}
 	if app, draft := SplitSlug("inventory--new-form"); app != "inventory" || draft != "new-form" {
 		t.Errorf("SplitSlug = %q, %q", app, draft)
-	}
-	if got := dbName("inventory--new-form"); got != "app_inventory__new_form" {
-		t.Errorf("dbName = %q", got)
 	}
 }
 
@@ -373,5 +367,94 @@ func TestPublishWithPyproject(t *testing.T) {
 	}
 	if _, err := os.Stat(venvPython(currentRelease(t, p, app.Slug))); err != nil {
 		t.Fatalf("no Python environment: %v", err)
+	}
+}
+
+// Every new app comes with db.py, and its data file exists from the start.
+func TestNewAppHasItsDataFile(t *testing.T) {
+	p := newTestPlatform(t)
+	ctx := context.Background()
+	app, _, err := p.CreateApp(ctx, "Inventory", "", "ana")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, files, err := p.ReadFiles(ctx, app.Slug, "", "", []string{"db.py"})
+	if err != nil || !strings.Contains(string(files["db.py"]), "DATABASE_PATH") {
+		t.Fatalf("db.py is missing from a new app: %v", err)
+	}
+	if _, err := os.Stat(p.appDataPath(app.Slug)); err != nil {
+		t.Fatalf("the app's data file was not created: %v", err)
+	}
+	env, err := p.appEnv(ctx, app)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if env["DATABASE_PATH"] != p.appDataPath(app.Slug) || !strings.HasPrefix(env["DATABASE_URL"], "sqlite:///") {
+		t.Fatalf("data location given to the app: %q, %q", env["DATABASE_PATH"], env["DATABASE_URL"])
+	}
+	// The data goes away with the app, and a new app of the same name starts empty.
+	if err := p.DeleteApp(ctx, app.Slug); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(p.appDataPath(app.Slug)); !os.IsNotExist(err) {
+		t.Fatalf("the data file outlived the app: %v", err)
+	}
+}
+
+// The server and a command-line tool open the same records at the same time.
+func TestTwoProcessesShareTheRecords(t *testing.T) {
+	p := newTestPlatform(t)
+	ctx := context.Background()
+	second, err := Open(ctx, Config{DataDir: p.cfg.DataDir, PublicURL: "http://apps.test"}, zap.NewNop())
+	if err != nil {
+		t.Fatalf("opening the same data folder a second time: %v", err)
+	}
+	defer second.Close()
+	if err := second.AddUser(ctx, "ana", "a long enough password", true); err != nil {
+		t.Fatalf("AddUser through the second: %v", err)
+	}
+	users, err := p.Users(ctx)
+	if err != nil || len(users) != 1 || users[0].Username != "ana" {
+		t.Fatalf("the first does not see it: %v %v", users, err)
+	}
+}
+
+// An app written for another language is recognised, and the error tells the
+// assistant to rewrite it in Python.
+func TestOtherLanguageAppsAreRefusedWithAdvice(t *testing.T) {
+	dir := t.TempDir()
+	if got := otherLanguage(dir); got != "" {
+		t.Fatalf("an empty folder looks like %q", got)
+	}
+	for file, want := range map[string]string{"package.json": "a Node.js", "index.php": "a PHP", "Gemfile": "a Ruby", "go.mod": "a Go", "site.csproj": "a .NET"} {
+		sub := filepath.Join(dir, strings.ReplaceAll(file, ".", "-"))
+		if err := os.MkdirAll(sub, 0o750); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(sub, file), []byte("x"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if got := otherLanguage(sub); got != want {
+			t.Errorf("%s: otherLanguage = %q, want %q", file, got, want)
+		}
+	}
+
+	p := newTestPlatform(t)
+	ctx := context.Background()
+	app, _, err := p.CreateApp(ctx, "From Node", "", "ana")
+	if err != nil {
+		t.Fatal(err)
+	}
+	node := map[string][]byte{"main.py": nil, "requirements.txt": nil, "static/style.css": nil, "db.py": nil,
+		"package.json": []byte(`{"name": "x"}`), "server.js": []byte("require('http')")}
+	if _, err := p.SaveFiles(ctx, app.Slug, "", node, "a node app", "ana"); err != nil {
+		t.Fatal(err)
+	}
+	res, err := p.Publish(ctx, app.Slug, "", "ana")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.OK || !strings.Contains(res.Error, "Python apps only") || !strings.Contains(res.Error, "Rewrite it in Python") {
+		t.Fatalf("publish of a Node.js app: ok=%v error=%q", res.OK, res.Error)
 	}
 }

@@ -39,7 +39,7 @@ func registerCommand() {
 	caddycmd.RegisterCommand(caddycmd.Command{
 		Name: "python-apps",
 		Usage: "[--config <file>] [--listen <addr>] [--domain <example.com>] [--public-url <url>] " +
-			"[--data-dir <path>] [--database-url <url>] [--python-path <path>] " +
+			"[--data-dir <path>] [--python-path <path>] " +
 			"[--require-login] [--open-to-network] " +
 			"[--max-apps <count>] [--app-memory-limit <size>] " +
 			"[--debug] [--access-logs]",
@@ -47,7 +47,8 @@ func registerCommand() {
 		Long: `
 Runs a server where people, through their AI assistant, create small internal
 web apps, save versions of them and publish them. Each app is served at
-/<app-name>/ and gets its own Postgres database.
+/<app-name>/ and gets its own data file (SQLite); there is no database to
+install.
 
 Assistants connect to <public-url>/_apps/mcp (an MCP server). The same actions
 are available over HTTP at /_apps/api/tools and with "python-apps call".
@@ -59,9 +60,8 @@ is trusted, such as a private company network.
 
 Settings can also be kept in a file (see --config); flags override it.
 
-Postgres: unless --database-url is given, a private database is created in the
-data folder and started and stopped with the server. This needs the Postgres
-programs to be installed.
+Everything is kept in the data folder: each app's files, their history and
+their data. To back up, copy that folder.
 
 Subcommands:
   user add|remove|list|password   manage who can sign in
@@ -72,8 +72,7 @@ Subcommands:
 		CobraFunc: func(cmd *cobra.Command) {
 			pf := cmd.PersistentFlags()
 			pf.String("config", "", "Settings file (default: your own apps.toml, then the machine's; see the documentation)")
-			pf.String("data-dir", "", "Folder for app files, history and the built-in database (default ~/.caddysnake/apps)")
-			pf.String("database-url", "", "Use this existing Postgres server (postgresql://user:password@host:5432/db) in place of the built-in one")
+			pf.String("data-dir", "", "Folder for app files, their history and their data (default ~/.caddysnake/apps)")
 
 			f := cmd.Flags()
 			f.String("listen", "", "Address to listen on (default "+defaultListen+", or :443 with --domain)")
@@ -221,7 +220,7 @@ func configFromFlags(fs caddycmd.Flags) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
-	cfg := Config{DataDir: settings.DataDir, DatabaseURL: settings.DatabaseURL}
+	cfg := Config{DataDir: settings.DataDir}
 	return cfg, cfg.resolve()
 }
 

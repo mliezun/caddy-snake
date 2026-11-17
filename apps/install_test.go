@@ -16,7 +16,7 @@ import (
 func serverFlags(t *testing.T, args ...string) caddycmd.Flags {
 	t.Helper()
 	fs := pflag.NewFlagSet("python-apps", pflag.ContinueOnError)
-	for _, name := range []string{"config", "data-dir", "database-url", "listen", "domain", "public-url", "python-path", "max-apps", "log-file"} {
+	for _, name := range []string{"config", "data-dir", "listen", "domain", "public-url", "python-path", "max-apps", "log-file"} {
 		fs.String(name, "", "")
 	}
 	fs.String("app-memory-limit", defaultAppMemoryLimit, "")
@@ -561,9 +561,6 @@ func TestOperatingSystemDifferences(t *testing.T) {
 	}
 	if usablePython("linux", "/home/ana/python") || !usablePython("linux", "/usr/bin/python3") {
 		t.Error("usablePython on Linux")
-	}
-	if len(postgresBinPatterns("windows")) == 0 || !strings.Contains(postgresBinPatterns("windows")[0], "PostgreSQL") {
-		t.Error("no Windows Postgres locations")
 	}
 }
 

@@ -24,7 +24,7 @@ caddysnake --server-type asgi --app main:app
 
 ## Apps platform
 
-`caddysnake apps` runs a small platform where people build and share internal web apps through their own AI assistant: each app is served at `/<app-name>/` with its own Postgres database, versions, drafts and roll back. Apps list their packages in `requirements.txt` or `pyproject.toml`.
+`caddysnake apps` runs a small platform where people build and share internal web apps through their own AI assistant: each app is served at `/<app-name>/` with its own database (SQLite, nothing to install), versions, drafts and roll back. Apps list their packages in `requirements.txt` or `pyproject.toml`.
 
 ```bash
 caddysnake apps                         # http://localhost:9080, assistants connect to /_apps/mcp
@@ -33,7 +33,7 @@ caddysnake apps call list               # run a tool from the command line
 caddysnake apps install                 # run it as a service that starts by itself
 ```
 
-It needs the Postgres programs installed (it starts its own private database). See the [apps documentation](https://caddy-snake.readthedocs.io/en/latest/docs/apps).
+It needs nothing besides Python: each app's data is a file the server looks after. See the [apps documentation](https://caddy-snake.readthedocs.io/en/latest/docs/apps).
 
 ## CLI Options
 

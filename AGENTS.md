@@ -61,7 +61,7 @@ Rules for every workflow under `.github/workflows/` (maintainer, 2026-11-10: a n
 - **Small matrix on pull requests, full matrix on `main`.** The Linux integration tests take their Python versions and runners from `changes.yml`: two Pythons on one runner for pull requests, all of them on `main`.
 - **Go cache**: on (`cache: true`) in test-only workflows, off in workflows that build release files.
 - **Test the picking.** [`scripts/test_ci_changes.py`](scripts/test_ci_changes.py) runs the script of `changes.yml` against sample changes and checks which areas it turns on; Lint runs it. Add a case there when you add an area.
-- **Tests must really run.** CI runs `go test` with `-count=1` (never a cached result) and sets `CADDYSNAKE_REQUIRE_TESTS`, which turns "Postgres or Python is missing, skipping" into a failure.
+- **Tests must really run.** CI runs `go test` with `-count=1` (never a cached result) and sets `CADDYSNAKE_REQUIRE_TESTS`, which turns "Python is missing, skipping" into a failure.
 - **Builds on pull requests bundle two Pythons** (`build_pythons` in `changes.yml`): the Go program is the same for every Python version. `main` and releases build all of them. The Docker checks build the oldest and the newest.
 - **Go is compiled on Linux for every target.** The builds are pure Go (CGO off), so the release binaries for macOS and Windows are cross-compiled on Linux runners, which are faster and easier to get than macOS ones. The standalone workflow compiles the server once per target (`server` job) and bundles each Python with it afterwards; the one target the runner can run (`linux-amd64`) is smoke-tested with only the system folders on `PATH`, so it must use the Python it carries.
 - **One image build per Python version** in the Docker checks: the same image is checked for its interpreter and scanned.
@@ -131,28 +131,31 @@ CLI-only conveniences with no Caddyfile equivalent are fine: `--domain`, `--list
 
 ## The `apps` package
 
-[`apps/`](apps/) is the apps platform (`caddysnake apps` / `caddy python-apps`), documented for users in [`docs/docs/apps/`](docs/docs/apps/). It is a separate Go package on purpose: builds with only `--with github.com/mliezun/caddy-snake` must not pull in its dependencies (Postgres driver, go-git). Release artefacts (PyPI wheel, binaries, Docker image) add `--with github.com/mliezun/caddy-snake/apps`.
+[`apps/`](apps/) is the apps platform (`caddysnake apps` / `caddy python-apps`), documented for users in [`docs/docs/apps/`](docs/docs/apps/). It is a separate Go package on purpose: builds with only `--with github.com/mliezun/caddy-snake` must not pull in its dependencies (the SQLite driver, go-git). Release artefacts (PyPI wheel, binaries, Docker image) add `--with github.com/mliezun/caddy-snake/apps`.
 
 | File | What it holds |
 |------|---------------|
 | `platform.go`, `publish.go`, `drafts.go` | App lifecycle: create, save, publish, roll back, drafts, settings |
-| `postgres.go`, `store.go`, `db/` | The built-in database, records, and all SQL (see below) |
+| `sqlite.go`, `store.go`, `db/` | Where data is kept (SQLite files), the platform's records, and all SQL (see below) |
 | `repo.go` | Version storage (git, written with go-git) |
 | `tools.go` | The tools — one implementation shared by MCP, the HTTP API and `call` |
 | `mcp.go`, `http.go`, `githttp.go`, `auth.go` | MCP endpoint, the Caddy handler `python_apps`, git remote, logins |
 | `pages.go`, `dashboard.go`, `manage.go` | Page markup and styles, page handlers, and the people and access-key actions |
 | `command.go`, `config.go`, `install.go` | The `python-apps` command and the Caddy config it builds, the settings file, and installing as a service (systemd on Linux, launchd on macOS, the service manager on Windows) |
-| `os.go`, `admin_*.go` | What differs between operating systems: program names, the Python inside an app's environment, where Postgres is, and the `current` link (a symbolic link, a junction on Windows) |
+| `os.go`, `admin_*.go` | What differs between operating systems: program names, the Python inside an app's environment, and the `current` link (a symbolic link, a junction on Windows) |
 | `guide.go` | The instructions given to AI assistants, and the starter app |
 
 Rules that are easy to break:
 
+- **Data is SQLite, one file per app** (maintainer, 2026-11-17: SQLite is better than shipping Postgres). The platform's records are in `<data>/platform.db`, each app's data in `<data>/apps/<slug>/data/app.db`. There is nothing to install, start or stop, a draft's copy of the data is `VACUUM INTO`, and a backup is a copy of the data folder. The driver is `modernc.org/sqlite` because it is pure Go: every build here has CGO off. Do not add a second database engine or an option to point at an outside database; an app that outgrows SQLite has outgrown this platform.
+- **Apps get their data without thinking about it.** Every new app starts with `db.py` (in `guide.go`), which opens the file named by `DATABASE_PATH` with Python's own `sqlite3`, so apps need no database package. Keep it working when you change how data files are opened (`sqliteDSN`).
+- **Python only, and say so.** The guide tells assistants to rewrite an app that arrives in another language, and publishing a version with no `main.py` but with the files of another language (`otherLanguage` in `publish.go`) says the same. Keep the two in step.
 - **App packages** come from `pyproject.toml` (installed with `uv sync`, following a `uv.lock` exactly) or `requirements.txt`; with both, `pyproject.toml` wins. Plain HTML without a build step is what the guide recommends to assistants, not a rule the platform enforces.
 - **Plain language.** The audience is people who do not program. Anything they or their assistant may read — tool descriptions, errors, pages, the guide — says app, version, draft, publish, settings; not repository, commit, branch, deploy, environment variable.
 - **Page design** (maintainer, 2026-11-10, in his words: "it needs to feel like a rock, super solid software"; "reduce the amount of slop text, avoid too many explanations"; "for inspiration look at corporate pages like oracle or aws"; "modernize the style, current trend is liquid glass"). In `pages.go` that means: the *structure* of an enterprise console (global bar, side navigation, panels with a title, a count and actions, filterable tables, a details grid, tabs, dialogs) in a *liquid glass* material (translucent blurred chrome with a bright top edge, capsule controls, floating over a soft ambient background). Glass is for the chrome; panels that hold text stay near-opaque, and the solid fallbacks for reduced transparency stay. Copy is labels and data: no lead paragraphs, no inline tutorials, one short line at most for an empty state or a dialog. No separate breadcrumb bar under the main bar.
 - **No accent bars** (maintainer, 2026-11-10: a coloured vertical bar marking the selected item "gives me vibe-coded sensation"). Never mark a selected item, an alert, a card or a notice with a thick coloured stripe along one edge. Show selection with the weight and colour of the text.
 - **Settings and install are cautious by design.** Flags override the settings file; a file that is unreadable or has unknown names is an error, never skipped; `install` never overwrites an existing settings file, supports `--dry-run`, and `uninstall` keeps settings and data unless `--purge`. Every new server flag also needs a `Settings` field (`config.go`) and a row in the docs table.
-- **Windows runs it too.** Keep operating-system differences in `os.go` behind functions that take `goos`, so they are tested on any machine. Windows cannot replace a running program, cannot rename over a folder, keeps a pipe open in programs left running (see `runDetached`), and names its accounts differently per language (use the fixed identifiers in `install.go`).
+- **Windows runs it too.** Keep operating-system differences in `os.go` behind functions that take `goos`, so they are tested on any machine. Windows cannot replace a running program, cannot rename over a folder, cannot delete a file that is open (close every data file you open; see `removeAll`), and names its accounts differently per language (use the fixed identifiers in `install.go`).
 - **go-git 6 is a beta** (`v6.0.0-beta.1`). Version 5 has known problems that are only fixed in 6, so we moved early; only `apps/repo.go` uses it. Move to the stable 6.0 when it is out. Snyk reports five go-git problems that no release fixes; the maintainer accepted them (2026-11-10) and they are recorded in [`.snyk`](.snyk) with the reasons and an expiry date of 2027-02-10. When they expire, look for a fixed release first; renew only if the reasons still hold.
 - **Workers run from the real release folder, not from `current`.** The plugin follows the link when it starts a worker (`pinPath`), and throws a start away if the link moved meanwhile, so no worker ever mixes two versions.
 - **A failed publish must leave the running version untouched**, and say what went wrong in a way an assistant can act on.
@@ -167,10 +170,10 @@ The `apps/` package keeps **no SQL in Go**. Schema and queries are plain files u
 |-----------|----------|
 | `apps/db/bootstrap/` | Idempotent bookkeeping applied on every start |
 | `apps/db/migrations/` | The platform's schema, one numbered file per change. Never edit a released file — add a new one |
-| `apps/db/queries/` | Queries on the platform database → generated into `apps/db/dbgen/` |
-| `apps/db/appdb/` | Schema and queries that run inside each app's own database → `apps/db/appdb/appdbgen/` |
+| `apps/db/queries/` | Queries on the platform's records → generated into `apps/db/dbgen/` |
+| `apps/db/appdb/` | Schema and queries that run inside each app's own data file → `apps/db/appdb/appdbgen/` |
 
-**Column types** (maintainer, 2026-11-10): give every text column the narrowest type that fits what it holds, for example `char(64)` for a SHA-256 in hex, `varchar(40)` for a username, `varchar(200)` for a file name. Do not reach for `text` by default; use it only for values that can really be large (a traceback, a pasted certificate), and say so in a comment. Enforce the same limit in Go before the value reaches the database, so people get a plain message and not a database error. This applies to the platform's own tables and to any SQL we write for examples and starter apps.
+**Column types** (maintainer, 2026-11-10): give every text column the narrowest type that fits what it holds, for example `varchar(64)` for a SHA-256 in hex, `varchar(40)` for a username, `varchar(200)` for a file name. Do not reach for `text` by default; use it only for values that can really be large (a traceback, a pasted certificate), and say so in a comment. Enforce the same limit in Go before the value reaches the database, so people get a plain message and not a database error. This applies to the platform's own tables and to any SQL we write for examples and starter apps.
 
 After changing a migration or a query, regenerate and commit the result (never edit the generated packages by hand):
 
@@ -178,9 +181,16 @@ After changing a migration or a query, regenerate and commit the result (never e
 cd apps && go run github.com/sqlc-dev/sqlc/cmd/sqlc@v1.30.0 generate
 ```
 
-The only SQL built in Go is what cannot be a parameterised query: `CREATE`/`ALTER`/`DROP` of each app's role and database in `apps/postgres.go` (identifiers come from validated slugs), and the statements people's own apps supply.
+The only SQL in Go is what cannot be written in those files: `VACUUM INTO ?` in `apps/sqlite.go` (it takes a file name), and the statements people's own apps supply.
 
-The tests in `apps/` start a real Postgres from the locally installed programs and skip when Postgres or `python3` is missing (`go test -short` skips them too).
+SQLite specifics that are easy to get wrong:
+
+- **Lengths are not enforced by the type.** `varchar(40)` documents the limit and gives sqlc the Go type; a `CHECK (length(col) <= 40)` next to it is what enforces it. Write both.
+- **Times are whole seconds since 1970**, in `integer` columns, always passed in from Go (`now()`, `unix()` in the `apps` package). Do not use SQL functions such as `datetime('now')` in queries: comparing times as numbers is the one form that cannot go wrong.
+- **Schema changes roll back like any other change**, so all pending migrations run in one transaction.
+- **`char(n)` makes sqlc generate `interface{}`**; use `varchar(n)` with a `CHECK (length(col) = n)` for fixed-length values.
+
+The tests in `apps/` build real Python environments and skip when Python is missing (`go test -short` skips them too).
 
 ---
 

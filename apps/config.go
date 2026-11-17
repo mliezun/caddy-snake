@@ -47,7 +47,6 @@ type Settings struct {
 	Domain        string `toml:"domain,omitempty"`
 	PublicURL     string `toml:"public_url,omitempty"`
 	DataDir       string `toml:"data_dir,omitempty"`
-	DatabaseURL   string `toml:"database_url,omitempty"`
 	PythonPath    string `toml:"python_path,omitempty"`
 	RequireLogin  bool   `toml:"require_login"`
 	OpenToNetwork bool   `toml:"open_to_network,omitempty"`
@@ -170,7 +169,7 @@ func settingsFromFlags(fs caddycmd.Flags) (Settings, string, error) {
 	given := func(name string) bool { return fs.Lookup(name) != nil && fs.Changed(name) }
 	text := map[string]*string{
 		"listen": &s.Listen, "domain": &s.Domain, "public-url": &s.PublicURL, "data-dir": &s.DataDir,
-		"database-url": &s.DatabaseURL, "python-path": &s.PythonPath, "log-file": &s.LogFile,
+		"python-path": &s.PythonPath, "log-file": &s.LogFile,
 	}
 	for name, target := range text {
 		if given(name) {
@@ -210,7 +209,7 @@ var errOpenToEveryone = errors.New(
 // serverConfig applies defaults and safety checks and returns what the server
 // runs with.
 func (s Settings) serverConfig() (ServerConfig, error) {
-	cfg := Config{DataDir: s.DataDir, DatabaseURL: s.DatabaseURL, PythonBin: s.PythonPath, RequireLogin: s.RequireLogin}
+	cfg := Config{DataDir: s.DataDir, PythonBin: s.PythonPath, RequireLogin: s.RequireLogin}
 	if err := cfg.resolve(); err != nil {
 		return ServerConfig{}, err
 	}

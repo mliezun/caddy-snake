@@ -1,6 +1,6 @@
 // Package apps turns caddy-snake into a small platform for internal apps:
 // people (through their AI agents) create an app, save versions of its files,
-// and publish it; each app is served at /<app>/ with its own Postgres database.
+// and publish it; each app is served at /<app>/ with its own data file.
 package apps
 
 import (
@@ -94,9 +94,4 @@ func ValidateServingSlug(slug string) error {
 		return validSlugPart(draft, maxDraftSlugLen, "draft")
 	}
 	return nil
-}
-
-// dbName is the Postgres database (and role) name for a serving slug.
-func dbName(slug string) string {
-	return "app_" + strings.ReplaceAll(slug, "-", "_")
 }

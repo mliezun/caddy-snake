@@ -9,7 +9,7 @@ asked their assistant for.
     python3 scripts/record_demo.py /tmp/caddysnake docs/static/img/apps-demo.gif
 
 Needs Chrome (set CHROME to its path if it is not the macOS default), ffmpeg,
-the Postgres programs and network access (the app installs Flask). Working
+and network access (the app installs Flask). Working
 files go to a temporary folder.
 """
 
@@ -33,9 +33,7 @@ W, H = 1120, 700
 FRAMES = os.path.join(HERE, "frames")
 DATA = os.path.join(HERE, "data")
 
-MAIN_V2 = '''import os
-
-import psycopg
+MAIN_V2 = '''from db import db
 from flask import Flask, redirect, render_template_string, request, url_for
 
 app = Flask(__name__)
@@ -66,10 +64,6 @@ __EXTRA_INPUT__
 </html>"""
 
 
-def db():
-    return psycopg.connect(os.environ["DATABASE_URL"])
-
-
 @app.get("/")
 def index():
     with db() as conn:
@@ -92,7 +86,7 @@ V2 = (
         "__ADD__",
         '    name, dish = request.form["name"][:60], request.form["dish"][:80]\n'
         "    with db() as conn:\n"
-        '        conn.execute("insert into signups (name, dish) values (%s, %s)", (name, dish))',
+        '        conn.execute("insert into signups (name, dish) values (?, ?)", (name, dish))',
     )
 )
 V3 = (
@@ -107,7 +101,7 @@ V3 = (
         "__ADD__",
         '    name, dish, diet = request.form["name"][:60], request.form["dish"][:80], request.form.get("diet", "")[:20]\n'
         "    with db() as conn:\n"
-        '        conn.execute("insert into signups (name, dish, diet) values (%s, %s, %s)", (name, dish, diet))',
+        '        conn.execute("insert into signups (name, dish, diet) values (?, ?, ?)", (name, dish, diet))',
     )
 )
 
@@ -124,8 +118,12 @@ td { padding: 12px 6px; border-bottom: 1px solid #eef1f5; font-size: 15px; }
 .tag { background: #e7f5ec; color: #17633a; padding: 3px 10px; border-radius: 999px; font-size: 13px; }
 """
 
-MIG1 = "create table signups (\n    id serial primary key,\n    name varchar(60) not null,\n    dish varchar(80) not null\n);\n"
-MIG2 = "alter table signups add column diet varchar(20) not null default '';\n"
+MIG1 = (
+    "create table signups (\n    id integer primary key,\n"
+    "    name varchar(60) not null check (length(name) <= 60),\n"
+    "    dish varchar(80) not null check (length(dish) <= 80)\n);\n"
+)
+MIG2 = "alter table signups add column diet varchar(20) not null default '' check (length(diet) <= 20);\n"
 
 
 def tool(name, args):
@@ -250,7 +248,7 @@ try:
             "files": {
                 "main.py": V2,
                 "static/style.css": CSS,
-                "requirements.txt": "flask\npsycopg[binary]\n",
+                "requirements.txt": "flask\n",
                 "migrations/001_signups.sql": MIG1,
             },
         },

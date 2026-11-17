@@ -14,7 +14,7 @@ const listAppliedAppMigrations = `-- name: ListAppliedAppMigrations :many
 SELECT name FROM caddysnake_migrations ORDER BY name
 `
 
-// Run against an app's own database (not the platform's).
+// Run against an app's own data file (not the platform's).
 func (q *Queries) ListAppliedAppMigrations(ctx context.Context) ([]string, error) {
 	rows, err := q.db.QueryContext(ctx, listAppliedAppMigrations)
 	if err != nil {
@@ -39,10 +39,15 @@ func (q *Queries) ListAppliedAppMigrations(ctx context.Context) ([]string, error
 }
 
 const recordAppMigration = `-- name: RecordAppMigration :exec
-INSERT INTO caddysnake_migrations (name) VALUES ($1)
+INSERT INTO caddysnake_migrations (name, applied_at) VALUES (?1, ?2)
 `
 
-func (q *Queries) RecordAppMigration(ctx context.Context, name string) error {
-	_, err := q.db.ExecContext(ctx, recordAppMigration, name)
+type RecordAppMigrationParams struct {
+	Name      string
+	AppliedAt int64
+}
+
+func (q *Queries) RecordAppMigration(ctx context.Context, arg RecordAppMigrationParams) error {
+	_, err := q.db.ExecContext(ctx, recordAppMigration, arg.Name, arg.AppliedAt)
 	return err
 }

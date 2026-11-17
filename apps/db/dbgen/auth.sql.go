@@ -8,11 +8,10 @@ package dbgen
 import (
 	"context"
 	"database/sql"
-	"time"
 )
 
 const countAdmins = `-- name: CountAdmins :one
-SELECT count(*) FROM caddysnake_apps.users WHERE is_admin
+SELECT count(*) FROM users WHERE is_admin
 `
 
 func (q *Queries) CountAdmins(ctx context.Context) (int64, error) {
@@ -23,7 +22,7 @@ func (q *Queries) CountAdmins(ctx context.Context) (int64, error) {
 }
 
 const countUsers = `-- name: CountUsers :one
-SELECT count(*) FROM caddysnake_apps.users
+SELECT count(*) FROM users
 `
 
 func (q *Queries) CountUsers(ctx context.Context) (int64, error) {
@@ -34,28 +33,36 @@ func (q *Queries) CountUsers(ctx context.Context) (int64, error) {
 }
 
 const createAccessKey = `-- name: CreateAccessKey :exec
-INSERT INTO caddysnake_apps.access_keys (token_hash, username, name) VALUES ($1, $2, $3)
+INSERT INTO access_keys (token_hash, username, name, created_at)
+VALUES (?1, ?2, ?3, ?4)
 `
 
 type CreateAccessKeyParams struct {
 	TokenHash string
 	Username  string
 	Name      string
+	Now       int64
 }
 
 func (q *Queries) CreateAccessKey(ctx context.Context, arg CreateAccessKeyParams) error {
-	_, err := q.db.ExecContext(ctx, createAccessKey, arg.TokenHash, arg.Username, arg.Name)
+	_, err := q.db.ExecContext(ctx, createAccessKey,
+		arg.TokenHash,
+		arg.Username,
+		arg.Name,
+		arg.Now,
+	)
 	return err
 }
 
 const createSession = `-- name: CreateSession :exec
-INSERT INTO caddysnake_apps.sessions (token_hash, username, expires_at) VALUES ($1, $2, $3)
+INSERT INTO sessions (token_hash, username, expires_at)
+VALUES (?1, ?2, ?3)
 `
 
 type CreateSessionParams struct {
 	TokenHash string
 	Username  string
-	ExpiresAt time.Time
+	ExpiresAt int64
 }
 
 func (q *Queries) CreateSession(ctx context.Context, arg CreateSessionParams) error {
@@ -64,22 +71,31 @@ func (q *Queries) CreateSession(ctx context.Context, arg CreateSessionParams) er
 }
 
 const createUser = `-- name: CreateUser :exec
-INSERT INTO caddysnake_apps.users (username, password_hash, is_admin) VALUES ($1, $2, $3)
+
+INSERT INTO users (username, password_hash, is_admin, created_at)
+VALUES (?1, ?2, ?3, ?4)
 `
 
 type CreateUserParams struct {
 	Username     string
 	PasswordHash string
 	IsAdmin      bool
+	Now          int64
 }
 
+// Times are whole seconds since 1970 (UTC), passed in by the Go code.
 func (q *Queries) CreateUser(ctx context.Context, arg CreateUserParams) error {
-	_, err := q.db.ExecContext(ctx, createUser, arg.Username, arg.PasswordHash, arg.IsAdmin)
+	_, err := q.db.ExecContext(ctx, createUser,
+		arg.Username,
+		arg.PasswordHash,
+		arg.IsAdmin,
+		arg.Now,
+	)
 	return err
 }
 
 const deleteAccessKeysByName = `-- name: DeleteAccessKeysByName :execrows
-DELETE FROM caddysnake_apps.access_keys WHERE username = $1 AND name = $2
+DELETE FROM access_keys WHERE username = ?1 AND name = ?2
 `
 
 type DeleteAccessKeysByNameParams struct {
@@ -96,16 +112,16 @@ func (q *Queries) DeleteAccessKeysByName(ctx context.Context, arg DeleteAccessKe
 }
 
 const deleteExpiredSessions = `-- name: DeleteExpiredSessions :exec
-DELETE FROM caddysnake_apps.sessions WHERE expires_at <= now()
+DELETE FROM sessions WHERE expires_at <= ?1
 `
 
-func (q *Queries) DeleteExpiredSessions(ctx context.Context) error {
-	_, err := q.db.ExecContext(ctx, deleteExpiredSessions)
+func (q *Queries) DeleteExpiredSessions(ctx context.Context, now int64) error {
+	_, err := q.db.ExecContext(ctx, deleteExpiredSessions, now)
 	return err
 }
 
 const deleteSession = `-- name: DeleteSession :exec
-DELETE FROM caddysnake_apps.sessions WHERE token_hash = $1
+DELETE FROM sessions WHERE token_hash = ?1
 `
 
 func (q *Queries) DeleteSession(ctx context.Context, tokenHash string) error {
@@ -114,7 +130,7 @@ func (q *Queries) DeleteSession(ctx context.Context, tokenHash string) error {
 }
 
 const deleteUser = `-- name: DeleteUser :execrows
-DELETE FROM caddysnake_apps.users WHERE username = $1
+DELETE FROM users WHERE username = ?1
 `
 
 func (q *Queries) DeleteUser(ctx context.Context, username string) (int64, error) {
@@ -126,7 +142,7 @@ func (q *Queries) DeleteUser(ctx context.Context, username string) (int64, error
 }
 
 const deleteUserSessions = `-- name: DeleteUserSessions :exec
-DELETE FROM caddysnake_apps.sessions WHERE username = $1
+DELETE FROM sessions WHERE username = ?1
 `
 
 func (q *Queries) DeleteUserSessions(ctx context.Context, username string) error {
@@ -136,9 +152,9 @@ func (q *Queries) DeleteUserSessions(ctx context.Context, username string) error
 
 const getAccessKeyUser = `-- name: GetAccessKeyUser :one
 SELECT u.username, u.is_admin
-FROM caddysnake_apps.access_keys AS k
-JOIN caddysnake_apps.users AS u ON u.username = k.username
-WHERE k.token_hash = $1
+FROM access_keys AS k
+JOIN users AS u ON u.username = k.username
+WHERE k.token_hash = ?1
 `
 
 type GetAccessKeyUserRow struct {
@@ -155,30 +171,35 @@ func (q *Queries) GetAccessKeyUser(ctx context.Context, tokenHash string) (GetAc
 
 const getSessionUser = `-- name: GetSessionUser :one
 SELECT u.username, u.is_admin
-FROM caddysnake_apps.sessions AS s
-JOIN caddysnake_apps.users AS u ON u.username = s.username
-WHERE s.token_hash = $1 AND s.expires_at > now()
+FROM sessions AS s
+JOIN users AS u ON u.username = s.username
+WHERE s.token_hash = ?1 AND s.expires_at > ?2
 `
+
+type GetSessionUserParams struct {
+	TokenHash string
+	Now       int64
+}
 
 type GetSessionUserRow struct {
 	Username string
 	IsAdmin  bool
 }
 
-func (q *Queries) GetSessionUser(ctx context.Context, tokenHash string) (GetSessionUserRow, error) {
-	row := q.db.QueryRowContext(ctx, getSessionUser, tokenHash)
+func (q *Queries) GetSessionUser(ctx context.Context, arg GetSessionUserParams) (GetSessionUserRow, error) {
+	row := q.db.QueryRowContext(ctx, getSessionUser, arg.TokenHash, arg.Now)
 	var i GetSessionUserRow
 	err := row.Scan(&i.Username, &i.IsAdmin)
 	return i, err
 }
 
 const getUser = `-- name: GetUser :one
-SELECT username, password_hash, is_admin, created_at FROM caddysnake_apps.users WHERE username = $1
+SELECT username, password_hash, is_admin, created_at FROM users WHERE username = ?1
 `
 
-func (q *Queries) GetUser(ctx context.Context, username string) (CaddysnakeAppsUser, error) {
+func (q *Queries) GetUser(ctx context.Context, username string) (User, error) {
 	row := q.db.QueryRowContext(ctx, getUser, username)
-	var i CaddysnakeAppsUser
+	var i User
 	err := row.Scan(
 		&i.Username,
 		&i.PasswordHash,
@@ -189,13 +210,13 @@ func (q *Queries) GetUser(ctx context.Context, username string) (CaddysnakeAppsU
 }
 
 const listAccessKeys = `-- name: ListAccessKeys :many
-SELECT name, created_at, last_used_at FROM caddysnake_apps.access_keys WHERE username = $1 ORDER BY created_at
+SELECT name, created_at, last_used_at FROM access_keys WHERE username = ?1 ORDER BY created_at
 `
 
 type ListAccessKeysRow struct {
 	Name       string
-	CreatedAt  time.Time
-	LastUsedAt sql.NullTime
+	CreatedAt  int64
+	LastUsedAt sql.NullInt64
 }
 
 func (q *Queries) ListAccessKeys(ctx context.Context, username string) ([]ListAccessKeysRow, error) {
@@ -222,13 +243,13 @@ func (q *Queries) ListAccessKeys(ctx context.Context, username string) ([]ListAc
 }
 
 const listUsers = `-- name: ListUsers :many
-SELECT username, is_admin, created_at FROM caddysnake_apps.users ORDER BY username
+SELECT username, is_admin, created_at FROM users ORDER BY username
 `
 
 type ListUsersRow struct {
 	Username  string
 	IsAdmin   bool
-	CreatedAt time.Time
+	CreatedAt int64
 }
 
 func (q *Queries) ListUsers(ctx context.Context) ([]ListUsersRow, error) {
@@ -255,16 +276,16 @@ func (q *Queries) ListUsers(ctx context.Context) ([]ListUsersRow, error) {
 }
 
 const setUserPassword = `-- name: SetUserPassword :execrows
-UPDATE caddysnake_apps.users SET password_hash = $2 WHERE username = $1
+UPDATE users SET password_hash = ?1 WHERE username = ?2
 `
 
 type SetUserPasswordParams struct {
-	Username     string
 	PasswordHash string
+	Username     string
 }
 
 func (q *Queries) SetUserPassword(ctx context.Context, arg SetUserPasswordParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, setUserPassword, arg.Username, arg.PasswordHash)
+	result, err := q.db.ExecContext(ctx, setUserPassword, arg.PasswordHash, arg.Username)
 	if err != nil {
 		return 0, err
 	}
@@ -272,10 +293,15 @@ func (q *Queries) SetUserPassword(ctx context.Context, arg SetUserPasswordParams
 }
 
 const touchAccessKey = `-- name: TouchAccessKey :exec
-UPDATE caddysnake_apps.access_keys SET last_used_at = now() WHERE token_hash = $1
+UPDATE access_keys SET last_used_at = ?1 WHERE token_hash = ?2
 `
 
-func (q *Queries) TouchAccessKey(ctx context.Context, tokenHash string) error {
-	_, err := q.db.ExecContext(ctx, touchAccessKey, tokenHash)
+type TouchAccessKeyParams struct {
+	Now       sql.NullInt64
+	TokenHash string
+}
+
+func (q *Queries) TouchAccessKey(ctx context.Context, arg TouchAccessKeyParams) error {
+	_, err := q.db.ExecContext(ctx, touchAccessKey, arg.Now, arg.TokenHash)
 	return err
 }

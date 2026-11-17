@@ -113,7 +113,7 @@ func (p *Platform) AddUser(ctx context.Context, username, password string, admin
 	} else if !errors.Is(err, sql.ErrNoRows) {
 		return err
 	}
-	return p.store.q.CreateUser(ctx, dbgen.CreateUserParams{Username: username, PasswordHash: hashPassword(password), IsAdmin: admin})
+	return p.store.q.CreateUser(ctx, dbgen.CreateUserParams{Username: username, PasswordHash: hashPassword(password), IsAdmin: admin, Now: now()})
 }
 
 // SetPassword changes a person's password and signs them out everywhere.
@@ -171,7 +171,7 @@ func (p *Platform) Login(ctx context.Context, username, password string) (token 
 	}
 	token = newToken("")
 	expires = time.Now().Add(sessionLifetime)
-	err = p.store.q.CreateSession(ctx, dbgen.CreateSessionParams{TokenHash: hashToken(token), Username: user.Username, ExpiresAt: expires})
+	err = p.store.q.CreateSession(ctx, dbgen.CreateSessionParams{TokenHash: hashToken(token), Username: user.Username, ExpiresAt: unix(expires)})
 	return token, expires, err
 }
 
@@ -185,7 +185,7 @@ func (p *Platform) SessionIdentity(ctx context.Context, token string) *Identity 
 	if token == "" {
 		return nil
 	}
-	row, err := p.store.q.GetSessionUser(ctx, hashToken(token))
+	row, err := p.store.q.GetSessionUser(ctx, dbgen.GetSessionUserParams{TokenHash: hashToken(token), Now: now()})
 	if err != nil {
 		return nil
 	}
@@ -205,7 +205,7 @@ func (p *Platform) CreateAccessKey(ctx context.Context, username, name string) (
 		return "", err
 	}
 	key := newToken(accessKeyPrefix)
-	err := p.store.q.CreateAccessKey(ctx, dbgen.CreateAccessKeyParams{TokenHash: hashToken(key), Username: username, Name: name})
+	err := p.store.q.CreateAccessKey(ctx, dbgen.CreateAccessKeyParams{TokenHash: hashToken(key), Username: username, Name: name, Now: now()})
 	return key, err
 }
 
@@ -224,9 +224,9 @@ func (p *Platform) AccessKeys(ctx context.Context, username string) ([]AccessKey
 	}
 	out := make([]AccessKey, 0, len(rows))
 	for _, row := range rows {
-		k := AccessKey{Name: row.Name, CreatedAt: row.CreatedAt}
+		k := AccessKey{Name: row.Name, CreatedAt: fromUnix(row.CreatedAt)}
 		if row.LastUsedAt.Valid {
-			t := row.LastUsedAt.Time
+			t := fromUnix(row.LastUsedAt.Int64)
 			k.LastUsed = &t
 		}
 		out = append(out, k)
@@ -254,6 +254,6 @@ func (p *Platform) KeyIdentity(ctx context.Context, key string) *Identity {
 	if err != nil {
 		return nil
 	}
-	_ = p.store.q.TouchAccessKey(ctx, hash)
+	_ = p.store.q.TouchAccessKey(ctx, dbgen.TouchAccessKeyParams{TokenHash: hash, Now: sql.NullInt64{Int64: now(), Valid: true}})
 	return &Identity{Username: row.Username, Admin: row.IsAdmin}
 }

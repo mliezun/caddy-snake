@@ -6,60 +6,58 @@ package dbgen
 
 import (
 	"database/sql"
-	"time"
 )
 
-type CaddysnakeAppsAccessKey struct {
+type AccessKey struct {
 	TokenHash  string
 	Username   string
 	Name       string
-	CreatedAt  time.Time
-	LastUsedAt sql.NullTime
+	CreatedAt  int64
+	LastUsedAt sql.NullInt64
 }
 
-type CaddysnakeAppsApp struct {
+type App struct {
 	Slug        string
 	Parent      sql.NullString
 	Name        string
 	Description string
-	DatabaseUrl string
 	LiveVersion string
 	CreatedBy   string
-	CreatedAt   time.Time
-	PublishedAt sql.NullTime
-	LastUsedAt  time.Time
+	CreatedAt   int64
+	PublishedAt sql.NullInt64
+	LastUsedAt  int64
 }
 
-type CaddysnakeAppsPublish struct {
+type Publish struct {
 	ID          int64
 	Slug        string
 	Version     string
 	PublishedBy string
-	PublishedAt time.Time
+	PublishedAt int64
 	Ok          bool
 	Detail      string
 }
 
-type CaddysnakeAppsSchemaMigration struct {
+type SchemaMigration struct {
 	Name      string
-	AppliedAt time.Time
+	AppliedAt int64
 }
 
-type CaddysnakeAppsSession struct {
+type Session struct {
 	TokenHash string
 	Username  string
-	ExpiresAt time.Time
+	ExpiresAt int64
 }
 
-type CaddysnakeAppsSetting struct {
+type Setting struct {
 	Slug  string
 	Key   string
 	Value string
 }
 
-type CaddysnakeAppsUser struct {
+type User struct {
 	Username     string
 	PasswordHash string
 	IsAdmin      bool
-	CreatedAt    time.Time
+	CreatedAt    int64
 }

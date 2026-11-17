@@ -2,6 +2,7 @@ package apps
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"os"
@@ -22,9 +23,6 @@ import (
 type Config struct {
 	// DataDir holds app files, version history and (by default) the database.
 	DataDir string `json:"data_dir,omitempty"`
-	// DatabaseURL points at an existing Postgres server. Empty means: start and
-	// manage a private one inside DataDir.
-	DatabaseURL string `json:"database_url,omitempty"`
 	// PythonBin is the interpreter used to build each app's environment.
 	PythonBin string `json:"python_bin,omitempty"`
 	// PublicURL is the address people use to reach the server, for links.
@@ -88,7 +86,7 @@ func (c *Config) resolve() error {
 type Platform struct {
 	cfg    Config
 	logger *zap.Logger
-	pg     *postgres
+	conn   *sql.DB // the platform's own records
 	store  *store
 	logs   *logBook
 
@@ -113,21 +111,15 @@ func Open(ctx context.Context, cfg Config, logger *zap.Logger) (*Platform, error
 	if err := cfg.resolve(); err != nil {
 		return nil, err
 	}
-	var pg *postgres
-	var err error
-	if cfg.DatabaseURL == "" {
-		pg, err = startManagedPostgres(ctx, cfg.DataDir, logger)
-	} else {
-		pg, err = connectPostgres(ctx, cfg.DatabaseURL, logger)
-	}
+	conn, err := openSQLite(ctx, filepath.Join(cfg.DataDir, platformDBName))
 	if err != nil {
 		return nil, err
 	}
 	p := &Platform{
 		cfg:     cfg,
 		logger:  logger,
-		pg:      pg,
-		store:   newStore(pg.admin),
+		conn:    conn,
+		store:   newStore(conn),
 		logs:    newLogBook(500),
 		locks:   map[string]*sync.Mutex{},
 		known:   map[string]bool{},
@@ -135,12 +127,12 @@ func Open(ctx context.Context, cfg Config, logger *zap.Logger) (*Platform, error
 		stop:    make(chan struct{}),
 	}
 	if err := p.store.migrate(ctx); err != nil {
-		pg.Close()
+		conn.Close()
 		return nil, fmt.Errorf("preparing the platform's tables: %w", err)
 	}
 	all, err := p.store.ListAll(ctx)
 	if err != nil {
-		pg.Close()
+		conn.Close()
 		return nil, err
 	}
 	for _, a := range all {
@@ -152,7 +144,7 @@ func Open(ctx context.Context, cfg Config, logger *zap.Logger) (*Platform, error
 	return p, nil
 }
 
-// Close stops background jobs and the built-in database.
+// Close stops background jobs and closes the platform's records.
 func (p *Platform) Close() {
 	p.stopOnce.Do(func() {
 		close(p.stop)
@@ -161,7 +153,7 @@ func (p *Platform) Close() {
 			p.stopObserve()
 		}
 		p.flushTouched(context.Background())
-		p.pg.Close()
+		_ = p.conn.Close()
 	})
 }
 
@@ -314,7 +306,7 @@ var settingKeyRE = regexp.MustCompile(`^[A-Z][A-Z0-9_]*$`)
 
 // builtinSettingKeys are provided by the platform and cannot be overridden.
 var builtinSettingKeys = map[string]bool{
-	"DATABASE_URL": true, "APP_SLUG": true, "APP_NAME": true, "APP_BASE_PATH": true,
+	"DATABASE_URL": true, "DATABASE_PATH": true, "APP_SLUG": true, "APP_NAME": true, "APP_BASE_PATH": true,
 	"APP_URL": true, "APP_IS_DRAFT": true, "PYTHONUNBUFFERED": true,
 }
 
@@ -344,7 +336,11 @@ func (p *Platform) appEnv(ctx context.Context, a *App) (map[string]string, error
 	if err != nil {
 		return nil, err
 	}
-	env["DATABASE_URL"] = a.DatabaseURL
+	// The app's data: one SQLite file. DATABASE_PATH is what Python's sqlite3
+	// wants; DATABASE_URL is the same file for libraries that take a URL.
+	dataPath := p.appDataPath(a.Slug)
+	env["DATABASE_PATH"] = dataPath
+	env["DATABASE_URL"] = "sqlite:///" + filepath.ToSlash(dataPath)
 	env["APP_SLUG"] = a.Slug
 	env["APP_NAME"] = a.Name
 	env["APP_BASE_PATH"] = "/" + a.Slug
@@ -461,17 +457,19 @@ func (p *Platform) CreateApp(ctx context.Context, name, description, by string) 
 	} else if !errors.Is(err, errNotFound) {
 		return nil, nil, err
 	}
-	dbURL, err := p.pg.CreateAppDatabase(ctx, slug)
-	if err != nil {
-		return nil, nil, err
-	}
-	a := &App{Slug: slug, Name: strings.TrimSpace(name), Description: description, DatabaseURL: dbURL, CreatedBy: by}
+	a := &App{Slug: slug, Name: strings.TrimSpace(name), Description: description, CreatedBy: by}
 	cleanup := func() {
-		_ = p.pg.DropAppDatabase(context.Background(), slug)
 		_ = os.RemoveAll(p.repoDir(slug))
 		_ = os.RemoveAll(p.appDir(slug))
 		_ = p.store.DeleteApp(context.Background(), slug)
 		p.forget(slug)
+	}
+	// A folder left behind by an app of the same name must not leak its data
+	// into this one.
+	_ = os.RemoveAll(p.appDir(slug))
+	if err := p.createAppData(ctx, slug); err != nil {
+		cleanup()
+		return nil, nil, err
 	}
 	_ = os.RemoveAll(p.repoDir(slug))
 	r, err := initRepo(p.repoDir(slug))
@@ -528,9 +526,6 @@ func (p *Platform) deleteLocked(ctx context.Context, a *App, app, draft string) 
 	caddysnake.ReloadWorkingDir(p.appDir(a.Slug))
 	if err := removeAll(p.appDir(a.Slug)); err != nil {
 		return fmt.Errorf("removing the app's files: %w", err)
-	}
-	if err := p.pg.DropAppDatabase(ctx, a.Slug); err != nil {
-		return err
 	}
 	if draft == "" {
 		if err := removeAll(p.repoDir(app)); err != nil {

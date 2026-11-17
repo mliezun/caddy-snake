@@ -6,12 +6,12 @@
 #
 #   db/bootstrap/    idempotent bookkeeping applied on every start
 #   db/migrations/   the platform's schema, one numbered file per change
-#   db/queries/      queries on the platform database      -> db/dbgen
-#   db/appdb/        schema + queries run inside each app's own database
+#   db/queries/      queries on the platform's records     -> db/dbgen
+#   db/appdb/        schema + queries run inside each app's own data file
 #                                                          -> db/appdb/appdbgen
 version: "2"
 sql:
-  - engine: postgresql
+  - engine: sqlite
     schema:
       - db/bootstrap
       - db/migrations
@@ -22,7 +22,7 @@ sql:
         out: db/dbgen
         sql_package: database/sql
         emit_empty_slices: true
-  - engine: postgresql
+  - engine: sqlite
     schema: db/appdb/schema
     queries: db/appdb/queries
     gen:

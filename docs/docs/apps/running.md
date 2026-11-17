@@ -17,36 +17,7 @@ import TabItem from '@theme/TabItem';
 | Windows | `pip install caddysnake` (from version 0.8.0), or `caddy-windows-*.zip` from a [release](https://github.com/mliezun/caddy-snake/releases), run as `caddy.exe python-apps` |
 | Docker | [Run with Docker](#run-with-docker) |
 
-The Postgres programs must be installed, unless you pass `--database-url`:
-
-<Tabs groupId="os">
-<TabItem value="macos" label="macOS">
-
-```bash
-brew install postgresql@18
-```
-
-</TabItem>
-<TabItem value="debian" label="Debian, Ubuntu">
-
-```bash
-sudo apt install postgresql
-```
-
-</TabItem>
-<TabItem value="fedora" label="Fedora, Rocky">
-
-```bash
-sudo dnf install postgresql-server
-```
-
-</TabItem>
-<TabItem value="windows" label="Windows">
-
-Run the installer from [postgresql.org](https://www.postgresql.org/download/windows/).
-
-</TabItem>
-</Tabs>
+Python 3.13 or newer is the only thing it needs.
 
 ## Run it as a service
 
@@ -120,7 +91,7 @@ See everything an install would do, without changing anything:
 caddysnake apps install --dry-run
 ```
 
-- The flags you pass (`--listen`, `--domain`, `--public-url`, `--require-login`, `--open-to-network`, `--data-dir`, `--database-url`, `--python-path`) are written to the settings file.
+- The flags you pass (`--listen`, `--domain`, `--public-url`, `--require-login`, `--open-to-network`, `--data-dir`, `--python-path`) are written to the settings file.
 - An existing settings file is **never overwritten**. To change something later, edit the file and restart the service (`sudo systemctl restart caddysnake-apps`; on macOS and Windows, run `install` again).
 - On Linux and Windows the service cannot read personal folders. If Python is inside one, it uses Python 3.13, which `uv` downloads on first use.
 - On Windows the settings, data and logs can be read by administrators and the service only.
@@ -143,7 +114,7 @@ app_memory_limit = "256MiB"
 | Setting | Flag |
 |---------|------|
 | `listen`, `domain`, `public_url` | `--listen`, `--domain`, `--public-url` |
-| `data_dir`, `database_url`, `python_path` | `--data-dir`, `--database-url`, `--python-path` |
+| `data_dir`, `python_path` | `--data-dir`, `--python-path` |
 | `require_login`, `open_to_network` | `--require-login`, `--open-to-network` |
 | `max_apps`, `app_memory_limit` | `--max-apps`, `--app-memory-limit` |
 | `debug`, `access_logs` | `--debug`, `--access-logs` |
@@ -161,8 +132,7 @@ A file that cannot be read, or that contains a setting this version does not kno
 | `--listen` | Address to listen on | `127.0.0.1:9080` (`:443` with `--domain`) |
 | `--domain` | Domain name to serve with automatic HTTPS | — |
 | `--public-url` | The address people use to reach the server (links, allowed host name) | from `--listen` / `--domain` |
-| `--data-dir` | Folder for app files, history and the built-in database | `~/.caddysnake/apps` |
-| `--database-url` | Use an existing Postgres server in place of the built-in one | — |
+| `--data-dir` | Folder for everything it stores: app files, their history and their data | `~/.caddysnake/apps` |
 | `--python-path` | Python used to build each app's environment | the Python `caddysnake` is installed in |
 | `--require-login` | Ask everyone to sign in | off |
 | `--open-to-network` | Allow listening beyond this computer without logins | off |
@@ -172,19 +142,20 @@ A file that cannot be read, or that contains a setting this version does not kno
 
 Apps that are not used go to sleep after 30 minutes (`CADDYSNAKE_DYNAMIC_APP_IDLE_TTL`) and wake on the next visit, so many small apps fit on one machine.
 
-With `--database-url`, the user in the URL must be allowed to create roles and databases. Copying data into drafts needs `pg_dump` and `psql` on the server, no older than the database; without them drafts start with empty data.
-
 ### The data folder
 
 ```text
 ~/.caddysnake/apps/
+├── platform.db                                        the list of apps, people and access keys
 ├── apps/<app>/current -> releases/<version>-<time>/   the running version (files + .venv)
+├── apps/<app>/data/app.db                             the app's data (SQLite)
 ├── apps/<app>/settings.env                            what the app runs with
-├── repos/<app>.git                                    every version of the app's files
-└── postgres/                                          the built-in database
+└── repos/<app>.git                                    every version of the app's files
 ```
 
-Back it up as a whole while the server is stopped, or snapshot the disk it is on.
+**Backing up** is copying this folder. Stop the server first, or snapshot the disk it is on: a copy taken while apps are writing can catch a data file half-way through a change.
+
+Each app's data is one SQLite file. That suits the small internal apps this is for: dozens of people using an app at once, not thousands. An app that outgrows it should move to its own server.
 
 ## Run with Docker
 

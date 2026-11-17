@@ -430,7 +430,7 @@ func Tools() []Tool {
 				if err != nil {
 					return nil, err
 				}
-				return runSQL(ctx, a.DatabaseURL, args.SQL)
+				return runSQL(ctx, p.appDataPath(a.Slug), args.SQL)
 			},
 		},
 		{
@@ -499,16 +499,16 @@ const (
 )
 
 // runSQL executes one statement supplied by the caller in an app's own
-// database, as that app's login.
-func runSQL(ctx context.Context, databaseURL, statement string) (any, error) {
+// data file.
+func runSQL(ctx context.Context, dataPath, statement string) (any, error) {
 	if strings.TrimSpace(statement) == "" {
 		return nil, errors.New("the SQL statement is empty")
 	}
 	ctx, cancel := context.WithTimeout(ctx, sqlTimeout)
 	defer cancel()
-	conn, err := openAppDB(ctx, databaseURL)
+	conn, err := openAppDBAt(ctx, dataPath)
 	if err != nil {
-		return nil, fmt.Errorf("connecting to the app's database: %w", err)
+		return nil, fmt.Errorf("opening the app's data: %w", err)
 	}
 	defer conn.Close()
 	rows, err := conn.QueryContext(ctx, statement)

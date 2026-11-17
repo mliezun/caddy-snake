@@ -59,27 +59,6 @@ func envOr(name, fallback string) string {
 func winDataRoot() string { return winJoin(envOr("ProgramData", `C:\ProgramData`), configDirName) }
 func winProgDir() string  { return winJoin(envOr("ProgramFiles", `C:\Program Files`), configDirName) }
 
-// postgresBinPatterns lists where the Postgres programs are usually installed.
-func postgresBinPatterns(goos string) []string {
-	if goos == "windows" {
-		var out []string
-		for _, root := range []string{os.Getenv("ProgramFiles"), os.Getenv("ProgramW6432"), `C:\Program Files`} {
-			if root != "" {
-				out = append(out, filepath.Join(root, "PostgreSQL", "*", "bin"))
-			}
-		}
-		return out
-	}
-	return []string{
-		"/usr/lib/postgresql/*/bin",
-		"/usr/pgsql-*/bin",
-		"/usr/local/pgsql/bin",
-		"/opt/homebrew/opt/postgresql*/bin",
-		"/usr/local/opt/postgresql*/bin",
-		"/Applications/Postgres.app/Contents/Versions/latest/bin",
-	}
-}
-
 // besideExecutable returns the path of a program that sits in the same folder
 // as this one, or "" if there is none. An installed service keeps uv there.
 func besideExecutable(name string) string {

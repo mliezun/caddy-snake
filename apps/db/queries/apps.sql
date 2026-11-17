@@ -1,51 +1,53 @@
+-- Times are whole seconds since 1970 (UTC), passed in by the Go code.
+
 -- name: GetApp :one
-SELECT * FROM caddysnake_apps.apps WHERE slug = $1;
+SELECT * FROM apps WHERE slug = sqlc.arg(slug);
 
 -- name: ListAllApps :many
-SELECT * FROM caddysnake_apps.apps ORDER BY slug;
+SELECT * FROM apps ORDER BY slug;
 
 -- name: ListLiveApps :many
-SELECT * FROM caddysnake_apps.apps WHERE parent IS NULL ORDER BY slug;
+SELECT * FROM apps WHERE parent IS NULL ORDER BY slug;
 
 -- name: ListDrafts :many
-SELECT * FROM caddysnake_apps.apps WHERE parent = sqlc.arg(parent)::text ORDER BY slug;
+SELECT * FROM apps WHERE parent = sqlc.arg(parent) ORDER BY slug;
 
 -- name: InsertApp :exec
-INSERT INTO caddysnake_apps.apps (slug, parent, name, description, database_url, created_by)
-VALUES ($1, $2, $3, $4, $5, $6);
+INSERT INTO apps (slug, parent, name, description, created_by, created_at, last_used_at)
+VALUES (sqlc.arg(slug), sqlc.arg(parent), sqlc.arg(name), sqlc.arg(description), sqlc.arg(created_by), sqlc.arg(now), sqlc.arg(now));
 
 -- name: DeleteApp :exec
-DELETE FROM caddysnake_apps.apps WHERE slug = $1;
+DELETE FROM apps WHERE slug = sqlc.arg(slug);
 
 -- name: SetLiveVersion :exec
-UPDATE caddysnake_apps.apps SET live_version = $2, published_at = now() WHERE slug = $1;
+UPDATE apps SET live_version = sqlc.arg(live_version), published_at = sqlc.arg(now) WHERE slug = sqlc.arg(slug);
 
 -- name: TouchApp :exec
-UPDATE caddysnake_apps.apps SET last_used_at = now() WHERE slug = $1;
+UPDATE apps SET last_used_at = sqlc.arg(now) WHERE slug = sqlc.arg(slug);
 
 -- name: RecordPublish :exec
-INSERT INTO caddysnake_apps.publishes (slug, version, published_by, ok, detail)
-VALUES ($1, $2, $3, $4, $5);
+INSERT INTO publishes (slug, version, published_by, published_at, ok, detail)
+VALUES (sqlc.arg(slug), sqlc.arg(version), sqlc.arg(published_by), sqlc.arg(now), sqlc.arg(ok), sqlc.arg(detail));
 
 -- name: DeletePublishes :exec
-DELETE FROM caddysnake_apps.publishes WHERE slug = $1;
+DELETE FROM publishes WHERE slug = sqlc.arg(slug);
 
 -- name: ListSettings :many
-SELECT key, value FROM caddysnake_apps.settings WHERE slug = $1 ORDER BY key;
+SELECT key, value FROM settings WHERE slug = sqlc.arg(slug) ORDER BY key;
 
 -- name: UpsertSetting :exec
-INSERT INTO caddysnake_apps.settings (slug, key, value) VALUES ($1, $2, $3)
-ON CONFLICT (slug, key) DO UPDATE SET value = EXCLUDED.value;
+INSERT INTO settings (slug, key, value) VALUES (sqlc.arg(slug), sqlc.arg(key), sqlc.arg(value))
+ON CONFLICT (slug, key) DO UPDATE SET value = excluded.value;
 
 -- name: DeleteSetting :exec
-DELETE FROM caddysnake_apps.settings WHERE slug = $1 AND key = $2;
+DELETE FROM settings WHERE slug = sqlc.arg(slug) AND key = sqlc.arg(key);
 
 -- name: DeleteSettings :exec
-DELETE FROM caddysnake_apps.settings WHERE slug = $1;
+DELETE FROM settings WHERE slug = sqlc.arg(slug);
 
 -- name: CopySettings :exec
-INSERT INTO caddysnake_apps.settings (slug, key, value)
-SELECT sqlc.arg(to_slug)::text, s.key, s.value
-FROM caddysnake_apps.settings AS s
-WHERE s.slug = sqlc.arg(from_slug)::text
-ON CONFLICT (slug, key) DO UPDATE SET value = EXCLUDED.value;
+INSERT INTO settings (slug, key, value)
+SELECT sqlc.arg(to_slug), s.key, s.value
+FROM settings AS s
+WHERE s.slug = sqlc.arg(from_slug)
+ON CONFLICT (slug, key) DO UPDATE SET value = excluded.value;
