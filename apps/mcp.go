@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"strings"
 )
 
 // This file is a small Model Context Protocol server over "streamable HTTP":
@@ -123,6 +124,13 @@ func (p *Platform) ServeMCP(w http.ResponseWriter, r *http.Request, who string) 
 	if r.Method != http.MethodPost {
 		w.Header().Set("Allow", "POST")
 		http.Error(w, "this endpoint accepts POST only", http.StatusMethodNotAllowed)
+		return
+	}
+	// A web page of another site can send a form or plain text without the
+	// browser asking first, but not JSON. The origin check already refuses
+	// such pages; this is the second lock, as on the tools API.
+	if ct := r.Header.Get("Content-Type"); !strings.HasPrefix(strings.ToLower(strings.TrimSpace(ct)), "application/json") {
+		http.Error(w, "send JSON (Content-Type: application/json)", http.StatusUnsupportedMediaType)
 		return
 	}
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxRequestBytes))

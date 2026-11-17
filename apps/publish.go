@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"sort"
 	"strings"
@@ -85,6 +86,9 @@ func logSafe(s string) string {
 	return strings.ReplaceAll(s, "\r", " ")
 }
 
+// versionIDRE is what a version id looks like: the hexadecimal id git gives it.
+var versionIDRE = regexp.MustCompile(`^[0-9a-f]{7,40}$`)
+
 func firstLine(s string) string {
 	if i := strings.IndexByte(s, '\n'); i >= 0 {
 		return s[:i]
@@ -104,6 +108,11 @@ func (p *Platform) doPublish(ctx context.Context, a *App, version string, res *P
 			return errors.New("there is no saved version to publish yet; save some files first")
 		}
 		version = head
+	}
+	// The id names a folder below, and git accepts far more than ids where a
+	// version is asked for ("main~2", searches through messages). Take ids only.
+	if !versionIDRE.MatchString(version) {
+		return fmt.Errorf("%q is not a version id; use an id from list_versions, such as 3f2a9c1d04be", version)
 	}
 	res.Version = version
 

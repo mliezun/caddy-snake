@@ -92,6 +92,14 @@ func extractTarGz(data []byte, targetDir string) error {
 	return nil
 }
 
+// searchPath puts first in front of the rest of a search path.
+func searchPath(first, rest string) string {
+	if rest == "" {
+		return first
+	}
+	return first + string(os.PathListSeparator) + rest
+}
+
 func run() int {
 	tmpDirPkg, err := os.MkdirTemp("", "python-*")
 	if err != nil {
@@ -142,10 +150,12 @@ func run() int {
 	// "python3" unless told otherwise, and without this it would use whatever
 	// Python the machine has (or none) together with the bundled Python's
 	// libraries, which only works when the two happen to be the same version.
-	env = append(env, fmt.Sprintf("PATH=%s%c%s", filepath.Join(pythonHome, "bin"), os.PathListSeparator, os.Getenv("PATH")))
-	env = append(env, fmt.Sprintf("LD_LIBRARY_PATH=%s:%s", filepath.Join(pythonHome, "lib"), ldLibraryPath))
+	// An empty entry in a search path means "the current folder", so the old
+	// value is only appended when there is one.
+	env = append(env, "PATH="+searchPath(filepath.Join(pythonHome, "bin"), os.Getenv("PATH")))
+	env = append(env, "LD_LIBRARY_PATH="+searchPath(filepath.Join(pythonHome, "lib"), ldLibraryPath))
 	if runtime.GOOS == "darwin" {
-		env = append(env, fmt.Sprintf("DYLD_LIBRARY_PATH=%s:%s", filepath.Join(pythonHome, "lib"), os.Getenv("DYLD_LIBRARY_PATH")))
+		env = append(env, "DYLD_LIBRARY_PATH="+searchPath(filepath.Join(pythonHome, "lib"), os.Getenv("DYLD_LIBRARY_PATH")))
 	}
 
 	cmd := exec.Command(caddyPath, args...)

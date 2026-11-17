@@ -111,7 +111,7 @@ func Open(ctx context.Context, cfg Config, logger *zap.Logger) (*Platform, error
 	if err := cfg.resolve(); err != nil {
 		return nil, err
 	}
-	conn, err := openSQLite(ctx, filepath.Join(cfg.DataDir, platformDBName))
+	conn, err := openSQLite(ctx, "sqlite", filepath.Join(cfg.DataDir, platformDBName))
 	if err != nil {
 		return nil, err
 	}
@@ -302,6 +302,17 @@ const (
 	maxKeyNameLen     = 60
 )
 
+// hasControlChars reports whether s has a line break, a tab or another
+// control character.
+func hasControlChars(s string) bool {
+	for _, r := range s {
+		if r < 0x20 || r == 0x7f {
+			return true
+		}
+	}
+	return false
+}
+
 var settingKeyRE = regexp.MustCompile(`^[A-Z][A-Z0-9_]*$`)
 
 // builtinSettingKeys are provided by the platform and cannot be overridden.
@@ -365,6 +376,11 @@ func (p *Platform) writeSettings(ctx context.Context, a *App) error {
 	var b strings.Builder
 	b.WriteString("# Written by caddy-snake apps. Change settings with the set_setting tool, not by hand.\n")
 	for _, k := range keys {
+		// One line per value: a line break in a value would start a new
+		// variable of the writer's choosing.
+		if strings.ContainsAny(env[k], "\r\n") {
+			return fmt.Errorf("the value of %s contains a line break, which a setting cannot hold", k)
+		}
 		fmt.Fprintf(&b, "%s=\"%s\"\n", k, env[k])
 	}
 	if err := os.MkdirAll(p.appDir(a.Slug), 0o750); err != nil {
@@ -438,6 +454,9 @@ func (p *Platform) CreateApp(ctx context.Context, name, description, by string) 
 	slug := Slugify(name)
 	if slug == "" {
 		return nil, nil, errors.New("give the app a name with at least one letter")
+	}
+	if hasControlChars(name) || hasControlChars(description) {
+		return nil, nil, errors.New("the name and description must be plain text on one line")
 	}
 	if n := len([]rune(strings.TrimSpace(name))); n > maxAppNameLen {
 		return nil, nil, fmt.Errorf("the name is %d characters long; keep it under %d", n, maxAppNameLen)

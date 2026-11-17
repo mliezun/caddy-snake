@@ -170,7 +170,9 @@ func bearerToken(r *http.Request) string {
 // git) or a browser session. It returns nil for an anonymous request.
 func (h *Handler) identify(r *http.Request) *Identity {
 	var kind, token string
-	if t := bearerToken(r); t != "" {
+	// Only our own access keys count here: an app may have its own
+	// Authorization scheme, which must not hide the visitor's session.
+	if t := bearerToken(r); strings.HasPrefix(t, accessKeyPrefix) {
 		kind, token = "key", t
 	} else if c, err := r.Cookie(sessionCookie); err == nil && c.Value != "" {
 		kind, token = "session", c.Value
@@ -234,12 +236,16 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request, next caddyht
 		return nil
 	}
 
-	slug := firstSegment(path)
-	exists, published := h.platform.Known(slug)
-	if !exists {
-		renderMessage(w, http.StatusNotFound, "Nothing here", "There is no app at this address.", "/", "See all apps")
+	// Apps are only served under the names this server is known by, like the
+	// dashboard. Otherwise a website could point a name of its own at this
+	// server and read or drive the apps of whoever visits it (DNS rebinding),
+	// which matters most when sign-in is off.
+	if !h.allowedHost(r) {
+		http.Error(w, "This server is not set up to be reached at "+r.Host+". Start it with --public-url set to the address people use.", http.StatusMisdirectedRequest)
 		return nil
 	}
+	// Sign-in comes first, so that someone who is not signed in learns nothing,
+	// not even which apps exist.
 	var id *Identity
 	if h.platform.cfg.RequireLogin {
 		if id = h.identify(r); id == nil {
@@ -248,17 +254,57 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request, next caddyht
 			return nil
 		}
 	}
+	slug := firstSegment(path)
+	exists, published := h.platform.Known(slug)
+	if !exists {
+		renderMessage(w, http.StatusNotFound, "Nothing here", "There is no app at this address.", "/", "See all apps")
+		return nil
+	}
 	if !published {
 		renderMessage(w, http.StatusServiceUnavailable, "Not ready yet", "This app has been created but no working version has been published.", "/", "See all apps")
 		return nil
 	}
-	// Apps trust this header to know who is using them, so never let a visitor set it.
-	r.Header.Del(userHeader)
+	forApp(r, id)
+	h.platform.Touch(slug)
+	return next.ServeHTTP(w, r)
+}
+
+// forApp prepares a request before an app sees it.
+//
+// The app learns who is using it from one header, and nothing else about how
+// they signed in: the session cookie and access key that opened the gate are
+// removed. An app is code somebody on the team wrote; with those in hand it
+// could act as each of its visitors on the dashboard.
+func forApp(r *http.Request, id *Identity) {
+	// Apps trust this header, so a visitor must not be able to set it. WSGI
+	// turns "-" into "_" in header names, so X_Forwarded_User would arrive in
+	// the app under the same name: remove every spelling.
+	for name := range r.Header {
+		if strings.EqualFold(strings.ReplaceAll(name, "_", "-"), userHeader) {
+			r.Header.Del(name)
+			delete(r.Header, name)
+		}
+	}
 	if id != nil {
 		r.Header.Set(userHeader, id.Username)
 	}
-	h.platform.Touch(slug)
-	return next.ServeHTTP(w, r)
+
+	if key := bearerToken(r); strings.HasPrefix(key, accessKeyPrefix) {
+		r.Header.Del("Authorization")
+	}
+	if cookies := r.Cookies(); len(cookies) > 0 {
+		kept := make([]string, 0, len(cookies))
+		for _, c := range cookies {
+			if c.Name != sessionCookie {
+				kept = append(kept, c.Name+"="+c.Value)
+			}
+		}
+		if len(kept) == 0 {
+			r.Header.Del("Cookie")
+		} else {
+			r.Header.Set("Cookie", strings.Join(kept, "; "))
+		}
+	}
 }
 
 func (h *Handler) servePlatform(w http.ResponseWriter, r *http.Request) {

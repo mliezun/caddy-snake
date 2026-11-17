@@ -59,3 +59,6 @@ SELECT name, created_at, last_used_at FROM access_keys WHERE username = sqlc.arg
 
 -- name: DeleteAccessKeysByName :execrows
 DELETE FROM access_keys WHERE username = sqlc.arg(username) AND name = sqlc.arg(name);
+
+-- name: DeleteUserAccessKeys :exec
+DELETE FROM access_keys WHERE username = sqlc.arg(username);

@@ -30,6 +30,8 @@ caddysnake apps user remove ana
 
 There is no "forgot password" email: the person running the server sets a new one.
 
+Setting a new password signs the person out everywhere and removes their access keys, so create a new key for their assistant afterwards.
+
 Assistants and scripts use an **access key** in place of a password:
 
 ```bash
@@ -39,14 +41,21 @@ caddysnake apps key revoke ana
 
 Give the key to the assistant as the connector's Bearer token, or set `CADDYSNAKE_APPS_KEY` for `caddysnake apps call`.
 
-Apps never implement login themselves. When logins are on, each request to an app carries the person's username in the `X-Forwarded-User` header (a value sent by the browser is discarded).
+Apps never implement login themselves. When logins are on, each request to an app carries the person's username in the `X-Forwarded-User` header (a value sent by the browser is discarded). The app is told who is using it and nothing more: the person's sign-in cookie and access key are removed before the request reaches it.
 
 ### What protects the dashboard and tools
 
-- They only answer under the host name in `--public-url` (and `localhost`), so another website cannot reach them by pointing its own name at your server.
+- They only answer under the host name in `--public-url` (and `localhost`), and so do the apps, so another website cannot reach them by pointing its own name at your server.
 - Requests made by another website's pages are refused, and tool calls must be JSON.
 - Passwords are stored with Argon2id; session tokens and access keys only as hashes.
+- The SQL tool and an app's `migrations/` files reach that app's data and no other file.
+- A version's files are checked again when it is published, whichever way it arrived, so none is written outside the app's folder.
 
 ### What is not protected
 
-Apps are not isolated from each other. They run as the same operating-system user and an app's code can read other apps' files. Treat everyone who may create apps as one team that trusts each other.
+Everyone who can create or change an app can run code on the server. That makes them, in effect, an administrator, whatever their account says:
+
+- Apps are not isolated from each other or from the platform. They run as the same operating-system user as the server, so an app's code can read and change other apps' files and the platform's own records, including people and access keys.
+- Apps share one address with the dashboard, so a page of an app can act on the dashboard as whoever has it open.
+
+Treat everyone who may create apps as one team that trusts each other, give accounts only to them, and run the server as an operating-system user that owns nothing else. The administrator setting decides who sees the people and access-key pages; it is not a wall between team members.

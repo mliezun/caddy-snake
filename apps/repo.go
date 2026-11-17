@@ -74,6 +74,9 @@ func initRepo(dir string) (*repo, error) {
 	// makes git warn on every push.
 	cfg.Core.Worktree = ""
 	cfg.Raw.Section("core").RemoveOption("worktree")
+	// Have git check what is pushed: it then refuses hand-made versions with
+	// broken or dangerous entries before they are stored.
+	cfg.Raw.Section("receive").SetOption("fsckObjects", "true")
 	if err := g.SetConfig(cfg); err != nil {
 		return nil, err
 	}
@@ -99,7 +102,8 @@ func cleanPath(p string) (string, error) {
 		return "", fmt.Errorf("file path %q is not a plain relative path", orig)
 	}
 	for _, seg := range strings.Split(clean, "/") {
-		if seg == ".git" || seg == ".venv" {
+		// Compared without case: on macOS and Windows ".VENV" is the same folder.
+		if strings.EqualFold(seg, ".git") || strings.EqualFold(seg, ".venv") {
 			return "", fmt.Errorf("file path %q uses a reserved folder name", orig)
 		}
 	}
@@ -242,6 +246,25 @@ func (r *repo) Files(version string, only []string) (map[string][]byte, error) {
 	return out, err
 }
 
+// exportTarget is where a file of a version is written inside dir.
+//
+// Names saved through the tools were checked when they were saved. A version
+// pushed with git was not: git itself accepts a hand-made folder entry called
+// "..", which would be written outside dir. So every name is checked again
+// here, and the result must still be inside dir.
+func exportTarget(dir, name string) (string, error) {
+	refused := fmt.Errorf("this version has a file whose name is not allowed (%q); remove it and save again", name)
+	clean, err := cleanPath(name)
+	if err != nil || clean != name {
+		return "", refused
+	}
+	target := filepath.Join(dir, filepath.FromSlash(clean))
+	if !strings.HasPrefix(target, filepath.Clean(dir)+string(filepath.Separator)) {
+		return "", refused
+	}
+	return target, nil
+}
+
 // Export writes every file of a version into dir.
 func (r *repo) Export(version, dir string) error {
 	files, err := r.Files(version, nil)
@@ -249,7 +272,10 @@ func (r *repo) Export(version, dir string) error {
 		return err
 	}
 	for name, data := range files {
-		target := filepath.Join(dir, filepath.FromSlash(name))
+		target, err := exportTarget(dir, name)
+		if err != nil {
+			return err
+		}
 		if err := os.MkdirAll(filepath.Dir(target), 0o750); err != nil {
 			return err
 		}

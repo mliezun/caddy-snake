@@ -64,6 +64,10 @@ func render(w http.ResponseWriter, status int, name string, data map[string]any)
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("X-Frame-Options", "DENY")
 	w.Header().Set("Referrer-Policy", "same-origin")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	// The pages carry their own styles and script and load nothing from
+	// elsewhere; say so, so that nothing injected can either.
+	w.Header().Set("Content-Security-Policy", "default-src 'self'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src 'self' data:; frame-ancestors 'none'; base-uri 'none'; form-action 'self'")
 	w.WriteHeader(status)
 	_ = pages.ExecuteTemplate(w, name, data)
 }

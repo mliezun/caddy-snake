@@ -141,6 +141,15 @@ func (q *Queries) DeleteUser(ctx context.Context, username string) (int64, error
 	return result.RowsAffected()
 }
 
+const deleteUserAccessKeys = `-- name: DeleteUserAccessKeys :exec
+DELETE FROM access_keys WHERE username = ?1
+`
+
+func (q *Queries) DeleteUserAccessKeys(ctx context.Context, username string) error {
+	_, err := q.db.ExecContext(ctx, deleteUserAccessKeys, username)
+	return err
+}
+
 const deleteUserSessions = `-- name: DeleteUserSessions :exec
 DELETE FROM sessions WHERE username = ?1
 `

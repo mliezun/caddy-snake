@@ -3,12 +3,13 @@ package apps
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"time"
 
-	_ "modernc.org/sqlite" // database/sql driver "sqlite" (pure Go, no C compiler needed)
+	"modernc.org/sqlite" // database/sql driver "sqlite" (pure Go, no C compiler needed)
 
 	"github.com/mliezun/caddy-snake/apps/db"
 )
@@ -35,6 +36,39 @@ const (
 	vacuumInto = "VACUUM INTO ?"
 )
 
+// appDataDriver is the driver used for every connection to an app's data
+// file. It is SQLite with one rule added: a connection may not attach or detach
+// another database file.
+//
+// What runs on these connections is written by other people: the statement
+// given to the run_sql tool, and the migration files of an app. Without the
+// rule, `ATTACH DATABASE '<data>/platform.db'` would hand any signed-in person
+// the platform's own records (who may sign in, who is an administrator) and
+// every other app's data. VACUUM INTO, which writes a copy to any path, is
+// refused by the same rule, because SQLite attaches the target to write it.
+const appDataDriver = "caddysnake-app-sqlite"
+
+func init() {
+	d := &sqlite.Driver{}
+	d.RegisterConnectionHook(func(conn sqlite.ExecQuerierContext, _ string) error {
+		registerer, ok := conn.(sqlite.AuthorizerRegisterer)
+		if !ok {
+			// Never open an app's data without the rule.
+			return errors.New("the SQLite driver cannot restrict a connection")
+		}
+		return registerer.RegisterAuthorizer(appDataPolicy)
+	})
+	sql.Register(appDataDriver, d)
+}
+
+func appDataPolicy(action sqlite.AuthorizerActionCode, _, _, _, _ string) sqlite.AuthorizerReturnCode {
+	switch action {
+	case sqlite.AuthAttach, sqlite.AuthDetach:
+		return sqlite.AuthorizerDeny
+	}
+	return sqlite.AuthorizerOK
+}
+
 // sqliteDSN is how every database file is opened:
 //   - busy_timeout: wait for another writer (the app itself) instead of failing;
 //   - journal_mode WAL: readers and one writer at the same time; it is stored
@@ -46,12 +80,14 @@ func sqliteDSN(path string) string {
 	return path + "?_pragma=busy_timeout(15000)&_pragma=journal_mode(WAL)&_pragma=foreign_keys(1)&_pragma=synchronous(NORMAL)&_txlock=immediate"
 }
 
-// openSQLite opens (creating if needed) one database file.
-func openSQLite(ctx context.Context, path string) (*sql.DB, error) {
+// openSQLite opens (creating if needed) one database file with the given
+// driver: "sqlite" for the platform's own use, appDataDriver for anything that
+// runs statements other people wrote.
+func openSQLite(ctx context.Context, driver, path string) (*sql.DB, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
 		return nil, err
 	}
-	conn, err := sql.Open("sqlite", sqliteDSN(path))
+	conn, err := sql.Open(driver, sqliteDSN(path))
 	if err != nil {
 		return nil, err
 	}
@@ -77,7 +113,7 @@ func (p *Platform) openAppDB(ctx context.Context, slug string) (*sql.DB, error) 
 }
 
 func openAppDBAt(ctx context.Context, path string) (*sql.DB, error) {
-	conn, err := openSQLite(ctx, path)
+	conn, err := openSQLite(ctx, appDataDriver, path)
 	if err != nil {
 		return nil, err
 	}
@@ -108,7 +144,8 @@ func (p *Platform) cloneAppData(ctx context.Context, fromSlug, toSlug string) er
 		// Nothing to copy: the app has no data file yet.
 		return p.createAppData(ctx, toSlug)
 	}
-	src, err := p.openAppDB(ctx, fromSlug)
+	// The platform's own copy: this one connection may write another file.
+	src, err := openSQLite(ctx, "sqlite", p.appDataPath(fromSlug))
 	if err != nil {
 		return fmt.Errorf("copying data: %w", err)
 	}

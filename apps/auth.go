@@ -116,7 +116,9 @@ func (p *Platform) AddUser(ctx context.Context, username, password string, admin
 	return p.store.q.CreateUser(ctx, dbgen.CreateUserParams{Username: username, PasswordHash: hashPassword(password), IsAdmin: admin, Now: now()})
 }
 
-// SetPassword changes a person's password and signs them out everywhere.
+// SetPassword changes a person's password, signs them out everywhere and
+// removes their access keys. A password is changed when it may have leaked,
+// and whoever had it could have made a key that outlives it.
 func (p *Platform) SetPassword(ctx context.Context, username, password string) error {
 	if err := validateCredentials(username, password); err != nil {
 		return err
@@ -128,7 +130,10 @@ func (p *Platform) SetPassword(ctx context.Context, username, password string) e
 	if n == 0 {
 		return fmt.Errorf("there is no user %q", username)
 	}
-	return p.store.q.DeleteUserSessions(ctx, username)
+	if err := p.store.q.DeleteUserSessions(ctx, username); err != nil {
+		return err
+	}
+	return p.store.q.DeleteUserAccessKeys(ctx, username)
 }
 
 // RemoveUser deletes a person together with their sessions and access keys.
