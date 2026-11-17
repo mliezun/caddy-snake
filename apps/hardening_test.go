@@ -100,7 +100,7 @@ func TestAppsDoNotReceiveCredentials(t *testing.T) {
 	// Through the browser: a session cookie next to a cookie of the app's own.
 	r := request(http.MethodGet, "/"+app.Slug+"/", "")
 	r.AddCookie(session)
-	r.AddCookie(&http.Cookie{Name: "theme", Value: "dark"})
+	r.Header.Set("Cookie", r.Header.Get("Cookie")+"; theme=dark")
 	r.Header.Set("X-Forwarded-User", "boss")
 	r.Header["X_Forwarded_User"] = []string{"boss"}
 	r.Header["x_forwarded_user"] = []string{"boss"}
