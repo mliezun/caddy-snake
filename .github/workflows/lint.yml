@@ -10,7 +10,17 @@ on:
 
 permissions: {}
 
+# A new push to a pull request cancels the runs of the push before it.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
+  changes:
+    permissions:
+      pull-requests: read
+    uses: ./.github/workflows/changes.yml
+
   lint:
     name: Lint
     runs-on: ubuntu-24.04
@@ -22,8 +32,8 @@ jobs:
 
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: "1.26.10"
-          cache: false
+          go-version: "1.26.11"
+          cache: true
 
       # zizmor: ignore[superfluous-actions]
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
@@ -44,8 +54,24 @@ jobs:
       - name: Stub embedded Caddy binaries for static analysis
         run: ./scripts/stub-embed-caddy.sh
 
+      - name: Check that changes.yml picks the right jobs
+        run: |
+          pip install pyyaml
+          python scripts/test_ci_changes.py
+
       - name: Check pre-commit
         uses: pre-commit/action@2c7b3805fd2a0fd8c1884dcaebf91fc102a13ecd # v3.0.1
+
+      # golangci-lint keeps what it worked out per package; with that kept
+      # between runs it only looks again at what changed.
+      - name: Restore golangci-lint results
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/golangci-lint
+          key: golangci-lint-${{ runner.os }}-${{ hashFiles('go.sum', '.golangci.yml') }}-${{ github.sha }}
+          restore-keys: |
+            golangci-lint-${{ runner.os }}-${{ hashFiles('go.sum', '.golangci.yml') }}-
+            golangci-lint-${{ runner.os }}-
 
       - name: golangci-lint
         run: |
@@ -76,6 +102,8 @@ jobs:
         run: find . -name '*.sh' -not -path './tests/*/venv/*' -print0 | xargs -0 shellcheck -S error
 
   docs:
+    needs: changes
+    if: needs.changes.outputs.docs == 'true'
     name: Docs build
     runs-on: ubuntu-24.04
     steps:
@@ -94,6 +122,8 @@ jobs:
           npm run build
 
   rust:
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
     name: Rust clippy
     runs-on: ubuntu-24.04
     steps:

@@ -14,7 +14,17 @@
   --ifm-font-family-base: "IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
   --ifm-heading-font-family: "IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
   --ifm-font-family-monospace: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
-  --ifm-leading: 1.65;
+  --ifm-line-height-base: 1.65;
+  --ifm-leading: 1.15rem;
+  --ifm-table-cell-padding: 0.6rem 0.85rem;
+  --ifm-table-border-color: var(--ifm-toc-border-color);
+  --ifm-table-stripe-background: transparent;
+  --ifm-table-head-background: transparent;
+  --ifm-code-padding-horizontal: 0.35rem;
+  --ifm-code-padding-vertical: 0.1rem;
+  --ifm-code-border-radius: 6px;
+  --ifm-pre-padding: 1rem 1.15rem;
+  --ifm-blockquote-border-color: var(--ifm-color-primary);
   --ifm-heading-font-weight: 650;
   --docusaurus-highlighted-code-line-bg: rgba(29, 78, 216, 0.08);
   --ifm-navbar-shadow: none;
@@ -70,7 +80,7 @@
 }
 
 .navbar__logo img {
-  border-radius: 50%;
+  border-radius: 29%;
   transition: transform 0.2s ease;
 }
 
@@ -145,4 +155,104 @@
 /* Keep admonitions compact */
 .alert {
   border-radius: 8px;
+}
+
+/* ---- Reading: text, code and tables ------------------------------------ */
+
+.markdown {
+  font-size: 1rem;
+}
+
+.markdown > h1:first-child {
+  margin-bottom: 1.25rem;
+}
+
+.markdown li + li {
+  margin-top: 0.35rem;
+}
+
+.markdown li > p {
+  margin-bottom: 0.5rem;
+}
+
+/* Inline code: quiet, never breaking the line height. */
+.markdown :not(pre) > code {
+  border: 1px solid var(--ifm-toc-border-color);
+  background: var(--cs-surface);
+  font-size: 0.86em;
+  overflow-wrap: anywhere;
+}
+
+/* Code blocks. */
+.theme-code-block {
+  border-radius: 10px;
+  margin-bottom: var(--ifm-leading);
+  font-size: 0.9rem;
+}
+
+.theme-code-block pre {
+  line-height: 1.6;
+}
+
+/* Tables: full width, light rules, headings on the left. */
+.markdown table {
+  display: table;
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.93rem;
+  line-height: 1.5;
+  margin-bottom: var(--ifm-leading);
+}
+
+.markdown table th,
+.markdown table td {
+  border-width: 0 0 1px;
+  text-align: left;
+  vertical-align: top;
+}
+
+.markdown table thead th {
+  border-bottom-width: 2px;
+  font-size: 0.78rem;
+  font-weight: 650;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--ifm-color-emphasis-700);
+  white-space: nowrap;
+}
+
+.markdown table tr {
+  border: 0;
+  background: transparent;
+}
+
+.markdown table td:first-child {
+  font-weight: 550;
+}
+
+/* A table written without headings ("| | |") has nothing to show there. */
+.markdown table thead:not(:has(th:not(:empty))) {
+  display: none;
+}
+
+/* Something a person says to their assistant. */
+.markdown blockquote {
+  border-left-width: 3px;
+  border-radius: 0 10px 10px 0;
+  background: var(--cs-surface);
+  padding: 0.85rem 1.15rem;
+  font-size: 1.05rem;
+  color: var(--ifm-font-color-base);
+}
+
+.markdown blockquote > :last-child {
+  margin-bottom: 0;
+}
+
+/* Pictures in the text (the demo). */
+.markdown p > img {
+  display: block;
+  border-radius: 12px;
+  border: 1px solid var(--ifm-toc-border-color);
+  box-shadow: 0 12px 32px rgba(15, 23, 42, 0.1);
 }

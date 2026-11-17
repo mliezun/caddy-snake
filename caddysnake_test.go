@@ -715,7 +715,7 @@ func TestValidate(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error when neither wsgi nor asgi specified")
 	}
-	if !strings.Contains(err.Error(), "exactly one of module_wsgi or module_asgi is required") {
+	if !strings.Contains(err.Error(), "exactly one of module_wsgi, module_asgi, or module_auto is required") {
 		t.Errorf("expected module required error, got: %v", err)
 	}
 }
@@ -821,7 +821,7 @@ func TestProvision_NoModule(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error when neither wsgi nor asgi specified")
 	}
-	if !strings.Contains(err.Error(), "wsgi or asgi") {
+	if !strings.Contains(err.Error(), "wsgi, asgi, or auto") {
 		t.Errorf("expected module error in error, got: %v", err)
 	}
 }
@@ -1261,8 +1261,9 @@ func TestDynamicAppHandleRequest(t *testing.T) {
 	if handledModule != "main:app" {
 		t.Errorf("expected module 'main:app', got %q", handledModule)
 	}
-	if handledDir != dir {
-		t.Errorf("expected dir %q, got %q", dir, handledDir)
+	// The worker is started from where the path really points (see pinPath).
+	if handledDir != pinPath(dir) {
+		t.Errorf("expected dir %q, got %q", pinPath(dir), handledDir)
 	}
 }
 
@@ -3105,5 +3106,19 @@ func TestDynamicAppCacheKeyCollisionSafe(t *testing.T) {
 	k3 := dynamicAppCacheKey("main:app", dir, "", nil, map[string]string{"A": "1", "B": "3"})
 	if k1 == k3 {
 		t.Fatal("different env values must produce different keys")
+	}
+}
+
+func TestSystemPython(t *testing.T) {
+	found := func(string) (string, error) { return "python", nil }
+	missing := func(string) (string, error) { return "", errors.New("not found") }
+	if got := systemPython("windows", found); got != "python" {
+		t.Errorf("windows with python installed = %q", got)
+	}
+	if got := systemPython("windows", missing); got != "python3" {
+		t.Errorf("windows without python = %q", got)
+	}
+	if got := systemPython("linux", found); got != "python3" {
+		t.Errorf("linux = %q", got)
 	}
 }

@@ -1,10 +1,14 @@
 ---
 sidebar_position: 1
-title: Quickstart
+title: Plugin quickstart
 description: Run a Python web app with Caddy Snake in under five minutes
 ---
 
 # Quickstart
+
+:::note
+This section is about the **Caddy plugin**: running your own Python app from a Caddyfile or the `caddysnake` command. To build apps with an AI assistant, see [Apps](apps/index.md).
+:::
 
 Caddy Snake runs Python web apps **inside Caddy** — no separate Gunicorn or Uvicorn process. It works with Flask, Django, FastAPI, and any other WSGI/ASGI app.
 

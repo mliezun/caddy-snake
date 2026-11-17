@@ -2261,3 +2261,94 @@ class TestAsgiEventLoopBootstrap:
         for callback in callbacks:
             assert callback.__name__ == "_stop_on_signal"
             assert not inspect.iscoroutinefunction(callback)
+
+
+class TestDetectInterface:
+    def test_plain_function_is_wsgi(self):
+        def app(environ, start_response):
+            return []
+
+        assert cs.detect_interface(app) == "wsgi"
+
+    def test_async_function_is_asgi(self):
+        async def app(scope, receive, send):
+            return None
+
+        assert cs.detect_interface(app) == "asgi"
+
+    def test_object_with_sync_call_is_wsgi(self):
+        class FlaskLike:
+            def __call__(self, environ, start_response):
+                return []
+
+        assert cs.detect_interface(FlaskLike()) == "wsgi"
+
+    def test_object_with_async_call_is_asgi(self):
+        class StarletteLike:
+            async def __call__(self, scope, receive, send):
+                return None
+
+        assert cs.detect_interface(StarletteLike()) == "asgi"
+
+    def test_partial_is_unwrapped(self):
+        import functools
+
+        async def app(config, scope, receive, send):
+            return None
+
+        def wsgi(config, environ, start_response):
+            return []
+
+        assert cs.detect_interface(functools.partial(app, {})) == "asgi"
+        assert cs.detect_interface(functools.partial(wsgi, {})) == "wsgi"
+
+
+class TestMountPrefix:
+    """mount_prefix: the Go module sends the resolved prefix in a hop header."""
+
+    HDR = "caddy-snake-mount-prefix"
+
+    def _wsgi(self, path, prefix=None):
+        headers_list = [(b"host", b"example.com")]
+        raw_headers = {"host": "example.com"}
+        if prefix is not None:
+            headers_list.append((self.HDR.encode(), prefix.encode()))
+            raw_headers[self.HDR] = prefix
+        return cs._build_wsgi_environ(
+            "GET", path, "HTTP/1.1", headers_list, raw_headers, io.BytesIO(b"")
+        )
+
+    def test_mount_prefix_helper(self):
+        assert cs._mount_prefix({}) == ""
+        assert cs._mount_prefix({self.HDR: ""}) == ""
+        assert cs._mount_prefix({self.HDR: "/app"}) == "/app"
+
+    def test_wsgi_without_prefix(self):
+        env = self._wsgi("/app/items/1")
+        assert env["SCRIPT_NAME"] == ""
+        assert env["PATH_INFO"] == "/app/items/1"
+
+    def test_wsgi_splits_script_name_and_path_info(self):
+        env = self._wsgi("/app/items/1?q=2", "/app")
+        assert env["SCRIPT_NAME"] == "/app"
+        assert env["PATH_INFO"] == "/items/1"
+        assert env["QUERY_STRING"] == "q=2"
+
+    def test_wsgi_nested_prefix_and_root(self):
+        env = self._wsgi("/tools/inventory/", "/tools/inventory")
+        assert env["SCRIPT_NAME"] == "/tools/inventory"
+        assert env["PATH_INFO"] == "/"
+
+    def test_wsgi_percent_encoded_prefix_is_matched_after_decoding(self):
+        env = self._wsgi("/%61pp/caf%C3%A9", "/app")
+        assert env["SCRIPT_NAME"] == "/app"
+        assert env["PATH_INFO"] == "/caf\xc3\xa9"
+
+    def test_wsgi_mismatched_prefix_is_ignored(self):
+        env = self._wsgi("/other/items", "/app")
+        assert env["SCRIPT_NAME"] == ""
+        assert env["PATH_INFO"] == "/other/items"
+
+    def test_wsgi_header_not_exposed_to_app(self):
+        env = self._wsgi("/app/x", "/app")
+        assert not [k for k in env if "MOUNT_PREFIX" in k]

@@ -5,8 +5,16 @@ import {themes as prismThemes} from 'prism-react-renderer';
 /** @type {import('@docusaurus/types').Config} */
 const config = {
   title: 'Caddy Snake',
-  tagline: 'Run Python WSGI and ASGI apps inside Caddy',
+  tagline: 'Build and share small internal apps with your own AI assistant',
   favicon: 'img/favicon.ico',
+
+  // Browsers that can use it get the sharp vector icon; the .ico above is the fallback.
+  headTags: [
+    {
+      tagName: 'link',
+      attributes: {rel: 'icon', type: 'image/svg+xml', href: '/en/latest/img/favicon.svg'},
+    },
+  ],
 
   url: 'https://caddy-snake.readthedocs.io',
   baseUrl: '/en/latest/',
@@ -78,14 +86,20 @@ const config = {
         title: 'Caddy Snake',
         logo: {
           alt: 'Caddy Snake Logo',
-          src: 'img/caddysnake-512x512.png',
+          src: 'img/logo.svg',
         },
         items: [
           {
             type: 'docSidebar',
-            sidebarId: 'tutorialSidebar',
+            sidebarId: 'appsSidebar',
             position: 'left',
-            label: 'Docs',
+            label: 'Apps',
+          },
+          {
+            type: 'docSidebar',
+            sidebarId: 'pluginSidebar',
+            position: 'left',
+            label: 'Caddy plugin',
           },
           {to: '/blog', label: 'Blog', position: 'left'},
           {
@@ -99,7 +113,15 @@ const config = {
         style: 'dark',
         links: [
           {
-            title: 'Docs',
+            title: 'Apps',
+            items: [
+              {label: 'Get started', to: '/docs/apps'},
+              {label: 'Connect an assistant', to: '/docs/apps/assistant'},
+              {label: 'Run it for real', to: '/docs/apps/running'},
+            ],
+          },
+          {
+            title: 'Caddy plugin',
             items: [
               {label: 'Quickstart', to: '/docs/intro'},
               {label: 'Configuration', to: '/docs/reference'},

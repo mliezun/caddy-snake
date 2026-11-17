@@ -1,14 +1,21 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Audit docs npm dependencies. Fails on high/critical findings except
-# image-size GHSAs: the package is archived and 2.0.3 was never published.
+# Audit docs npm dependencies. Fails on high/critical findings except the
+# advisories listed below, which have no fixed release to move to; each says
+# why it is acceptable meanwhile.
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$root/docs"
 
 allowlisted=(
   GHSA-w3rx-r6r6-pgpr # image-size ICNS infinite loop; no release after 2.0.2
   GHSA-5p2g-fcmc-qvqq # image-size JXL/HEIF infinite loop; same archive
+  # picomatch: slow on crafted glob patterns (ReDoS). Every release is affected
+  # (<= 4.0.7, the newest on 2026-11-17), so there is nothing to pin. It is only
+  # used while building the docs, on patterns from our own config; the published
+  # site is static files. Accepted by the maintainer on 2026-11-17. Remove this
+  # entry once a fixed picomatch is released.
+  GHSA-fc5q-39xc-vjpf
 )
 
 npm ci

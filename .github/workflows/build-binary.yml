@@ -11,56 +11,81 @@ on:
     types:
       - published
 
-permissions:
-  contents: write
+permissions: {}
+
+env:
+  # If the Go module proxy fails mid-download, fetch from the source instead
+  # ("|" falls back on any error, "," only on "not found").
+  GOPROXY: "https://proxy.golang.org|direct"
+
+# A new push to a pull request cancels the runs of the push before it.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  changes:
+    permissions:
+      pull-requests: read
+    uses: ./.github/workflows/changes.yml
+
   build:
+    permissions:
+      contents: write
+    needs: changes
+    if: needs.changes.outputs.go == 'true'
     strategy:
       fail-fast: false
       matrix:
+        # Every target is built on Linux: the build is pure Go (CGO off), so Go
+        # compiles for another system or processor as easily as for its own,
+        # and Linux runners are the fastest to get and to run.
         include:
-          - os: ubuntu-22.04
-            artifact: caddy-linux-amd64
-          - os: ubuntu-22.04-arm
-            artifact: caddy-linux-arm64
-          # Pure-Go cross-compile; no riscv64 runner needed.
-          - os: ubuntu-22.04
-            artifact: caddy-linux-riscv64
-            goarch: riscv64
-          - os: macos-15
-            artifact: caddy-darwin-arm64
-          - os: macos-15-intel
-            artifact: caddy-darwin-amd64
-    runs-on: ${{ matrix.os }}
+          - {artifact: caddy-linux-amd64, goos: linux, goarch: amd64}
+          - {artifact: caddy-linux-arm64, goos: linux, goarch: arm64}
+          - {artifact: caddy-linux-riscv64, goos: linux, goarch: riscv64}
+          - {artifact: caddy-darwin-arm64, goos: darwin, goarch: arm64}
+          - {artifact: caddy-darwin-amd64, goos: darwin, goarch: amd64}
+          - {artifact: caddy-windows-amd64, goos: windows, goarch: amd64}
+          - {artifact: caddy-windows-arm64, goos: windows, goarch: arm64}
+    runs-on: ubuntu-22.04
+    env:
+      ARTIFACT: ${{ matrix.artifact }}
+      # The file inside the archive: Windows programs need the .exe ending.
+      BINARY: ${{ matrix.artifact }}${{ matrix.goos == 'windows' && '.exe' || '' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: "1.26.10"
+          go-version: "1.26.11"
           cache: false
+      # Installed for this machine; only the Caddy build below is cross-compiled.
       - name: Install Xcaddy
         run: go install github.com/caddyserver/xcaddy/cmd/xcaddy@v0.4.6
       - name: Build the server
-        run: CGO_ENABLED=0 xcaddy build --with github.com/mliezun/caddy-snake=.
         env:
+          GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
-      - name: Rename binary
-        run: mv caddy ${{ matrix.artifact }} # zizmor: ignore[template-injection]
+        run: CGO_ENABLED=0 xcaddy build --output "$BINARY" --with github.com/mliezun/caddy-snake=. --with github.com/mliezun/caddy-snake/apps
       - name: Upload caddy binary
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: ${{ matrix.artifact }}
-          path: ${{ matrix.artifact }}
-      - name: Package caddy binary
+          path: ${{ env.BINARY }}
+      - name: Package and upload to release
         if: github.event_name == 'release'
-        run: | # zizmor: ignore[template-injection]
-          tar -czf ${{ matrix.artifact }}.tar.gz ${{ matrix.artifact }}
-      - name: Upload to release
-        if: github.event_name == 'release'
-        run: | # zizmor: ignore[template-injection]
-          gh release upload ${{ github.event.release.tag_name }} ${{ matrix.artifact }}.tar.gz --repo ${{ github.repository }} --clobber
         env:
+          GOOS: ${{ matrix.goos }}
+          TAG: ${{ github.event.release.tag_name }}
+          REPO: ${{ github.repository }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if [ "$GOOS" = windows ]; then
+            zip "${ARTIFACT}.zip" "$BINARY"
+            gh release upload "$TAG" "${ARTIFACT}.zip" --repo "$REPO" --clobber
+          else
+            tar -czf "${ARTIFACT}.tar.gz" "$BINARY"
+            gh release upload "$TAG" "${ARTIFACT}.tar.gz" --repo "$REPO" --clobber
+          fi

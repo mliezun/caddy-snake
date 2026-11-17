@@ -93,8 +93,8 @@ func (processBackend) Start(ctx context.Context, spec WorkerSpec) (WorkerHandle,
 	}
 
 	cmd := exec.Command(spec.PythonBin, args...)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
+	cmd.Stdout = newOutputTee(os.Stdout, workingDir, spec.App, "stdout")
+	cmd.Stderr = newOutputTee(os.Stderr, workingDir, spec.App, "stderr")
 	cmd.Env = buildWorkerEnvForIsolation(spec, fileVars)
 	setSysProcAttr(cmd)
 
@@ -105,6 +105,7 @@ func (processBackend) Start(ctx context.Context, spec WorkerSpec) (WorkerHandle,
 		os.Remove(path)
 		return nil, err
 	}
+	tieToParent(cmd)
 
 	cmdWaitCh := make(chan error, 1)
 	go func() {

@@ -11,6 +11,10 @@ inputs:
     description: Target platforms for buildx (comma-separated)
     required: false
     default: "linux/amd64,linux/arm64,linux/riscv64"
+  load:
+    description: If true, keep the built image in the local Docker so later steps can run it (one platform only)
+    required: false
+    default: "false"
   # Registry credentials must be inputs (not secrets.* in composite steps — secrets context is invalid there).
   ghcr_token:
     description: secrets.GITHUB_TOKEN for GHCR when push-image is true
@@ -69,6 +73,7 @@ runs:
       with:
         context: .
         push: ${{ inputs.push-image == 'true' }}
+        load: ${{ inputs.load == 'true' }}
         build-args: PY_VERSION=${{ inputs.python-version }}
         platforms: ${{ inputs.platforms }}
         tags: |

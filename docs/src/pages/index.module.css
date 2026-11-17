@@ -12,7 +12,7 @@
 .heroLogo {
   display: block;
   margin: 0 auto 1.25rem;
-  border-radius: 50%;
+  border-radius: 29%;
   box-shadow: 0 8px 28px rgba(15, 23, 42, 0.18);
 }
 
@@ -68,4 +68,53 @@
   .heroBanner {
     padding: 3rem 1.25rem 2.75rem;
   }
+}
+
+.demo {
+  padding: 3rem 0 0.5rem;
+  background: var(--ifm-background-surface-color);
+}
+
+.demoImage {
+  display: block;
+  width: 100%;
+  max-width: 960px;
+  height: auto;
+  margin: 0 auto;
+  border-radius: 14px;
+  border: 1px solid var(--ifm-toc-border-color);
+  box-shadow: 0 18px 48px rgba(15, 23, 42, 0.14);
+}
+
+.plugin {
+  padding: 3rem 0 3.5rem;
+  border-top: 1px solid var(--ifm-toc-border-color);
+}
+
+.pluginInner {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1.5rem 3rem;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.pluginTitle {
+  font-size: 1.5rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  margin-bottom: 0.5rem;
+}
+
+.pluginText {
+  max-width: 36rem;
+  margin: 0;
+  color: var(--ifm-color-emphasis-700);
+  line-height: 1.55;
+}
+
+.pluginLinks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
 }

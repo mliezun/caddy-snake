@@ -35,5 +35,8 @@ cmd/cli/build
 db.sqlite3
 items.db
 
+# Internal planning notes: kept locally (and later in the private repo), never committed here
+notes/
+
 # Benchmark harness per-run logs
 benchmarks/hey_output_*.txt

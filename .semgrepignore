@@ -3,3 +3,6 @@ tests/*/venv/
 docs/build/
 docs/node_modules/
 benchmarks/results.json
+# A developer tool that records the demo GIF: running a browser and the server
+# it is given is its whole job.
+scripts/record_demo.py

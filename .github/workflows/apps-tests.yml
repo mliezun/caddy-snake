@@ -1,0 +1,111 @@
+name: Apps Tests
+
+# Tests for the apps platform (apps/): Go tests, a check
+# that the sqlc-generated code is up to date, and the end-to-end test that
+# drives a running server through MCP.
+
+on:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+
+permissions: {}
+
+# A new push to a pull request cancels the runs of the push before it.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  changes:
+    permissions:
+      pull-requests: read
+    uses: ./.github/workflows/changes.yml
+
+  apps:
+    needs: changes
+    if: needs.changes.outputs.apps == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: "1.26.11"
+          cache: true
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+      - name: Install uv
+        run: python -m pip install uv
+      - name: Generated SQL code is up to date
+        working-directory: apps
+        env:
+          SQLC_VERSION: "1.30.0"
+          SQLC_SHA256: 468aecee071bfe55e97fcbcac52ea0208eeca444f67736f3b8f0f3d6a106132e
+        run: |
+          # The released program, checked against a recorded checksum: compiling
+          # sqlc from source here took about a minute on every run.
+          curl -fsSL -o /tmp/sqlc.tar.gz "https://github.com/sqlc-dev/sqlc/releases/download/v${SQLC_VERSION}/sqlc_${SQLC_VERSION}_linux_amd64.tar.gz"
+          echo "${SQLC_SHA256}  /tmp/sqlc.tar.gz" | sha256sum --check
+          tar -xzf /tmp/sqlc.tar.gz -C /tmp sqlc
+          /tmp/sqlc generate
+          git diff --exit-code -- db
+      - name: Go tests
+        # -count=1: never a cached result. CADDYSNAKE_REQUIRE_TESTS: fail, do not
+        # skip, when Python is missing.
+        env:
+          CADDYSNAKE_REQUIRE_TESTS: "1"
+        run: go test -race -count=1 -timeout 15m ./apps/...
+      - name: Build Caddy with the plugin and the apps package
+        run: |
+          go install github.com/caddyserver/xcaddy/cmd/xcaddy@v0.4.6
+          CGO_ENABLED=0 xcaddy build --output tests/apps_e2e/caddy \
+            --with github.com/mliezun/caddy-snake=. \
+            --with github.com/mliezun/caddy-snake/apps
+      - name: End-to-end test through MCP
+        working-directory: tests/apps_e2e
+        run: |
+          python -m venv venv
+          source venv/bin/activate
+          pip install -r requirements.txt
+          ./caddy python-apps --data-dir "$PWD/data" > caddy.log 2>&1 &
+          for _ in $(seq 1 90); do
+            curl -fsS http://localhost:9080/_apps/health > /dev/null 2>&1 && break
+            sleep 1
+          done
+          python main_test.py || { echo "---- caddy.log ----"; tail -200 caddy.log; exit 1; }
+
+  # The same Go tests on Windows, where files in use cannot be deleted and the
+  # version link is a junction.
+  apps-windows:
+    needs: changes
+    if: needs.changes.outputs.apps == 'true'
+    runs-on: windows-2025
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: "1.26.11"
+          cache: true
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+      - name: Install uv
+        run: python -m pip install uv
+      - name: Go tests
+        env:
+          CADDYSNAKE_REQUIRE_TESTS: "1"
+        run: go test -count=1 -timeout 20m ./apps/...
