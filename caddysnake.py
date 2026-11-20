@@ -232,10 +232,12 @@ def _http_path_str(path_part: str) -> str:
 def _forwarded_scheme(raw_headers):
     """Original request scheme from X-Forwarded-Proto.
 
-    The Go side always sets X-Forwarded-Proto on the hop to the worker
-    (stripping any client-supplied value), so this value is trusted.
+    The Go side always sets X-Forwarded-Proto on the hop to the worker: it
+    keeps the value from a trusted proxy (servers { trusted_proxies ... })
+    and replaces it for any other client, so this value is trusted. A proxy
+    chain may send a list; the first entry is the client-facing scheme.
     """
-    xfp = raw_headers.get("x-forwarded-proto", "").lower().strip()
+    xfp = raw_headers.get("x-forwarded-proto", "").split(",", 1)[0].lower().strip()
     if xfp in ("https", "http"):
         return xfp
     return "http"
