@@ -25,6 +25,7 @@ Or run checks individually:
    - For **shared cache** changes: `./tests/integration.sh simple_cache 3.13`
    - For **isolation** changes: `./tests/integration.sh simple_isolation 3.13` (requires host Docker socket)
    - For **request_body**: `./tests/integration.sh simple_request_body 3.13`
+   - For **forwarded headers / trusted_proxies**: `./tests/integration.sh simple_forwarded 3.13`
 7. **Embed-app** (optional, requires network): `cd cmd/embed-app && ./build.sh app.zip 3.13 && ./test_embed.sh embed-test`
 
 Install hook once: `pre-commit install`
@@ -143,7 +144,7 @@ For full CI-like integration tests without local Python/venv setup:
 ./tests/integration.sh fastapi 3.13
 ```
 
-Valid tools: `django`, `django_channels`, `flask`, `fastapi`, `simple_autoreload`, `simple_async`, `simple_cache`, `simple_cluster_cache`, `simple_start_timeout`, `simple_isolation`, `simple_request_body`, `socketio`, `dynamic`
+Valid tools: `django`, `django_channels`, `flask`, `fastapi`, `simple_autoreload`, `simple_async`, `simple_cache`, `simple_cluster_cache`, `simple_start_timeout`, `simple_isolation`, `simple_request_body`, `simple_forwarded`, `socketio`, `dynamic`
 Valid Python versions: `3.13`, `3.13-nogil`, `3.14`, `3.14-nogil`, `3.15`, `3.15-nogil`
 
 Requires **Docker** (linux/amd64 container).
