@@ -56,14 +56,37 @@ const (
 const EnvCaddysnakeWorkerToken = "CADDYSNAKE_WORKER_TOKEN"
 
 // setPythonWorkerOutboundHeaders configures the outbound request to the Python
-// worker: target URL, standard X-Forwarded-* (preserve inbound X-Forwarded-For
-// chain, then append this hop per [httputil.ProxyRequest.SetXForwarded]), and
-// trusted Caddy-Snake-Remote-* from the inbound RemoteAddr.
+// worker: target URL, standard X-Forwarded-*, and trusted Caddy-Snake-Remote-*
+// from the inbound RemoteAddr.
+//
+// X-Forwarded-* follow Caddy's reverse_proxy: when the peer is a trusted proxy
+// (servers { trusted_proxies ... }), its X-Forwarded-For chain is kept and this
+// hop is appended, and its X-Forwarded-Proto / X-Forwarded-Host are kept so the
+// app sees the scheme and host the proxy received (e.g. https behind a
+// TLS-terminating proxy). Otherwise every inbound X-Forwarded-* is discarded
+// and the headers describe this hop only.
 func setPythonWorkerOutboundHeaders(pr *httputil.ProxyRequest, dialAddr, workerToken string) {
 	pr.Out.URL.Scheme = "http"
 	pr.Out.URL.Host = dialAddr
-	pr.Out.Header["X-Forwarded-For"] = pr.In.Header["X-Forwarded-For"]
+	trusted, _ := caddyhttp.GetVar(pr.In.Context(), caddyhttp.TrustedProxyVarKey).(bool)
+	if trusted {
+		pr.Out.Header["X-Forwarded-For"] = pr.In.Header["X-Forwarded-For"]
+	} else {
+		pr.Out.Header.Del("X-Forwarded-For")
+	}
+	// Sets X-Forwarded-Proto/Host from this hop and appends the peer IP to
+	// X-Forwarded-For (removes it when RemoteAddr has no IP, e.g. "@").
 	pr.SetXForwarded()
+	if trusted {
+		if pr.Out.Header.Get("X-Forwarded-For") == "" && len(pr.In.Header["X-Forwarded-For"]) > 0 {
+			pr.Out.Header["X-Forwarded-For"] = pr.In.Header["X-Forwarded-For"]
+		}
+		for _, h := range [...]string{"X-Forwarded-Proto", "X-Forwarded-Host"} {
+			if v := pr.In.Header.Get(h); v != "" {
+				pr.Out.Header.Set(h, v)
+			}
+		}
+	}
 	pr.Out.Header.Del(caddySnakeRemoteAddrHeader)
 	pr.Out.Header.Del(caddySnakeRemotePortHeader)
 	pr.Out.Header.Del(caddySnakeWorkerTokenHeader)

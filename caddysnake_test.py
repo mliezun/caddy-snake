@@ -1822,6 +1822,10 @@ class TestForwardedScheme:
     def test_invalid_value_falls_back(self):
         assert cs._forwarded_scheme({"x-forwarded-proto": "gopher"}) == "http"
 
+    def test_list_uses_first_entry(self):
+        assert cs._forwarded_scheme({"x-forwarded-proto": "https, http"}) == "https"
+        assert cs._forwarded_scheme({"x-forwarded-proto": "http,https"}) == "http"
+
 
 # ==================== Hot-path parsing caches ====================
 

@@ -395,6 +395,35 @@ On the CLI: `--request-body-max-size 2GB`.
 
 ---
 
+## Behind a reverse proxy (forwarded headers) {#forwarded-headers}
+
+On the hop to the worker, Caddy sets `X-Forwarded-For`, `X-Forwarded-Proto` and `X-Forwarded-Host` the same way Caddy's [`reverse_proxy`](https://caddyserver.com/docs/caddyfile/directives/reverse_proxy#defaults) does. `wsgi.url_scheme` and the ASGI `scope["scheme"]` (`http`/`https`, or `ws`/`wss` for WebSockets) come from `X-Forwarded-Proto`.
+
+- **Trusted proxy** (the peer's IP matches the server's [`trusted_proxies`](https://caddyserver.com/docs/caddyfile/options#trusted-proxies)): its `X-Forwarded-Proto` and `X-Forwarded-Host` are kept, and its `X-Forwarded-For` chain is kept with the peer IP appended.
+- **Any other client**: inbound `X-Forwarded-*` values are dropped and replaced with values for this hop, so clients cannot spoof the scheme, host or client chain.
+
+For a TLS-terminating proxy (Traefik, nginx, a cloud load balancer) that forwards plain HTTP to Caddy, trust it so the app sees `https`:
+
+```caddyfile
+{
+    servers {
+        trusted_proxies static private_ranges
+    }
+}
+
+:80 {
+    python {
+        module_wsgi "mysite.wsgi:application"
+    }
+}
+```
+
+In Django, set `SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")` (and `USE_X_FORWARDED_HOST = True` if needed) so `request.is_secure()` and `build_absolute_uri()` use the original scheme and host.
+
+`REMOTE_ADDR` / ASGI `client` is always the direct peer of Caddy. Read `X-Forwarded-For` in the app if you need the original client IP.
+
+---
+
 ## Dynamic Module Loading
 
 You can use [Caddy placeholders](https://caddyserver.com/docs/caddyfile/concepts#placeholders) in `module_wsgi`, `module_asgi`, `working_dir`, `venv`, `env_file`, and `env_var` values to dynamically load different Python apps based on the request.

@@ -376,6 +376,20 @@ Shorthand: `request_body 1KiB`. CLI: `--request-body-max-size 2GB`.
 
 ---
 
+## Behind a reverse proxy
+
+`X-Forwarded-For`, `X-Forwarded-Proto` and `X-Forwarded-Host` follow Caddy's `reverse_proxy` rules. Values from peers in [`trusted_proxies`](https://caddyserver.com/docs/caddyfile/options#trusted-proxies) are kept, and values from any other client are replaced. Behind a TLS-terminating proxy, trust it so `wsgi.url_scheme` / ASGI `scheme` is `https`:
+
+```caddyfile
+{
+    servers {
+        trusted_proxies static private_ranges
+    }
+}
+```
+
+See [forwarded headers](https://caddy-snake.readthedocs.io/en/latest/docs/reference#forwarded-headers) in the reference.
+
 ## Shared worker cache
 
 Process-based workers run in **separate Python interpreters**, so they do not share `sys.modules` or in-memory globals. For lightweight cross-worker state (queues, small shared counters, etc.), Caddy Snake can expose a **key/value cache** that lives in the **Caddy plugin process** and is reached over a stream socket using a small **RESP2**-like protocol.
