@@ -16,13 +16,13 @@ set -euo pipefail
 # Valid tool names:
 #   django, django_channels, flask, fastapi, simple_autoreload, simple_async,
 #   simple_cache, simple_cluster_cache, simple_start_timeout,
-#   simple_isolation, simple_request_body, socketio, dynamic
+#   simple_isolation, simple_request_body, simple_forwarded, socketio, dynamic
 #
 # Valid python versions:
 #   3.13, 3.13-nogil, 3.14, 3.14-nogil, 3.15, 3.15-nogil
 # ---------------------------------------------------------------------------
 
-VALID_TOOLS=("django" "django_channels" "flask" "fastapi" "simple_autoreload" "simple_async" "simple_cache" "simple_cluster_cache" "simple_start_timeout" "simple_isolation" "simple_request_body" "socketio" "dynamic")
+VALID_TOOLS=("django" "django_channels" "flask" "fastapi" "simple_autoreload" "simple_async" "simple_cache" "simple_cluster_cache" "simple_start_timeout" "simple_isolation" "simple_request_body" "simple_forwarded" "socketio" "dynamic")
 VALID_PYVERSIONS=("3.13" "3.13-nogil" "3.14" "3.14-nogil" "3.15" "3.15-nogil")
 
 usage() {
@@ -109,7 +109,7 @@ apt-get install -yyqq software-properties-common curl ca-certificates git
 
 # Install Go
 echo ">>> Installing Go..."
-curl -fsSL "https://go.dev/dl/go1.26.10.linux-amd64.tar.gz" -o /tmp/go.tar.gz
+curl -fsSL "https://go.dev/dl/go1.26.11.linux-amd64.tar.gz" -o /tmp/go.tar.gz
 tar -C /usr/local -xzf /tmp/go.tar.gz
 export PATH="/usr/local/go/bin:$HOME/go/bin:$PATH"
 go version
@@ -196,7 +196,7 @@ else
   echo ">>> Caddy is ready (PID=${CADDY_PID})"
 
   echo ">>> Running tests..."
-  if [[ "$IS_NOGIL" == "1" ]]; then
+  if [[ "$IS_NOGIL" == "1" && "$TOOL_NAME" != "simple_forwarded" ]]; then
     python main_test.py || true
   elif [[ "$TOOL_NAME" == "simple_isolation" ]]; then
     python -m pytest main_test.py -v -k "not leftover" || { echo ">>> Caddy log (tail):"; tail -300 caddy.log; exit 1; }

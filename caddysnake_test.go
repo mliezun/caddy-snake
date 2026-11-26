@@ -18,6 +18,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -2999,10 +3000,18 @@ func TestPythonWorkerGroup_PathEncodingMatrix(t *testing.T) {
 	})
 }
 
+// withTrustedProxyVar marks req the way Caddy's server does for peers listed in
+// servers { trusted_proxies ... }.
+func withTrustedProxyVar(req *http.Request, trusted bool) *http.Request {
+	vars := map[string]any{caddyhttp.TrustedProxyVarKey: trusted}
+	return req.WithContext(context.WithValue(req.Context(), caddyhttp.VarsCtxKey, vars))
+}
+
 func TestSetPythonWorkerOutboundHeaders_XForwardedChainAndTrusted(t *testing.T) {
 	inReq := httptest.NewRequest(http.MethodGet, "http://example.com/foo", nil)
 	inReq.RemoteAddr = "203.0.113.5:12345"
 	inReq.Header.Set("X-Forwarded-For", "198.51.100.1")
+	inReq = withTrustedProxyVar(inReq, true)
 
 	outReq := inReq.Clone(context.Background())
 	pr := &httputil.ProxyRequest{In: inReq, Out: outReq}
@@ -3019,6 +3028,119 @@ func TestSetPythonWorkerOutboundHeaders_XForwardedChainAndTrusted(t *testing.T) 
 	}
 	if pr.Out.URL.String() != "http://127.0.0.1:9999/foo" {
 		t.Fatalf("out URL = %s", pr.Out.URL.String())
+	}
+}
+
+func TestSetPythonWorkerOutboundHeaders_TrustedProxyKeepsProtoAndHost(t *testing.T) {
+	// TLS-terminating proxy forwards plain HTTP (In.TLS == nil) with its view.
+	inReq := httptest.NewRequest(http.MethodGet, "http://caddy:80/login", nil)
+	inReq.RemoteAddr = "172.18.0.3:40000"
+	inReq.Header.Set("X-Forwarded-Proto", "https")
+	inReq.Header.Set("X-Forwarded-Host", "app.example.com")
+	inReq.Header.Set("X-Forwarded-For", "198.51.100.1")
+	inReq = withTrustedProxyVar(inReq, true)
+
+	outReq := inReq.Clone(inReq.Context())
+	// ReverseProxy (Rewrite mode) strips these from Out before Rewrite runs.
+	outReq.Header.Del("X-Forwarded-Proto")
+	outReq.Header.Del("X-Forwarded-Host")
+	outReq.Header.Del("X-Forwarded-For")
+	setPythonWorkerOutboundHeaders(&httputil.ProxyRequest{In: inReq, Out: outReq}, "127.0.0.1:1", "")
+
+	for h, want := range map[string]string{
+		"X-Forwarded-Proto": "https",
+		"X-Forwarded-Host":  "app.example.com",
+		"X-Forwarded-For":   "198.51.100.1, 172.18.0.3",
+	} {
+		if got := outReq.Header.Get(h); got != want {
+			t.Errorf("%s = %q, want %q", h, got, want)
+		}
+	}
+}
+
+func TestSetPythonWorkerOutboundHeaders_TrustedProxyUsesLastProtoAndHost(t *testing.T) {
+	inReq := httptest.NewRequest(http.MethodGet, "http://caddy:80/login", nil)
+	inReq.RemoteAddr = "172.18.0.3:40000"
+	inReq.Header.Add("X-Forwarded-Proto", "http")
+	inReq.Header.Add("X-Forwarded-Proto", "https")
+	inReq.Header.Add("X-Forwarded-Host", "first.example.com")
+	inReq.Header.Add("X-Forwarded-Host", "app.example.com")
+	inReq = withTrustedProxyVar(inReq, true)
+
+	outReq := inReq.Clone(inReq.Context())
+	setPythonWorkerOutboundHeaders(&httputil.ProxyRequest{In: inReq, Out: outReq}, "127.0.0.1:1", "")
+
+	for header, want := range map[string]string{
+		"X-Forwarded-Proto": "https",
+		"X-Forwarded-Host":  "app.example.com",
+	} {
+		if got := outReq.Header.Values(header); !slices.Equal(got, []string{want}) {
+			t.Errorf("%s = %q, want [%q]", header, got, want)
+		}
+	}
+}
+
+func TestSetPythonWorkerOutboundHeaders_TrustedProxyWithoutHeadersUsesHop(t *testing.T) {
+	inReq := httptest.NewRequest(http.MethodGet, "http://caddy:80/", nil)
+	inReq.RemoteAddr = "10.0.0.2:5000"
+	inReq = withTrustedProxyVar(inReq, true)
+
+	outReq := inReq.Clone(inReq.Context())
+	setPythonWorkerOutboundHeaders(&httputil.ProxyRequest{In: inReq, Out: outReq}, "127.0.0.1:1", "")
+
+	for h, want := range map[string]string{
+		"X-Forwarded-Proto": "http",
+		"X-Forwarded-Host":  "caddy:80",
+		"X-Forwarded-For":   "10.0.0.2",
+	} {
+		if got := outReq.Header.Get(h); got != want {
+			t.Errorf("%s = %q, want %q", h, got, want)
+		}
+	}
+}
+
+func TestSetPythonWorkerOutboundHeaders_UntrustedClientCannotSpoofForwarded(t *testing.T) {
+	for name, inReq := range map[string]*http.Request{
+		"no vars in context":  httptest.NewRequest(http.MethodGet, "http://example.com/", nil),
+		"trusted_proxy=false": withTrustedProxyVar(httptest.NewRequest(http.MethodGet, "http://example.com/", nil), false),
+	} {
+		t.Run(name, func(t *testing.T) {
+			inReq.RemoteAddr = "203.0.113.9:1234"
+			inReq.Header.Set("X-Forwarded-Proto", "https")
+			inReq.Header.Set("X-Forwarded-Host", "evil.example")
+			inReq.Header.Set("X-Forwarded-For", "6.6.6.6")
+
+			outReq := inReq.Clone(inReq.Context())
+			setPythonWorkerOutboundHeaders(&httputil.ProxyRequest{In: inReq, Out: outReq}, "127.0.0.1:1", "")
+
+			for h, want := range map[string]string{
+				"X-Forwarded-Proto": "http",
+				"X-Forwarded-Host":  "example.com",
+				"X-Forwarded-For":   "203.0.113.9",
+			} {
+				if got := outReq.Header.Get(h); got != want {
+					t.Errorf("%s = %q, want %q", h, got, want)
+				}
+			}
+		})
+	}
+}
+
+func TestSetPythonWorkerOutboundHeaders_TrustedUnixSocketPeerKeepsChain(t *testing.T) {
+	inReq := httptest.NewRequest(http.MethodGet, "http://example.com/", nil)
+	inReq.RemoteAddr = "@"
+	inReq.Header.Set("X-Forwarded-For", "198.51.100.1")
+	inReq.Header.Set("X-Forwarded-Proto", "https")
+	inReq = withTrustedProxyVar(inReq, true)
+
+	outReq := inReq.Clone(inReq.Context())
+	setPythonWorkerOutboundHeaders(&httputil.ProxyRequest{In: inReq, Out: outReq}, "127.0.0.1:1", "")
+
+	if got := outReq.Header.Get("X-Forwarded-For"); got != "198.51.100.1" {
+		t.Errorf("X-Forwarded-For = %q, want %q", got, "198.51.100.1")
+	}
+	if got := outReq.Header.Get("X-Forwarded-Proto"); got != "https" {
+		t.Errorf("X-Forwarded-Proto = %q, want https", got)
 	}
 }
 

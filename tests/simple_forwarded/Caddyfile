@@ -1,0 +1,40 @@
+{
+	http_port 9080
+	https_port 9443
+	log {
+		level info
+	}
+	# Loopback is in private_ranges, so the test client on 127.0.0.1 acts as a
+	# trusted TLS-terminating proxy on :9080 and as an untrusted client on :9081.
+	servers :9080 {
+		trusted_proxies static private_ranges
+	}
+}
+
+# Trusted listener: inbound X-Forwarded-* must reach the worker.
+http://:9080 {
+	python /wsgi/* {
+		module_wsgi "wsgi_app:app"
+		workers 1
+		venv "./venv"
+	}
+	python /asgi/* {
+		module_asgi "asgi_app:app"
+		workers 1
+		venv "./venv"
+	}
+}
+
+# Untrusted listener: inbound X-Forwarded-* must be replaced by this hop.
+http://:9081 {
+	python /wsgi/* {
+		module_wsgi "wsgi_app:app"
+		workers 1
+		venv "./venv"
+	}
+	python /asgi/* {
+		module_asgi "asgi_app:app"
+		workers 1
+		venv "./venv"
+	}
+}
