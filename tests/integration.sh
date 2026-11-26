@@ -109,7 +109,7 @@ apt-get install -yyqq software-properties-common curl ca-certificates git
 
 # Install Go
 echo ">>> Installing Go..."
-curl -fsSL "https://go.dev/dl/go1.26.10.linux-amd64.tar.gz" -o /tmp/go.tar.gz
+curl -fsSL "https://go.dev/dl/go1.26.11.linux-amd64.tar.gz" -o /tmp/go.tar.gz
 tar -C /usr/local -xzf /tmp/go.tar.gz
 export PATH="/usr/local/go/bin:$HOME/go/bin:$PATH"
 go version
@@ -196,7 +196,7 @@ else
   echo ">>> Caddy is ready (PID=${CADDY_PID})"
 
   echo ">>> Running tests..."
-  if [[ "$IS_NOGIL" == "1" ]]; then
+  if [[ "$IS_NOGIL" == "1" && "$TOOL_NAME" != "simple_forwarded" ]]; then
     python main_test.py || true
   elif [[ "$TOOL_NAME" == "simple_isolation" ]]; then
     python -m pytest main_test.py -v -k "not leftover" || { echo ">>> Caddy log (tail):"; tail -300 caddy.log; exit 1; }

@@ -397,10 +397,10 @@ On the CLI: `--request-body-max-size 2GB`.
 
 ## Behind a reverse proxy (forwarded headers) {#forwarded-headers}
 
-On the hop to the worker, Caddy sets `X-Forwarded-For`, `X-Forwarded-Proto` and `X-Forwarded-Host` the same way Caddy's [`reverse_proxy`](https://caddyserver.com/docs/caddyfile/directives/reverse_proxy#defaults) does. `wsgi.url_scheme` and the ASGI `scope["scheme"]` (`http`/`https`, or `ws`/`wss` for WebSockets) come from `X-Forwarded-Proto`.
+On the hop to the worker, Caddy uses the same trust rules for `X-Forwarded-For`, `X-Forwarded-Proto` and `X-Forwarded-Host` as Caddy's [`reverse_proxy`](https://caddyserver.com/docs/caddyfile/directives/reverse_proxy#defaults) does. `wsgi.url_scheme` and the ASGI `scope["scheme"]` (`http`/`https`, or `ws`/`wss` for WebSockets) come from `X-Forwarded-Proto`.
 
-- **Trusted proxy** (the peer's IP matches the server's [`trusted_proxies`](https://caddyserver.com/docs/caddyfile/options#trusted-proxies)): its `X-Forwarded-Proto` and `X-Forwarded-Host` are kept, and its `X-Forwarded-For` chain is kept with the peer IP appended.
-- **Any other client**: inbound `X-Forwarded-*` values are dropped and replaced with values for this hop, so clients cannot spoof the scheme, host or client chain.
+- **Trusted proxy** (the peer's IP matches the server's [`trusted_proxies`](https://caddyserver.com/docs/caddyfile/options#trusted-proxies)): the last `X-Forwarded-Proto` and `X-Forwarded-Host` field values are kept. The `X-Forwarded-For` chain is kept with the peer IP appended when available.
+- **Any other client**: inbound values for these three headers are replaced with values for this hop.
 
 For a TLS-terminating proxy (Traefik, nginx, a cloud load balancer) that forwards plain HTTP to Caddy, trust it so the app sees `https`:
 

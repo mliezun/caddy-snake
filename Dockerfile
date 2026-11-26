@@ -3,7 +3,7 @@
 # compilation out of QEMU when building arm64/riscv64 images on amd64 runners.
 FROM --platform=$BUILDPLATFORM ubuntu:22.04 AS builder
 
-ARG GO_VERSION=1.26.10
+ARG GO_VERSION=1.26.11
 ARG TARGETOS
 ARG TARGETARCH
 

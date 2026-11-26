@@ -378,7 +378,7 @@ Shorthand: `request_body 1KiB`. CLI: `--request-body-max-size 2GB`.
 
 ## Behind a reverse proxy
 
-`X-Forwarded-For`, `X-Forwarded-Proto` and `X-Forwarded-Host` follow Caddy's `reverse_proxy` rules. Values from peers in [`trusted_proxies`](https://caddyserver.com/docs/caddyfile/options#trusted-proxies) are kept, and values from any other client are replaced. Behind a TLS-terminating proxy, trust it so `wsgi.url_scheme` / ASGI `scheme` is `https`:
+`X-Forwarded-For`, `X-Forwarded-Proto` and `X-Forwarded-Host` use the same trust rules as Caddy's `reverse_proxy`. For peers in [`trusted_proxies`](https://caddyserver.com/docs/caddyfile/options#trusted-proxies), the last proto and host field values are kept and the peer IP is appended to the client chain when available. For any other client, Caddy supplies values for this hop. Behind a TLS-terminating proxy, trust it so `wsgi.url_scheme` / ASGI `scheme` is `https`:
 
 ```caddyfile
 {

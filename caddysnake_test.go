@@ -18,6 +18,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -3053,6 +3054,28 @@ func TestSetPythonWorkerOutboundHeaders_TrustedProxyKeepsProtoAndHost(t *testing
 	} {
 		if got := outReq.Header.Get(h); got != want {
 			t.Errorf("%s = %q, want %q", h, got, want)
+		}
+	}
+}
+
+func TestSetPythonWorkerOutboundHeaders_TrustedProxyUsesLastProtoAndHost(t *testing.T) {
+	inReq := httptest.NewRequest(http.MethodGet, "http://caddy:80/login", nil)
+	inReq.RemoteAddr = "172.18.0.3:40000"
+	inReq.Header.Add("X-Forwarded-Proto", "http")
+	inReq.Header.Add("X-Forwarded-Proto", "https")
+	inReq.Header.Add("X-Forwarded-Host", "first.example.com")
+	inReq.Header.Add("X-Forwarded-Host", "app.example.com")
+	inReq = withTrustedProxyVar(inReq, true)
+
+	outReq := inReq.Clone(inReq.Context())
+	setPythonWorkerOutboundHeaders(&httputil.ProxyRequest{In: inReq, Out: outReq}, "127.0.0.1:1", "")
+
+	for header, want := range map[string]string{
+		"X-Forwarded-Proto": "https",
+		"X-Forwarded-Host":  "app.example.com",
+	} {
+		if got := outReq.Header.Values(header); !slices.Equal(got, []string{want}) {
+			t.Errorf("%s = %q, want [%q]", header, got, want)
 		}
 	}
 }
